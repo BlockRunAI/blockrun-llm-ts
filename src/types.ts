@@ -69,7 +69,7 @@ export interface PaymentRequired {
 export interface LLMClientOptions {
   /** EVM wallet private key (hex string starting with 0x) */
   privateKey: `0x${string}`;
-  /** API endpoint URL (default: https://api.blockrun.ai) */
+  /** API endpoint URL (default: https://blockrun.ai/api) */
   apiUrl?: string;
   /** Request timeout in milliseconds (default: 60000) */
   timeout?: number;
