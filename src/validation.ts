@@ -58,7 +58,7 @@ export function validatePrivateKey(key: string): void {
  * @throws {Error} If the URL is invalid or insecure
  *
  * @example
- * validateApiUrl("https://api.blockrun.ai");
+ * validateApiUrl("https://blockrun.ai/api");
  * validateApiUrl("http://localhost:3000"); // OK for development
  */
 export function validateApiUrl(url: string): void {
@@ -136,16 +136,16 @@ export function sanitizeErrorResponse(errorBody: unknown): unknown {
  *
  * @example
  * validateResourceUrl(
- *   "https://api.blockrun.ai/v1/chat",
- *   "https://api.blockrun.ai"
+ *   "https://blockrun.ai/api/v1/chat",
+ *   "https://blockrun.ai/api"
  * );
- * // Returns: "https://api.blockrun.ai/v1/chat"
+ * // Returns: "https://blockrun.ai/api/v1/chat"
  *
  * validateResourceUrl(
  *   "https://malicious.com/steal",
- *   "https://api.blockrun.ai"
+ *   "https://blockrun.ai/api"
  * );
- * // Returns: "https://api.blockrun.ai/v1/chat/completions" (safe default)
+ * // Returns: "https://blockrun.ai/api/v1/chat/completions" (safe default)
  */
 export function validateResourceUrl(url: string, baseUrl: string): string {
   try {

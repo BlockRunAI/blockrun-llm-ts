@@ -184,8 +184,8 @@ export class LLMClient {
     body: Record<string, unknown>,
     response: Response
   ): Promise<ChatResponse> {
-    // Get payment required header
-    let paymentHeader = response.headers.get("X-Payment-Required");
+    // Get payment required header (x402 library uses lowercase)
+    let paymentHeader = response.headers.get("payment-required");
 
     if (!paymentHeader) {
       // Try to get from response body
@@ -231,12 +231,12 @@ export class LLMClient {
       }
     );
 
-    // Retry with payment
+    // Retry with payment (x402 library expects PAYMENT-SIGNATURE header)
     const retryResponse = await this.fetchWithTimeout(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Payment": paymentPayload,
+        "PAYMENT-SIGNATURE": paymentPayload,
       },
       body: JSON.stringify(body),
     });
