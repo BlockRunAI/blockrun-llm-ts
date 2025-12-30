@@ -81,7 +81,7 @@ export class LLMClient {
   /**
    * Simple 1-line chat interface.
    *
-   * @param model - Model ID (e.g., 'gpt-4o', 'claude-3-5-sonnet')
+   * @param model - Model ID (e.g., 'openai/gpt-4o', 'anthropic/claude-sonnet-4')
    * @param prompt - User message
    * @param options - Optional chat parameters
    * @returns Assistant's response text
