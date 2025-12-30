@@ -4,8 +4,13 @@
  * Usage:
  *   import { LLMClient } from '@blockrun/llm';
  *
+ *   // Option 1: Use BASE_CHAIN_WALLET_KEY env var
+ *   const client = new LLMClient();
+ *
+ *   // Option 2: Pass private key directly
  *   const client = new LLMClient({ privateKey: '0x...' });
- *   const response = await client.chat('gpt-4o', 'Hello!');
+ *
+ *   const response = await client.chat('openai/gpt-4o', 'Hello!');
  *   console.log(response);
  */
 
@@ -52,23 +57,26 @@ export class LLMClient {
   /**
    * Initialize the BlockRun LLM client.
    *
-   * @param options - Client configuration options
+   * @param options - Client configuration options (optional if BASE_CHAIN_WALLET_KEY env var is set)
    */
-  constructor(options: LLMClientOptions) {
-    if (!options.privateKey) {
+  constructor(options: LLMClientOptions = {}) {
+    // Get private key from options or environment variable
+    const privateKey = options.privateKey || process.env.BASE_CHAIN_WALLET_KEY;
+
+    if (!privateKey) {
       throw new Error(
-        "Private key required. Pass privateKey in options."
+        "Private key required. Pass privateKey in options or set BASE_CHAIN_WALLET_KEY environment variable."
       );
     }
 
     // Validate private key format
-    validatePrivateKey(options.privateKey);
+    validatePrivateKey(privateKey);
 
     // Store private key for signing (never transmitted)
-    this.privateKey = options.privateKey as `0x${string}`;
+    this.privateKey = privateKey as `0x${string}`;
 
     // Initialize wallet account (key stays local, never transmitted)
-    this.account = privateKeyToAccount(options.privateKey as `0x${string}`);
+    this.account = privateKeyToAccount(privateKey as `0x${string}`);
 
     // Validate and set API URL
     const apiUrl = options.apiUrl || DEFAULT_API_URL;

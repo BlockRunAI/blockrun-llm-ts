@@ -21,7 +21,7 @@ yarn add @blockrun/llm
 ```typescript
 import { LLMClient } from '@blockrun/llm';
 
-const client = new LLMClient();  // Uses BLOCKRUN_WALLET_KEY (never sent to server)
+const client = new LLMClient();  // Uses BASE_CHAIN_WALLET_KEY (never sent to server)
 const response = await client.chat('openai/gpt-4o', 'Hello!');
 ```
 
@@ -95,7 +95,7 @@ That's it. The SDK handles x402 payment automatically.
 ```typescript
 import { LLMClient } from '@blockrun/llm';
 
-const client = new LLMClient();  // Uses BLOCKRUN_WALLET_KEY (never sent to server)
+const client = new LLMClient();  // Uses BASE_CHAIN_WALLET_KEY (never sent to server)
 
 const response = await client.chat('openai/gpt-4o', 'Explain quantum computing');
 console.log(response);
@@ -111,7 +111,7 @@ const response2 = await client.chat('anthropic/claude-sonnet-4', 'Write a haiku'
 ```typescript
 import { LLMClient, type ChatMessage } from '@blockrun/llm';
 
-const client = new LLMClient();  // Uses BLOCKRUN_WALLET_KEY (never sent to server)
+const client = new LLMClient();  // Uses BASE_CHAIN_WALLET_KEY (never sent to server)
 
 const messages: ChatMessage[] = [
   { role: 'system', content: 'You are a helpful assistant.' },
@@ -127,7 +127,7 @@ console.log(result.choices[0].message.content);
 ```typescript
 import { LLMClient } from '@blockrun/llm';
 
-const client = new LLMClient();  // Uses BLOCKRUN_WALLET_KEY (never sent to server)
+const client = new LLMClient();  // Uses BASE_CHAIN_WALLET_KEY (never sent to server)
 const models = await client.listModels();
 
 for (const model of models) {
@@ -140,7 +140,7 @@ for (const model of models) {
 ```typescript
 import { LLMClient } from '@blockrun/llm';
 
-const client = new LLMClient();  // Uses BLOCKRUN_WALLET_KEY (never sent to server)
+const client = new LLMClient();  // Uses BASE_CHAIN_WALLET_KEY (never sent to server)
 
 const [gpt, claude, gemini] = await Promise.all([
   client.chat('openai/gpt-4o', 'What is 2+2?'),
@@ -167,7 +167,7 @@ const client = new LLMClient({
 
 | Variable | Description |
 |----------|-------------|
-| `BLOCKRUN_WALLET_KEY` | Your EVM wallet private key (never sent to server) |
+| `BASE_CHAIN_WALLET_KEY` | Your Base chain wallet private key (never sent to server) |
 | `BLOCKRUN_API_URL` | API endpoint (optional, default: https://blockrun.ai/api) |
 
 ## Error Handling
@@ -208,7 +208,7 @@ Integration tests call the production API and require:
 - Estimated cost: ~$0.05 per test run
 
 ```bash
-export BLOCKRUN_WALLET_KEY=0x...
+export BASE_CHAIN_WALLET_KEY=0x...
 npm test -- test/integration       # Run integration tests only
 ```
 
@@ -222,7 +222,7 @@ Integration tests are automatically skipped if `BLOCKRUN_WALLET_KEY` is not set.
 
 ```bash
 # .env
-BLOCKRUN_WALLET_KEY=0x...
+BASE_CHAIN_WALLET_KEY=0x...
 ```
 
 ## Security
