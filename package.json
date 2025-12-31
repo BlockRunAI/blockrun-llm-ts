@@ -1,6 +1,6 @@
 {
   "name": "@blockrun/llm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "BlockRun LLM Gateway SDK - Pay-per-request AI via x402 on Base",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -39,11 +39,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/blockrun/blockrun-llm-ts"
+    "url": "https://github.com/BlockRunAI/blockrun-llm-ts"
   },
   "homepage": "https://blockrun.ai",
   "bugs": {
-    "url": "https://github.com/blockrun/blockrun-llm-ts/issues"
+    "url": "https://github.com/BlockRunAI/blockrun-llm-ts/issues"
   },
   "dependencies": {
     "viem": "^2.21.0"
