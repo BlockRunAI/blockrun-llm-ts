@@ -70,20 +70,20 @@ export function validateApiUrl(url: string): void {
     throw new Error("Invalid API URL format");
   }
 
-  // Check protocol
+  // Ensure we have a valid protocol first
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(
+      `Invalid protocol: ${parsed.protocol}. Use http:// or https://`
+    );
+  }
+
+  // Check HTTPS requirement for non-localhost
   const isLocalhost = LOCALHOST_DOMAINS.includes(parsed.hostname);
 
   if (parsed.protocol !== "https:" && !isLocalhost) {
     throw new Error(
       "API URL must use HTTPS for non-localhost endpoints. " +
         `Use https:// instead of ${parsed.protocol}//`
-    );
-  }
-
-  // Ensure we have a valid protocol
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(
-      `Invalid protocol: ${parsed.protocol}. Use http:// or https://`
     );
   }
 }

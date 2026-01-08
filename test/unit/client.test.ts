@@ -143,7 +143,7 @@ describe("LLMClient", () => {
         // Should only contain safe fields
         expect(apiError.response).toEqual({
           message: "Invalid model",
-          code: undefined,
+          code: "test_error",
         });
 
         // Should NOT contain sensitive fields

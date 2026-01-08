@@ -6,7 +6,7 @@ import {
   validateResourceUrl,
   extractPrivateKey,
 } from "../../src/validation";
-import { TEST_ACCOUNT } from "../helpers/testHelpers";
+import { TEST_PRIVATE_KEY } from "../helpers/testHelpers";
 
 describe("Validation Module", () => {
   describe("validatePrivateKey", () => {
@@ -228,12 +228,24 @@ describe("Validation Module", () => {
 
   describe("extractPrivateKey", () => {
     it("should extract private key from account with source property", () => {
-      const key = extractPrivateKey(TEST_ACCOUNT);
-      expect(key).toBe(
-        "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-      );
+      // Mock account with source property (as expected by the function)
+      const mockAccount = {
+        address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+        source: TEST_PRIVATE_KEY,
+      } as any;
+      const key = extractPrivateKey(mockAccount);
+      expect(key).toBe(TEST_PRIVATE_KEY);
       expect(key.startsWith("0x")).toBe(true);
       expect(key.length).toBe(66);
+    });
+
+    it("should extract private key from account with key property", () => {
+      const mockAccount = {
+        address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+        key: TEST_PRIVATE_KEY,
+      } as any;
+      const key = extractPrivateKey(mockAccount);
+      expect(key).toBe(TEST_PRIVATE_KEY);
     });
 
     it("should throw for account without source or key", () => {
