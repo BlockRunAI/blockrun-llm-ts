@@ -66,24 +66,24 @@ export function validateApiUrl(url: string): void {
 
   try {
     parsed = new URL(url);
-  } catch (error) {
+  } catch {
     throw new Error("Invalid API URL format");
   }
 
-  // Check protocol
+  // Ensure we have a valid protocol first
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(
+      `Invalid protocol: ${parsed.protocol}. Use http:// or https://`
+    );
+  }
+
+  // Check HTTPS requirement for non-localhost
   const isLocalhost = LOCALHOST_DOMAINS.includes(parsed.hostname);
 
   if (parsed.protocol !== "https:" && !isLocalhost) {
     throw new Error(
       "API URL must use HTTPS for non-localhost endpoints. " +
         `Use https:// instead of ${parsed.protocol}//`
-    );
-  }
-
-  // Ensure we have a valid protocol
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(
-      `Invalid protocol: ${parsed.protocol}. Use http:// or https://`
     );
   }
 }
@@ -171,7 +171,7 @@ export function validateResourceUrl(url: string, baseUrl: string): string {
     }
 
     return url;
-  } catch (error) {
+  } catch {
     // Invalid URL format, return safe default
     console.warn(`Invalid resource URL format: ${url}. Using safe default.`);
     return `${baseUrl}/v1/chat/completions`;

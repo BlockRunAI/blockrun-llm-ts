@@ -301,9 +301,16 @@ export class LLMClient {
     });
 
     if (!response.ok) {
+      let errorBody: unknown;
+      try {
+        errorBody = await response.json();
+      } catch {
+        errorBody = { error: "Request failed" };
+      }
       throw new APIError(
         `Failed to list models: ${response.status}`,
-        response.status
+        response.status,
+        sanitizeErrorResponse(errorBody)
       );
     }
 
