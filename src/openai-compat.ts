@@ -205,7 +205,7 @@ class ChatCompletions {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      let response = await fetch(url, {
+      const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -219,19 +219,8 @@ class ChatCompletions {
           throw new Error("402 response but no payment requirements found");
         }
 
-        // Use the internal client's payment handling
-        // For streaming, we need to make a new request with payment
-        const { createPaymentPayload, parsePaymentRequired, extractPaymentDetails } = await import("./x402");
-        const { validateResourceUrl } = await import("./validation");
-        const { privateKeyToAccount } = await import("viem/accounts");
-
-        const paymentRequired = parsePaymentRequired(paymentHeader);
-        const details = extractPaymentDetails(paymentRequired);
-
-        // Get private key from client (we need to access it)
-        const walletAddress = this.client.getWalletAddress();
-
-        // We need the private key - this is a limitation
+        // Streaming with automatic payment is not currently supported
+        // The SDK would need direct access to the private key to sign payments
         // For now, throw an error asking user to use non-streaming
         throw new Error(
           "Streaming with automatic payment requires direct wallet access. " +
