@@ -66,7 +66,7 @@ export function validateApiUrl(url: string): void {
 
   try {
     parsed = new URL(url);
-  } catch (error) {
+  } catch {
     throw new Error("Invalid API URL format");
   }
 
@@ -171,7 +171,7 @@ export function validateResourceUrl(url: string, baseUrl: string): string {
     }
 
     return url;
-  } catch (error) {
+  } catch {
     // Invalid URL format, return safe default
     console.warn(`Invalid resource URL format: ${url}. Using safe default.`);
     return `${baseUrl}/v1/chat/completions`;
