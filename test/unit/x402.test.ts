@@ -4,13 +4,14 @@ import {
   parsePaymentRequired,
   extractPaymentDetails,
 } from "../../src/x402";
-import { TEST_ACCOUNT, TEST_RECIPIENT } from "../helpers/testHelpers";
+import { TEST_PRIVATE_KEY, TEST_ACCOUNT, TEST_RECIPIENT } from "../helpers/testHelpers";
 
 describe("x402 Payment Protocol", () => {
   describe("createPaymentPayload", () => {
     it("should create valid payment payload", async () => {
       const payload = await createPaymentPayload(
-        TEST_ACCOUNT,
+        TEST_PRIVATE_KEY,
+        TEST_ACCOUNT.address,
         TEST_RECIPIENT,
         "1000000",
         "eip155:8453"
@@ -34,7 +35,8 @@ describe("x402 Payment Protocol", () => {
 
     it("should include resource info when provided", async () => {
       const payload = await createPaymentPayload(
-        TEST_ACCOUNT,
+        TEST_PRIVATE_KEY,
+        TEST_ACCOUNT.address,
         TEST_RECIPIENT,
         "1000000",
         "eip155:8453",
@@ -53,7 +55,8 @@ describe("x402 Payment Protocol", () => {
       const before = Math.floor(Date.now() / 1000);
 
       const payload = await createPaymentPayload(
-        TEST_ACCOUNT,
+        TEST_PRIVATE_KEY,
+        TEST_ACCOUNT.address,
         TEST_RECIPIENT,
         "1000000"
       );
@@ -71,7 +74,8 @@ describe("x402 Payment Protocol", () => {
 
     it("should include accepted payment details", async () => {
       const payload = await createPaymentPayload(
-        TEST_ACCOUNT,
+        TEST_PRIVATE_KEY,
+        TEST_ACCOUNT.address,
         TEST_RECIPIENT,
         "5000000",
         "eip155:8453"
@@ -86,7 +90,8 @@ describe("x402 Payment Protocol", () => {
 
     it("should use custom max timeout", async () => {
       const payload = await createPaymentPayload(
-        TEST_ACCOUNT,
+        TEST_PRIVATE_KEY,
+        TEST_ACCOUNT.address,
         TEST_RECIPIENT,
         "1000000",
         "eip155:8453",
