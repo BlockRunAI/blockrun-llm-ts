@@ -19,10 +19,18 @@
  *   messages: [{ role: 'user', content: 'Hello!' }]
  * });
  * console.log(response.choices[0].message.content);
+ *
+ * @example Image generation
+ * import { ImageClient } from '@blockrun/llm';
+ *
+ * const client = new ImageClient({ privateKey: '0x...' });
+ * const result = await client.generate('A cute cat in space');
+ * console.log(result.data[0].url);
  */
 
 // Native BlockRun API
 export { LLMClient, default } from "./client";
+export { ImageClient } from "./image";
 export {
   type ChatMessage,
   type ChatChoice,
@@ -32,11 +40,46 @@ export {
   type LLMClientOptions,
   type ChatOptions,
   type ChatCompletionOptions,
+  // Image types
+  type ImageData,
+  type ImageResponse,
+  type ImageModel,
+  type ImageClientOptions,
+  type ImageGenerateOptions,
+  // xAI Live Search types
+  type WebSearchSource,
+  type XSearchSource,
+  type NewsSearchSource,
+  type RssSearchSource,
+  type SearchSource,
+  type SearchParameters,
+  // Spending tracking
+  type Spending,
+  // Error classes
   BlockrunError,
   PaymentError,
   APIError,
 } from "./types";
 export { BASE_CHAIN_ID, USDC_BASE } from "./x402";
+
+// Wallet management utilities
+export {
+  createWallet,
+  saveWallet,
+  loadWallet,
+  getOrCreateWallet,
+  getWalletAddress,
+  getEip681Uri,
+  getPaymentLinks,
+  formatWalletCreatedMessage,
+  formatNeedsFundingMessage,
+  formatFundingMessageCompact,
+  USDC_BASE_CONTRACT,
+  WALLET_FILE_PATH,
+  WALLET_DIR_PATH,
+  type WalletInfo,
+  type PaymentLinks,
+} from "./wallet";
 
 // OpenAI-compatible API
 export { OpenAI } from "./openai-compat";

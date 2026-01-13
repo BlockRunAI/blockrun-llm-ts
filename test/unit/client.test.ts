@@ -6,6 +6,7 @@ import {
   buildChatResponse,
   buildErrorResponse,
   buildModelsResponse,
+  buildImageModelsResponse,
   buildPaymentRequiredResponse,
 } from "../helpers/testHelpers";
 
@@ -140,7 +141,7 @@ describe("LLMClient", () => {
         expect(error).toBeInstanceOf(APIError);
         const apiError = error as APIError;
 
-        // Should only contain safe fields
+        // Should only contain safe fields (error -> message, code preserved if string)
         expect(apiError.response).toEqual({
           message: "Invalid model",
           code: "test_error",
@@ -150,6 +151,96 @@ describe("LLMClient", () => {
         expect(apiError.response).not.toHaveProperty("internal_stack");
         expect(apiError.response).not.toHaveProperty("api_key");
       }
+    });
+  });
+
+  describe("getSpending", () => {
+    it("should return initial zero spending", () => {
+      const client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
+      const spending = client.getSpending();
+
+      expect(spending.totalUsd).toBe(0);
+      expect(spending.calls).toBe(0);
+    });
+  });
+
+  describe("listImageModels", () => {
+    let client: LLMClient;
+    let fetchSpy: any;
+
+    beforeEach(() => {
+      client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
+      fetchSpy = vi.spyOn(global, "fetch");
+    });
+
+    it("should list available image models", async () => {
+      const mockResponse = buildImageModelsResponse();
+      fetchSpy.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => mockResponse,
+      });
+
+      const models = await client.listImageModels();
+
+      expect(models).toHaveLength(2);
+      expect(models[0].id).toBe("google/nano-banana");
+      expect(models[0].pricePerImage).toBe(0.01);
+    });
+
+    it("should throw APIError on failure", async () => {
+      fetchSpy.mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+      });
+
+      await expect(client.listImageModels()).rejects.toThrow(APIError);
+    });
+  });
+
+  describe("listAllModels", () => {
+    let client: LLMClient;
+    let fetchSpy: any;
+
+    beforeEach(() => {
+      client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
+      fetchSpy = vi.spyOn(global, "fetch");
+    });
+
+    it("should list all models (LLM and image)", async () => {
+      const llmModelsResponse = buildModelsResponse();
+      const imageModelsResponse = buildImageModelsResponse();
+
+      fetchSpy
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => llmModelsResponse,
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => imageModelsResponse,
+        });
+
+      const models = await client.listAllModels();
+
+      // 3 LLM models + 2 image models
+      expect(models).toHaveLength(5);
+
+      // Check types are set correctly
+      const llmModels = models.filter((m) => m.type === "llm");
+      const imageModels = models.filter((m) => m.type === "image");
+
+      expect(llmModels).toHaveLength(3);
+      expect(imageModels).toHaveLength(2);
+
+      // LLM models should have inputPrice/outputPrice
+      expect(llmModels[0].inputPrice).toBeDefined();
+      expect(llmModels[0].outputPrice).toBeDefined();
+
+      // Image models should have pricePerImage
+      expect(imageModels[0].pricePerImage).toBeDefined();
     });
   });
 });

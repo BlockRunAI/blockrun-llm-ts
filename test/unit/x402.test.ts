@@ -58,7 +58,8 @@ describe("x402 Payment Protocol", () => {
         TEST_PRIVATE_KEY,
         TEST_ACCOUNT.address,
         TEST_RECIPIENT,
-        "1000000"
+        "1000000",
+        "eip155:8453"
       );
 
       const after = Math.floor(Date.now() / 1000);

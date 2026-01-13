@@ -90,6 +90,7 @@ describe("Validation Module", () => {
     it("should reject invalid URL format", () => {
       expect(() => validateApiUrl("not-a-url")).toThrow("Invalid");
       expect(() => validateApiUrl("")).toThrow("Invalid");
+      // ftp:// fails protocol validation first
       expect(() => validateApiUrl("ftp://example.com")).toThrow("Invalid protocol");
     });
 
@@ -228,7 +229,7 @@ describe("Validation Module", () => {
 
   describe("extractPrivateKey", () => {
     it("should extract private key from account with source property", () => {
-      // Mock account with source property (as expected by the function)
+      // Mock account with source property containing valid private key
       const mockAccount = {
         address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
         source: TEST_PRIVATE_KEY,
