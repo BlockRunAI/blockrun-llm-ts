@@ -1,14 +1,15 @@
 # @blockrun/llm
 
-Pay-per-request access to GPT-4o, Claude 4, Gemini 2.5, and more via x402 micropayments on Base.
+Pay-per-request access to GPT-4o, Claude 4, Gemini 2.5, and more via x402 micropayments on Base and Solana.
 
-**Network:** Base (Chain ID: 8453)
+**Networks:** Base (Chain ID: 8453) and Solana Mainnet
 **Payment:** USDC
 **Protocol:** x402 v2 (CDP Facilitator)
 
 ## Installation
 
 ```bash
+# Base and Solana support (optional Solana deps auto-installed)
 npm install @blockrun/llm
 # or
 pnpm add @blockrun/llm
@@ -16,7 +17,7 @@ pnpm add @blockrun/llm
 yarn add @blockrun/llm
 ```
 
-## Quick Start
+## Quick Start (Base - Default)
 
 ```typescript
 import { LLMClient } from '@blockrun/llm';
@@ -26,6 +27,17 @@ const response = await client.chat('openai/gpt-4o', 'Hello!');
 ```
 
 That's it. The SDK handles x402 payment automatically.
+
+## Quick Start (Solana)
+
+```typescript
+import { LLMClient } from '@blockrun/llm';
+
+const client = new LLMClient({ network: 'solana' });  // Uses BLOCKRUN_SOLANA_KEY
+const response = await client.chat('openai/gpt-4o', 'Hello!');
+```
+
+For Solana, set `BLOCKRUN_SOLANA_KEY` environment variable with your base58-encoded Solana secret key.
 
 ## How It Works
 
@@ -87,6 +99,9 @@ That's it. The SDK handles x402 payment automatically.
 |-------|-------|
 | `openai/dall-e-3` | $0.04-0.08/image |
 | `openai/gpt-image-1` | $0.02-0.04/image |
+| `google/nano-banana` | $0.05/image |
+| `google/nano-banana-pro` | $0.10-0.15/image |
+| `black-forest/flux-1.1-pro` | $0.04/image |
 
 ## Usage Examples
 
@@ -152,7 +167,7 @@ const [gpt, claude, gemini] = await Promise.all([
 ## Configuration
 
 ```typescript
-// Default: reads BLOCKRUN_WALLET_KEY from environment
+// Default: reads BASE_CHAIN_WALLET_KEY from environment
 const client = new LLMClient();
 
 // Or pass options explicitly
@@ -167,7 +182,9 @@ const client = new LLMClient({
 
 | Variable | Description |
 |----------|-------------|
-| `BASE_CHAIN_WALLET_KEY` | Your Base chain wallet private key (never sent to server) |
+| `BASE_CHAIN_WALLET_KEY` | Your Base chain wallet private key (for Base) |
+| `BLOCKRUN_SOLANA_KEY` | Your Solana wallet secret key - base58 (for Solana) |
+| `BLOCKRUN_NETWORK` | Default network: `base` or `solana` (optional, default: base) |
 | `BLOCKRUN_API_URL` | API endpoint (optional, default: https://blockrun.ai/api) |
 
 ## Error Handling
@@ -204,7 +221,7 @@ npm test -- --coverage            # Run with coverage report
 
 Integration tests call the production API and require:
 - A funded Base wallet with USDC ($1+ recommended)
-- `BLOCKRUN_WALLET_KEY` environment variable set
+- `BASE_CHAIN_WALLET_KEY` environment variable set
 - Estimated cost: ~$0.05 per test run
 
 ```bash
@@ -212,18 +229,31 @@ export BASE_CHAIN_WALLET_KEY=0x...
 npm test -- test/integration       # Run integration tests only
 ```
 
-Integration tests are automatically skipped if `BLOCKRUN_WALLET_KEY` is not set.
+Integration tests are automatically skipped if `BASE_CHAIN_WALLET_KEY` is not set.
 
 ## Setting Up Your Wallet
 
+### Base (EVM)
 1. Create a wallet on Base (Coinbase Wallet, MetaMask, etc.)
 2. Get USDC on Base for API payments
-3. Export your private key and set as `BLOCKRUN_WALLET_KEY`
+3. Export your private key and set as `BASE_CHAIN_WALLET_KEY`
 
 ```bash
 # .env
 BASE_CHAIN_WALLET_KEY=0x...
 ```
+
+### Solana
+1. Create a Solana wallet (Phantom, Backpack, Solflare, etc.)
+2. Get USDC on Solana for API payments
+3. Export your secret key and set as `BLOCKRUN_SOLANA_KEY`
+
+```bash
+# .env
+BLOCKRUN_SOLANA_KEY=...your_base58_secret_key
+```
+
+Note: Solana transactions are gasless for the user - the CDP facilitator pays for transaction fees.
 
 ## Security
 

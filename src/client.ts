@@ -23,6 +23,9 @@ import {
   type ChatCompletionOptions,
   type LLMClientOptions,
   type Model,
+  type ImageModel,
+  type Spending,
+  type SearchParameters,
   APIError,
   PaymentError,
 } from "./types";
@@ -53,6 +56,8 @@ export class LLMClient {
   private privateKey: `0x${string}`;
   private apiUrl: string;
   private timeout: number;
+  private sessionTotalUsd: number = 0;
+  private sessionCalls: number = 0;
 
   /**
    * Initialize the BlockRun LLM client.
@@ -60,8 +65,11 @@ export class LLMClient {
    * @param options - Client configuration options (optional if BASE_CHAIN_WALLET_KEY env var is set)
    */
   constructor(options: LLMClientOptions = {}) {
-    // Get private key from options or environment variable
-    const privateKey = options.privateKey || process.env.BASE_CHAIN_WALLET_KEY;
+    // Get private key from options or environment variable (browser-safe check)
+    const envKey = typeof process !== "undefined" && process.env
+      ? process.env.BASE_CHAIN_WALLET_KEY
+      : undefined;
+    const privateKey = options.privateKey || envKey;
 
     if (!privateKey) {
       throw new Error(
@@ -111,6 +119,8 @@ export class LLMClient {
       maxTokens: options?.maxTokens,
       temperature: options?.temperature,
       topP: options?.topP,
+      search: options?.search,
+      searchParameters: options?.searchParameters,
     });
 
     return result.choices[0].message.content;
@@ -140,6 +150,14 @@ export class LLMClient {
     }
     if (options?.topP !== undefined) {
       body.top_p = options.topP;
+    }
+
+    // Handle xAI Live Search parameters
+    if (options?.searchParameters !== undefined) {
+      body.search_parameters = options.searchParameters;
+    } else if (options?.search === true) {
+      // Simple shortcut: search=true enables live search with defaults
+      body.search_parameters = { mode: "on" };
     }
 
     return this.requestWithPayment("/v1/chat/completions", body);
@@ -268,6 +286,11 @@ export class LLMClient {
       );
     }
 
+    // Update session spending
+    const costUsd = parseFloat(details.amount) / 1e6; // Convert from micro USDC
+    this.sessionCalls += 1;
+    this.sessionTotalUsd += costUsd;
+
     return retryResponse.json() as Promise<ChatResponse>;
   }
 
@@ -293,7 +316,7 @@ export class LLMClient {
   }
 
   /**
-   * List available models with pricing.
+   * List available LLM models with pricing.
    */
   async listModels(): Promise<Model[]> {
     const response = await this.fetchWithTimeout(`${this.apiUrl}/v1/models`, {
@@ -314,8 +337,75 @@ export class LLMClient {
       );
     }
 
-    const data = await response.json() as { data?: Model[] };
+    const data = (await response.json()) as { data?: Model[] };
     return data.data || [];
+  }
+
+  /**
+   * List available image generation models with pricing.
+   */
+  async listImageModels(): Promise<ImageModel[]> {
+    const response = await this.fetchWithTimeout(
+      `${this.apiUrl}/v1/images/models`,
+      { method: "GET" }
+    );
+
+    if (!response.ok) {
+      throw new APIError(
+        `Failed to list image models: ${response.status}`,
+        response.status
+      );
+    }
+
+    const data = (await response.json()) as { data?: ImageModel[] };
+    return data.data || [];
+  }
+
+  /**
+   * List all available models (both LLM and image) with pricing.
+   *
+   * @returns Array of all models with 'type' field ('llm' or 'image')
+   *
+   * @example
+   * const models = await client.listAllModels();
+   * for (const model of models) {
+   *   if (model.type === 'llm') {
+   *     console.log(`LLM: ${model.id} - $${model.inputPrice}/M input`);
+   *   } else {
+   *     console.log(`Image: ${model.id} - $${model.pricePerImage}/image`);
+   *   }
+   * }
+   */
+  async listAllModels(): Promise<(Model | ImageModel)[]> {
+    // Get LLM models
+    const llmModels = await this.listModels();
+    for (const model of llmModels) {
+      model.type = "llm";
+    }
+
+    // Get image models
+    const imageModels = await this.listImageModels();
+    for (const model of imageModels) {
+      model.type = "image";
+    }
+
+    return [...llmModels, ...imageModels];
+  }
+
+  /**
+   * Get current session spending.
+   *
+   * @returns Object with totalUsd and calls count
+   *
+   * @example
+   * const spending = client.getSpending();
+   * console.log(`Spent $${spending.totalUsd.toFixed(4)} across ${spending.calls} calls`);
+   */
+  getSpending(): Spending {
+    return {
+      totalUsd: this.sessionTotalUsd,
+      calls: this.sessionCalls,
+    };
   }
 
   /**

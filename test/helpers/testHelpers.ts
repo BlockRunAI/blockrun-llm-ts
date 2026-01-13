@@ -195,3 +195,47 @@ export function createMockFetch(responses: {
 export function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+/**
+ * Build a mock image models list response.
+ */
+export function buildImageModelsResponse() {
+  return {
+    data: [
+      {
+        id: "google/nano-banana",
+        provider: "google",
+        name: "Nano Banana",
+        pricePerImage: 0.01,
+        supportedSizes: ["1024x1024", "512x512"],
+        available: true,
+      },
+      {
+        id: "openai/dall-e-3",
+        provider: "openai",
+        name: "DALL-E 3",
+        pricePerImage: 0.04,
+        supportedSizes: ["1024x1024", "1792x1024", "1024x1792"],
+        available: true,
+      },
+    ],
+  };
+}
+
+/**
+ * Build a mock image generation response.
+ */
+export function buildImageResponse(overrides?: {
+  url?: string;
+  revisedPrompt?: string;
+}) {
+  return {
+    created: Math.floor(Date.now() / 1000),
+    data: [
+      {
+        url: overrides?.url || "https://example.com/generated-image.png",
+        revised_prompt: overrides?.revisedPrompt,
+      },
+    ],
+  };
+}

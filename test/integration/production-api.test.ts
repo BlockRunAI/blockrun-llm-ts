@@ -2,19 +2,19 @@
  * Integration tests for BlockRun LLM SDK against production API.
  *
  * Requirements:
- * - BLOCKRUN_WALLET_KEY environment variable with funded Base wallet
+ * - BASE_CHAIN_WALLET_KEY environment variable with funded Base wallet
  * - Minimum $1 USDC on Base chain
  * - Estimated cost per test run: ~$0.05
  *
  * Run with: npm test -- test/integration
- * Skip if no wallet: Tests will be skipped if BLOCKRUN_WALLET_KEY not set
+ * Skip if no wallet: Tests will be skipped if BASE_CHAIN_WALLET_KEY not set
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { LLMClient } from "../../src/client";
 
-const WALLET_KEY = process.env.BLOCKRUN_WALLET_KEY;
-const PRODUCTION_API = "https://api.blockrun.ai";
+const WALLET_KEY = process.env.BASE_CHAIN_WALLET_KEY;
+const PRODUCTION_API = "https://blockrun.ai/api";
 
 // Skip all tests if no wallet key configured
 const describeIf = WALLET_KEY ? describe : describe.skip;
@@ -24,7 +24,7 @@ describeIf("Production API Integration", () => {
 
   beforeAll(() => {
     if (!WALLET_KEY) {
-      console.warn("⚠️  Skipping integration tests: BLOCKRUN_WALLET_KEY not set");
+      console.warn("⚠️  Skipping integration tests: BASE_CHAIN_WALLET_KEY not set");
       return;
     }
 

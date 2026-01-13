@@ -181,26 +181,34 @@ export function validateResourceUrl(url: string, baseUrl: string): string {
 /**
  * Safely extracts the private key from a viem Account object.
  *
- * The viem Account type stores the private key in different locations
- * depending on how the account was created. This function safely extracts
- * the key with proper type checking.
+ * Note: Modern viem versions (2.x+) do NOT expose the private key on the
+ * Account object - the 'source' property contains the account type name
+ * (e.g., "privateKey"), not the actual key. The BlockRun SDK stores the
+ * private key separately in the client constructors.
  *
  * @param account - The viem Account object
  * @returns The private key as a hex string
  * @throws {Error} If the private key cannot be extracted
  *
  * @internal
+ * @deprecated Use the private key stored in client instead
  */
 export function extractPrivateKey(account: Account): `0x${string}` {
-  // The viem Account type has the private key in the 'source' property
-  // when created via privateKeyToAccount()
+  // Check 'source' property - must be a valid hex private key, not just a string
   if ("source" in account && typeof account.source === "string") {
-    return account.source as `0x${string}`;
+    const source = account.source;
+    // Validate it looks like a private key (0x + 64 hex chars)
+    if (source.startsWith("0x") && source.length === 66 && /^0x[0-9a-fA-F]{64}$/.test(source)) {
+      return source as `0x${string}`;
+    }
   }
 
-  // Fallback: check if account has key property (older viem versions)
+  // Check 'key' property (older viem versions)
   if ("key" in account && typeof account.key === "string") {
-    return account.key as `0x${string}`;
+    const key = account.key as string;
+    if (key.startsWith("0x") && key.length === 66 && /^0x[0-9a-fA-F]{64}$/.test(key)) {
+      return key as `0x${string}`;
+    }
   }
 
   throw new Error(
