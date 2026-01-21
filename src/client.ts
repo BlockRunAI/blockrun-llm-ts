@@ -25,7 +25,6 @@ import {
   type Model,
   type ImageModel,
   type Spending,
-  type SearchParameters,
   APIError,
   PaymentError,
 } from "./types";
