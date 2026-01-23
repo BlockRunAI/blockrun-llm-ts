@@ -2,7 +2,11 @@
 
 Pay-per-request access to GPT-4o, Claude 4, Gemini 2.5, and more via x402 micropayments on Base and Solana.
 
-**Networks:** Base (Chain ID: 8453) and Solana Mainnet
+**Networks:**
+- **Base Mainnet:** Chain ID 8453 - Production with real USDC
+- **Base Sepolia (Testnet):** Chain ID 84532 - Developer testing with testnet USDC
+- **Solana Mainnet** - Production with real USDC
+
 **Payment:** USDC
 **Protocol:** x402 v2 (CDP Facilitator)
 
@@ -102,6 +106,56 @@ For Solana, set `BLOCKRUN_SOLANA_KEY` environment variable with your base58-enco
 | `google/nano-banana` | $0.05/image |
 | `google/nano-banana-pro` | $0.10-0.15/image |
 | `black-forest/flux-1.1-pro` | $0.04/image |
+
+### Testnet Models (Base Sepolia)
+| Model | Price |
+|-------|-------|
+| `openai/gpt-oss-20b` | $0.001/request |
+| `openai/gpt-oss-120b` | $0.002/request |
+
+*Testnet models use flat pricing (no token counting) for simplicity.*
+
+## Testnet Usage
+
+For development and testing without real USDC, use the testnet:
+
+```typescript
+import { testnetClient } from '@blockrun/llm';
+
+// Create testnet client (uses Base Sepolia)
+const client = testnetClient({ privateKey: '0x...' });
+
+// Chat with testnet model
+const response = await client.chat('openai/gpt-oss-20b', 'Hello!');
+console.log(response);
+
+// Check if client is on testnet
+console.log(client.isTestnet()); // true
+```
+
+### Testnet Setup
+
+1. Get testnet ETH from [Alchemy Base Sepolia Faucet](https://www.alchemy.com/faucets/base-sepolia)
+2. Get testnet USDC from [Circle USDC Faucet](https://faucet.circle.com/)
+3. Set your wallet key: `export BASE_CHAIN_WALLET_KEY=0x...`
+
+### Available Testnet Models
+
+- `openai/gpt-oss-20b` - $0.001/request (flat price)
+- `openai/gpt-oss-120b` - $0.002/request (flat price)
+
+### Manual Testnet Configuration
+
+```typescript
+import { LLMClient } from '@blockrun/llm';
+
+// Or configure manually
+const client = new LLMClient({
+  privateKey: '0x...',
+  apiUrl: 'https://testnet.blockrun.ai/api'
+});
+const response = await client.chat('openai/gpt-oss-20b', 'Hello!');
+```
 
 ## Usage Examples
 
@@ -299,6 +353,7 @@ Full TypeScript support with exported types:
 ```typescript
 import {
   LLMClient,
+  testnetClient,
   type ChatMessage,
   type ChatResponse,
   type ChatOptions,
