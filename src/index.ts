@@ -29,7 +29,7 @@
  */
 
 // Native BlockRun API
-export { LLMClient, default } from "./client";
+export { LLMClient, testnetClient, default } from "./client";
 export { ImageClient } from "./image";
 export {
   type ChatMessage,

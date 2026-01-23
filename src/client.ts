@@ -41,6 +41,7 @@ import {
 } from "./validation";
 
 const DEFAULT_API_URL = "https://blockrun.ai/api";
+const TESTNET_API_URL = "https://testnet.blockrun.ai/api";
 const DEFAULT_MAX_TOKENS = 1024;
 const DEFAULT_TIMEOUT = 60000;
 
@@ -49,8 +50,28 @@ const DEFAULT_TIMEOUT = 60000;
  *
  * Provides access to multiple LLM providers (OpenAI, Anthropic, Google, etc.)
  * with automatic x402 micropayments on Base chain.
+ *
+ * Networks:
+ * - Mainnet: https://blockrun.ai/api (Base, Chain ID 8453)
+ * - Testnet: https://testnet.blockrun.ai/api (Base Sepolia, Chain ID 84532)
+ *
+ * @example Testnet usage
+ * ```ts
+ * // Use testnet convenience function
+ * import { testnetClient } from '@blockrun/llm';
+ * const client = testnetClient({ privateKey: '0x...' });
+ * const response = await client.chat('openai/gpt-oss-20b', 'Hello!');
+ *
+ * // Or configure manually
+ * const client = new LLMClient({
+ *   privateKey: '0x...',
+ *   apiUrl: 'https://testnet.blockrun.ai/api'
+ * });
+ * ```
  */
 export class LLMClient {
+  static readonly DEFAULT_API_URL = DEFAULT_API_URL;
+  static readonly TESTNET_API_URL = TESTNET_API_URL;
   private account: Account;
   private privateKey: `0x${string}`;
   private apiUrl: string;
@@ -413,6 +434,46 @@ export class LLMClient {
   getWalletAddress(): string {
     return this.account.address;
   }
+
+  /**
+   * Check if client is configured for testnet.
+   */
+  isTestnet(): boolean {
+    return this.apiUrl.includes("testnet.blockrun.ai");
+  }
+}
+
+/**
+ * Create a testnet LLM client for development and testing.
+ *
+ * This is a convenience function that creates an LLMClient configured
+ * for the BlockRun testnet (Base Sepolia).
+ *
+ * @param options - Client options (privateKey required unless BASE_CHAIN_WALLET_KEY env var is set)
+ * @returns LLMClient configured for testnet
+ *
+ * @example
+ * ```ts
+ * import { testnetClient } from '@blockrun/llm';
+ *
+ * const client = testnetClient({ privateKey: '0x...' });
+ * const response = await client.chat('openai/gpt-oss-20b', 'Hello!');
+ * ```
+ *
+ * Testnet Setup:
+ * 1. Get testnet ETH from https://www.alchemy.com/faucets/base-sepolia
+ * 2. Get testnet USDC from https://faucet.circle.com/
+ * 3. Use your wallet with testnet funds
+ *
+ * Available Testnet Models:
+ * - openai/gpt-oss-20b
+ * - openai/gpt-oss-120b
+ */
+export function testnetClient(options: Omit<LLMClientOptions, 'apiUrl'> = {}): LLMClient {
+  return new LLMClient({
+    ...options,
+    apiUrl: TESTNET_API_URL,
+  });
 }
 
 export default LLMClient;
