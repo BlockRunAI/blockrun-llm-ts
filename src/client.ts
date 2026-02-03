@@ -45,6 +45,10 @@ const TESTNET_API_URL = "https://testnet.blockrun.ai/api";
 const DEFAULT_MAX_TOKENS = 1024;
 const DEFAULT_TIMEOUT = 60000;
 
+// SDK version for User-Agent header (client identification in server logs)
+const SDK_VERSION = "0.2.1";
+const USER_AGENT = `blockrun-ts/${SDK_VERSION}`;
+
 /**
  * BlockRun LLM Gateway Client.
  *
@@ -195,7 +199,7 @@ export class LLMClient {
     // First attempt (will likely return 402)
     const response = await this.fetchWithTimeout(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
       body: JSON.stringify(body),
     });
 
@@ -282,6 +286,7 @@ export class LLMClient {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "User-Agent": USER_AGENT,
         "PAYMENT-SIGNATURE": paymentPayload,
       },
       body: JSON.stringify(body),
