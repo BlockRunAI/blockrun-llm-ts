@@ -1,6 +1,6 @@
 {
   "name": "@blockrun/llm",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "description": "BlockRun LLM Gateway SDK - Pay-per-request AI via x402 on Base",
   "main": "dist/index.cjs",
@@ -48,6 +48,7 @@
     "url": "https://github.com/BlockRunAI/blockrun-llm-ts/issues"
   },
   "dependencies": {
+    "@blockrun/clawrouter": "^0.9.3",
     "viem": "^2.21.0"
   },
   "optionalDependencies": {

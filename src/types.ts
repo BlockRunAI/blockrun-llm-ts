@@ -2,15 +2,48 @@
  * Type definitions for BlockRun LLM SDK
  */
 
+// Tool calling types (OpenAI compatible)
+export interface FunctionDefinition {
+  name: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
+  strict?: boolean;
+}
+
+export interface Tool {
+  type: "function";
+  function: FunctionDefinition;
+}
+
+export interface FunctionCall {
+  name: string;
+  arguments: string;
+}
+
+export interface ToolCall {
+  id: string;
+  type: "function";
+  function: FunctionCall;
+}
+
+export type ToolChoice =
+  | "none"
+  | "auto"
+  | "required"
+  | { type: "function"; function: { name: string } };
+
 export interface ChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
+  role: "system" | "user" | "assistant" | "tool";
+  content?: string | null;
+  name?: string; // For tool messages
+  tool_call_id?: string; // For tool result messages
+  tool_calls?: ToolCall[]; // For assistant messages with tool calls
 }
 
 export interface ChatChoice {
   index: number;
   message: ChatMessage;
-  finish_reason?: string;
+  finish_reason?: "stop" | "length" | "content_filter" | "tool_calls";
 }
 
 export interface ChatUsage {
@@ -199,6 +232,42 @@ export interface ChatCompletionOptions {
   search?: boolean;
   /** Full xAI Live Search configuration (for Grok models) */
   searchParameters?: SearchParameters;
+  /** Tool definitions for function calling */
+  tools?: Tool[];
+  /** Tool selection strategy */
+  toolChoice?: ToolChoice;
+}
+
+// Smart routing types (ClawRouter integration)
+export type RoutingProfile = "free" | "eco" | "auto" | "premium";
+
+export type RoutingTier = "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
+
+export interface RoutingDecision {
+  model: string;
+  tier: RoutingTier;
+  confidence: number;
+  method: "rules" | "llm";
+  reasoning: string;
+  costEstimate: number;
+  baselineCost: number;
+  savings: number; // 0-1 percentage
+}
+
+export interface SmartChatOptions extends ChatOptions {
+  /** Routing profile: free (zero cost), eco (budget), auto (balanced), premium (best quality) */
+  routingProfile?: RoutingProfile;
+  /** Maximum output tokens (used for cost estimation) */
+  maxOutputTokens?: number;
+}
+
+export interface SmartChatResponse {
+  /** The AI response text */
+  response: string;
+  /** Which model was selected by smart routing */
+  model: string;
+  /** Routing decision metadata */
+  routing: RoutingDecision;
 }
 
 export class BlockrunError extends Error {

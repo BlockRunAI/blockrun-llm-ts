@@ -59,12 +59,10 @@ For Solana, set `BLOCKRUN_SOLANA_KEY` environment variable with your base58-enco
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
 | `openai/gpt-5.2` | $1.75/M | $14.00/M |
-| `openai/gpt-5.1` | $1.25/M | $10.00/M |
 | `openai/gpt-5` | $1.25/M | $10.00/M |
 | `openai/gpt-5-mini` | $0.25/M | $2.00/M |
 | `openai/gpt-5-nano` | $0.05/M | $0.40/M |
 | `openai/gpt-5.2-pro` | $21.00/M | $168.00/M |
-| `openai/gpt-5-pro` | $15.00/M | $120.00/M |
 
 ### OpenAI GPT-4 Family
 | Model | Input Price | Output Price |
@@ -87,6 +85,7 @@ For Solana, set `BLOCKRUN_SOLANA_KEY` environment variable with your base58-enco
 ### Anthropic Claude
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
+| `anthropic/claude-opus-4.5` | $5.00/M | $25.00/M |
 | `anthropic/claude-opus-4` | $15.00/M | $75.00/M |
 | `anthropic/claude-sonnet-4` | $3.00/M | $15.00/M |
 | `anthropic/claude-haiku-4.5` | $1.00/M | $5.00/M |
@@ -97,6 +96,50 @@ For Solana, set `BLOCKRUN_SOLANA_KEY` environment variable with your base58-enco
 | `google/gemini-3-pro-preview` | $2.00/M | $12.00/M |
 | `google/gemini-2.5-pro` | $1.25/M | $10.00/M |
 | `google/gemini-2.5-flash` | $0.15/M | $0.60/M |
+
+### DeepSeek
+| Model | Input Price | Output Price |
+|-------|-------------|--------------|
+| `deepseek/deepseek-chat` | $0.28/M | $0.42/M |
+| `deepseek/deepseek-reasoner` | $0.28/M | $0.42/M |
+
+### xAI Grok
+| Model | Input Price | Output Price | Context | Notes |
+|-------|-------------|--------------|---------|-------|
+| `xai/grok-3` | $3.00/M | $15.00/M | 131K | Flagship |
+| `xai/grok-3-fast` | $5.00/M | $25.00/M | 131K | Tool calling optimized |
+| `xai/grok-3-mini` | $0.30/M | $0.50/M | 131K | Fast & affordable |
+| `xai/grok-4-1-fast-reasoning` | $0.20/M | $0.50/M | **2M** | Latest, chain-of-thought |
+| `xai/grok-4-1-fast-non-reasoning` | $0.20/M | $0.50/M | **2M** | Latest, direct response |
+| `xai/grok-4-fast-reasoning` | $0.20/M | $0.50/M | **2M** | Step-by-step reasoning |
+| `xai/grok-4-fast-non-reasoning` | $0.20/M | $0.50/M | **2M** | Quick responses |
+| `xai/grok-code-fast-1` | $0.20/M | $1.50/M | 256K | Code generation |
+| `xai/grok-4-0709` | $0.20/M | $1.50/M | 256K | Premium quality |
+| `xai/grok-2-vision` | $2.00/M | $10.00/M | 32K | Vision capabilities |
+
+### Moonshot Kimi
+| Model | Input Price | Output Price |
+|-------|-------------|--------------|
+| `moonshot/kimi-k2.5` | $0.55/M | $2.50/M |
+
+### NVIDIA (Free & Hosted)
+| Model | Input Price | Output Price | Notes |
+|-------|-------------|--------------|-------|
+| `nvidia/gpt-oss-120b` | **FREE** | **FREE** | OpenAI open-weight 120B (Apache 2.0) |
+| `nvidia/kimi-k2.5` | $0.55/M | $2.50/M | Moonshot 1T MoE with vision |
+
+### E2E Verified Models
+
+All models below have been tested end-to-end via the TypeScript SDK (Feb 2026):
+
+| Provider | Model | Status |
+|----------|-------|--------|
+| OpenAI | `openai/gpt-4o-mini` | Passed |
+| Anthropic | `anthropic/claude-sonnet-4` | Passed |
+| Google | `google/gemini-2.5-flash` | Passed |
+| DeepSeek | `deepseek/deepseek-chat` | Passed |
+| xAI | `xai/grok-3-fast` | Passed |
+| Moonshot | `moonshot/kimi-k2.5` | Passed |
 
 ### Image Generation
 | Model | Price |
@@ -174,6 +217,47 @@ const response2 = await client.chat('anthropic/claude-sonnet-4', 'Write a haiku'
   system: 'You are a creative poet.',
 });
 ```
+
+### Smart Routing (ClawRouter)
+
+Save up to 78% on inference costs with intelligent model routing. ClawRouter uses a 14-dimension rule-based scoring algorithm to select the cheapest model that can handle your request (<1ms, 100% local).
+
+```typescript
+import { LLMClient } from '@blockrun/llm';
+
+const client = new LLMClient();
+
+// Auto-route to cheapest capable model
+const result = await client.smartChat('What is 2+2?');
+console.log(result.response);     // '4'
+console.log(result.model);        // 'google/gemini-2.5-flash'
+console.log(result.routing.tier); // 'SIMPLE'
+console.log(`Saved ${(result.routing.savings * 100).toFixed(0)}%`); // 'Saved 78%'
+
+// Routing profiles
+const free = await client.smartChat('Hello!', { routingProfile: 'free' });     // Zero cost
+const eco = await client.smartChat('Explain AI', { routingProfile: 'eco' });   // Budget optimized
+const auto = await client.smartChat('Code review', { routingProfile: 'auto' }); // Balanced (default)
+const premium = await client.smartChat('Write a legal brief', { routingProfile: 'premium' }); // Best quality
+```
+
+**Routing Profiles:**
+
+| Profile | Description | Best For |
+|---------|-------------|----------|
+| `free` | NVIDIA free models only | Testing, simple queries |
+| `eco` | Budget-optimized | Cost-sensitive workloads |
+| `auto` | Intelligent routing (default) | General use |
+| `premium` | Best quality models | Critical tasks |
+
+**Tiers:**
+
+| Tier | Example Tasks | Typical Models |
+|------|---------------|----------------|
+| SIMPLE | Greetings, math, lookups | Gemini Flash, GPT-4o-mini |
+| MEDIUM | Explanations, summaries | GPT-4o, Claude Sonnet |
+| COMPLEX | Analysis, code generation | GPT-5.2, Claude Opus |
+| REASONING | Multi-step logic, planning | o3, DeepSeek Reasoner |
 
 ### Full Chat Completion
 
@@ -358,6 +442,12 @@ import {
   type ChatResponse,
   type ChatOptions,
   type Model,
+  // Smart routing types
+  type SmartChatOptions,
+  type SmartChatResponse,
+  type RoutingDecision,
+  type RoutingProfile,
+  type RoutingTier,
   APIError,
   PaymentError,
 } from '@blockrun/llm';

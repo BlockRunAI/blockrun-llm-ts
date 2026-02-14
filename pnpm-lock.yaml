@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@blockrun/clawrouter':
+        specifier: ^0.9.3
+        version: 0.9.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
       viem:
         specifier: ^2.21.0
         version: 2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
@@ -49,6 +52,16 @@ packages:
   '@babel/runtime@7.28.6':
     resolution: {integrity: sha512-05WQkdpL9COIMz4LjTxGpPNCdlpyimKppYNoJ5Di5EUObifl8t4tuLuUBBZEpoLYOmfvIWrsp9fCl0HoPRVTdA==}
     engines: {node: '>=6.9.0'}
+
+  '@blockrun/clawrouter@0.9.3':
+    resolution: {integrity: sha512-8ENxPvAeLsr3O5ZJ0UkKv2kH6LK6oVLn3R2oUJfY38fNJMJ6iM4Z2KPuDqxRKjt2kJ/8HFjjGOPnXzQCMq9LJw==}
+    engines: {node: '>=20'}
+    hasBin: true
+    peerDependencies:
+      openclaw: '>=2025.1.0'
+    peerDependenciesMeta:
+      openclaw:
+        optional: true
 
   '@esbuild/aix-ppc64@0.21.5':
     resolution: {integrity: sha512-1SDgH6ZSPTlggy1yI6+Dbkiz8xzpHJEVAlF/AM1tHPLsf5STom9rwtjE4hKAF20FfXXNTFqEYXyJNWh1GiZedQ==}
@@ -1684,6 +1697,15 @@ snapshots:
 
   '@babel/runtime@7.28.6':
     optional: true
+
+  '@blockrun/clawrouter@0.9.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)':
+    dependencies:
+      viem: 2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+    transitivePeerDependencies:
+      - bufferutil
+      - typescript
+      - utf-8-validate
+      - zod
 
   '@esbuild/aix-ppc64@0.21.5':
     optional: true

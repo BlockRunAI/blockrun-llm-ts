@@ -20,7 +20,7 @@
  */
 
 import { LLMClient } from "./client";
-import type { ChatMessage, ChatResponse } from "./types";
+import type { ChatMessage, ChatResponse, Tool, ToolCall, ToolChoice } from "./types";
 
 // OpenAI-compatible types
 export interface OpenAIClientOptions {
@@ -37,8 +37,11 @@ export interface OpenAIClientOptions {
 export interface OpenAIChatCompletionParams {
   model: string;
   messages: Array<{
-    role: "system" | "user" | "assistant";
-    content: string;
+    role: "system" | "user" | "assistant" | "tool";
+    content?: string | null;
+    name?: string;
+    tool_call_id?: string;
+    tool_calls?: ToolCall[];
   }>;
   max_tokens?: number;
   temperature?: number;
@@ -49,15 +52,18 @@ export interface OpenAIChatCompletionParams {
   presence_penalty?: number;
   frequency_penalty?: number;
   user?: string;
+  tools?: Tool[];
+  tool_choice?: ToolChoice;
 }
 
 export interface OpenAIChatCompletionChoice {
   index: number;
   message: {
     role: "assistant";
-    content: string;
+    content?: string | null;
+    tool_calls?: ToolCall[];
   };
-  finish_reason: string | null;
+  finish_reason: "stop" | "length" | "content_filter" | "tool_calls" | null;
 }
 
 export interface OpenAIChatCompletionResponse {
@@ -183,6 +189,8 @@ class ChatCompletions {
         maxTokens: params.max_tokens,
         temperature: params.temperature,
         topP: params.top_p,
+        tools: params.tools,
+        toolChoice: params.tool_choice,
       }
     );
 
@@ -191,7 +199,7 @@ class ChatCompletions {
 
   private async createStream(params: OpenAIChatCompletionParams): Promise<AsyncIterable<OpenAIChatCompletionChunk>> {
     const url = `${this.apiUrl}/v1/chat/completions`;
-    const body = {
+    const body: Record<string, unknown> = {
       model: params.model,
       messages: params.messages,
       max_tokens: params.max_tokens || 1024,
@@ -199,6 +207,12 @@ class ChatCompletions {
       top_p: params.top_p,
       stream: true,
     };
+    if (params.tools) {
+      body.tools = params.tools;
+    }
+    if (params.tool_choice) {
+      body.tool_choice = params.tool_choice;
+    }
 
     // First request to get 402
     const controller = new AbortController();
@@ -249,6 +263,7 @@ class ChatCompletions {
         message: {
           role: "assistant" as const,
           content: choice.message.content,
+          tool_calls: choice.message.tool_calls,
         },
         finish_reason: choice.finish_reason || "stop",
       })),
