@@ -40,6 +40,12 @@ export {
   type LLMClientOptions,
   type ChatOptions,
   type ChatCompletionOptions,
+  // Tool calling types
+  type FunctionDefinition,
+  type Tool,
+  type FunctionCall,
+  type ToolCall,
+  type ToolChoice,
   // Image types
   type ImageData,
   type ImageResponse,
@@ -55,6 +61,12 @@ export {
   type SearchParameters,
   // Spending tracking
   type Spending,
+  // Smart routing types
+  type RoutingProfile,
+  type RoutingTier,
+  type RoutingDecision,
+  type SmartChatOptions,
+  type SmartChatResponse,
   // Error classes
   BlockrunError,
   PaymentError,

@@ -25,9 +25,19 @@ import {
   type Model,
   type ImageModel,
   type Spending,
+  type SmartChatOptions,
+  type SmartChatResponse,
+  type RoutingDecision,
   APIError,
   PaymentError,
 } from "./types";
+import { route, DEFAULT_ROUTING_CONFIG } from "@blockrun/clawrouter";
+
+// Model pricing type for ClawRouter (matches @blockrun/clawrouter internal type)
+type ModelPricing = {
+  inputPrice: number;  // per 1M tokens
+  outputPrice: number; // per 1M tokens
+};
 import {
   createPaymentPayload,
   parsePaymentRequired,
@@ -46,7 +56,7 @@ const DEFAULT_MAX_TOKENS = 1024;
 const DEFAULT_TIMEOUT = 60000;
 
 // SDK version for User-Agent header (client identification in server logs)
-const SDK_VERSION = "0.2.1";
+const SDK_VERSION = "0.3.0";
 const USER_AGENT = `blockrun-ts/${SDK_VERSION}`;
 
 /**
@@ -82,6 +92,8 @@ export class LLMClient {
   private timeout: number;
   private sessionTotalUsd: number = 0;
   private sessionCalls: number = 0;
+  private modelPricingCache: Map<string, ModelPricing> | null = null;
+  private modelPricingPromise: Promise<Map<string, ModelPricing>> | null = null;
 
   /**
    * Initialize the BlockRun LLM client.
@@ -147,7 +159,110 @@ export class LLMClient {
       searchParameters: options?.searchParameters,
     });
 
-    return result.choices[0].message.content;
+    return result.choices[0].message.content || "";
+  }
+
+  /**
+   * Smart chat with automatic model routing.
+   *
+   * Uses ClawRouter's 14-dimension rule-based scoring algorithm (<1ms, 100% local)
+   * to select the cheapest model that can handle your request.
+   *
+   * @param prompt - User message
+   * @param options - Optional chat and routing parameters
+   * @returns SmartChatResponse with response text, selected model, and routing metadata
+   *
+   * @example Simple usage (auto profile)
+   * ```ts
+   * const result = await client.smartChat('What is 2+2?');
+   * console.log(result.response); // '4'
+   * console.log(result.model); // 'google/gemini-2.5-flash'
+   * console.log(result.routing.savings); // 0.78 (78% savings)
+   * ```
+   *
+   * @example With routing profile
+   * ```ts
+   * // Free tier only (zero cost)
+   * const result = await client.smartChat('Hello!', { routingProfile: 'free' });
+   *
+   * // Eco mode (budget optimized)
+   * const result = await client.smartChat('Explain quantum computing', { routingProfile: 'eco' });
+   *
+   * // Premium mode (best quality)
+   * const result = await client.smartChat('Write a business plan', { routingProfile: 'premium' });
+   * ```
+   */
+  async smartChat(prompt: string, options?: SmartChatOptions): Promise<SmartChatResponse> {
+    // Get model pricing (cached after first call)
+    const modelPricing = await this.getModelPricing();
+
+    // Determine max output tokens for cost estimation
+    const maxOutputTokens = options?.maxOutputTokens || options?.maxTokens || 1024;
+
+    // Route the request using ClawRouter
+    const decision = route(prompt, options?.system, maxOutputTokens, {
+      config: DEFAULT_ROUTING_CONFIG,
+      modelPricing,
+      routingProfile: options?.routingProfile,
+    });
+
+    // Make the chat request with the selected model
+    const response = await this.chat(decision.model, prompt, {
+      system: options?.system,
+      maxTokens: options?.maxTokens,
+      temperature: options?.temperature,
+      topP: options?.topP,
+      search: options?.search,
+      searchParameters: options?.searchParameters,
+    });
+
+    return {
+      response,
+      model: decision.model,
+      routing: decision as RoutingDecision,
+    };
+  }
+
+  /**
+   * Get model pricing map (cached).
+   * Fetches from API on first call, then returns cached result.
+   */
+  private async getModelPricing(): Promise<Map<string, ModelPricing>> {
+    // Return cached pricing if available
+    if (this.modelPricingCache) {
+      return this.modelPricingCache;
+    }
+
+    // If already fetching, wait for that promise
+    if (this.modelPricingPromise) {
+      return this.modelPricingPromise;
+    }
+
+    // Fetch and cache
+    this.modelPricingPromise = this.fetchModelPricing();
+    try {
+      this.modelPricingCache = await this.modelPricingPromise;
+      return this.modelPricingCache;
+    } finally {
+      this.modelPricingPromise = null;
+    }
+  }
+
+  /**
+   * Fetch model pricing from API.
+   */
+  private async fetchModelPricing(): Promise<Map<string, ModelPricing>> {
+    const models = await this.listModels();
+    const pricing = new Map<string, ModelPricing>();
+
+    for (const model of models) {
+      pricing.set(model.id, {
+        inputPrice: model.inputPrice,
+        outputPrice: model.outputPrice,
+      });
+    }
+
+    return pricing;
   }
 
   /**
@@ -182,6 +297,14 @@ export class LLMClient {
     } else if (options?.search === true) {
       // Simple shortcut: search=true enables live search with defaults
       body.search_parameters = { mode: "on" };
+    }
+
+    // Handle tool calling
+    if (options?.tools !== undefined) {
+      body.tools = options.tools;
+    }
+    if (options?.toolChoice !== undefined) {
+      body.tool_choice = options.toolChoice;
     }
 
     return this.requestWithPayment("/v1/chat/completions", body);
