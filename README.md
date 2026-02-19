@@ -459,9 +459,9 @@ import {
 ## Links
 
 - [Website](https://blockrun.ai)
-- [Documentation](https://docs.blockrun.ai)
-- [GitHub](https://github.com/blockrun/blockrun-llm-ts)
-- [Discord](https://discord.gg/blockrun)
+- [Documentation](https://github.com/BlockRunAI/awesome-blockrun/tree/main/docs)
+- [GitHub](https://github.com/blockrunai/blockrun-llm-ts)
+- [Telegram](https://t.me/+mroQv4-4hGgzOGUx)
 
 ## License
 
