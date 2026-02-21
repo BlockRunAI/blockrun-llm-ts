@@ -176,7 +176,7 @@ export class LLMClient {
    * ```ts
    * const result = await client.smartChat('What is 2+2?');
    * console.log(result.response); // '4'
-   * console.log(result.model); // 'google/gemini-2.5-flash'
+   * console.log(result.model); // 'google/gemini-2.5-flash-lite'
    * console.log(result.routing.savings); // 0.78 (78% savings)
    * ```
    *
