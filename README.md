@@ -1,6 +1,6 @@
 # @blockrun/llm
 
-Pay-per-request access to GPT-4o, Claude 4, Gemini 2.5, and more via x402 micropayments on Base and Solana.
+Pay-per-request access to GPT-4o, Claude 4, Gemini 3.1, and more via x402 micropayments on Base and Solana.
 
 **Networks:**
 - **Base Mainnet:** Chain ID 8453 - Production with real USDC
@@ -95,9 +95,11 @@ For Solana, set `BLOCKRUN_SOLANA_KEY` environment variable with your base58-enco
 ### Google Gemini
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
-| `google/gemini-3-pro-preview` | $2.00/M | $12.00/M |
+| `google/gemini-3.1-pro-preview` | $2.00/M | $12.00/M |
+| `google/gemini-3-flash-preview` | $0.50/M | $3.00/M |
 | `google/gemini-2.5-pro` | $1.25/M | $10.00/M |
 | `google/gemini-2.5-flash` | $0.30/M | $2.50/M |
+| `google/gemini-2.5-flash-lite` | $0.10/M | $0.40/M |
 
 ### DeepSeek
 | Model | Input Price | Output Price |
