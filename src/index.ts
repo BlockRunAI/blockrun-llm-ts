@@ -93,6 +93,24 @@ export {
   type PaymentLinks,
 } from "./wallet";
 
+// Solana client
+export { SolanaLLMClient, solanaClient, type SolanaLLMClientOptions } from "./solana-client";
+
+// Solana wallet utilities
+export {
+  createSolanaWallet,
+  saveSolanaWallet,
+  loadSolanaWallet,
+  getOrCreateSolanaWallet,
+  solanaKeyToBytes,
+  solanaPublicKey,
+  SOLANA_WALLET_FILE_PATH,
+  type SolanaWalletInfo,
+} from "./solana-wallet";
+
+// Solana x402 constants
+export { SOLANA_NETWORK, USDC_SOLANA, createSolanaPaymentPayload } from "./x402";
+
 // OpenAI-compatible API
 export { OpenAI } from "./openai-compat";
 export type {
