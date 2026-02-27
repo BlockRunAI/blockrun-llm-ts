@@ -95,7 +95,7 @@ For Solana, set `BLOCKRUN_SOLANA_KEY` environment variable with your base58-enco
 ### Google Gemini
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
-| `google/gemini-3.1-pro-preview` | $2.00/M | $12.00/M |
+| `google/gemini-3.1-pro` | $2.00/M | $12.00/M |
 | `google/gemini-3-flash-preview` | $0.50/M | $3.00/M |
 | `google/gemini-2.5-pro` | $1.25/M | $10.00/M |
 | `google/gemini-2.5-flash` | $0.30/M | $2.50/M |
@@ -124,6 +124,11 @@ For Solana, set `BLOCKRUN_SOLANA_KEY` environment variable with your base58-enco
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
 | `moonshot/kimi-k2.5` | $0.60/M | $3.00/M |
+
+### MiniMax
+| Model | Input Price | Output Price |
+|-------|-------------|--------------|
+| `minimax/minimax-m2.5` | $0.30/M | $1.20/M |
 
 ### NVIDIA (Free & Hosted)
 | Model | Input Price | Output Price | Notes |
