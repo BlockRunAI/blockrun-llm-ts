@@ -9,8 +9,11 @@ importers:
   .:
     dependencies:
       '@blockrun/clawrouter':
-        specifier: ^0.9.3
-        version: 0.9.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^0.10.18
+        version: 0.10.19(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      bs58:
+        specifier: ^6.0.0
+        version: 6.0.0
       viem:
         specifier: ^2.21.0
         version: 2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
@@ -53,8 +56,8 @@ packages:
     resolution: {integrity: sha512-05WQkdpL9COIMz4LjTxGpPNCdlpyimKppYNoJ5Di5EUObifl8t4tuLuUBBZEpoLYOmfvIWrsp9fCl0HoPRVTdA==}
     engines: {node: '>=6.9.0'}
 
-  '@blockrun/clawrouter@0.9.3':
-    resolution: {integrity: sha512-8ENxPvAeLsr3O5ZJ0UkKv2kH6LK6oVLn3R2oUJfY38fNJMJ6iM4Z2KPuDqxRKjt2kJ/8HFjjGOPnXzQCMq9LJw==}
+  '@blockrun/clawrouter@0.10.19':
+    resolution: {integrity: sha512-B8E3EjaW3i9a8R6ii/OiHq32ktuuhK9nNINDlqUiEBV0FvKotZ3rwkg/9g4GoKufZQ/jdc3H2YOoBI6tIc+8Kg==}
     engines: {node: '>=20'}
     hasBin: true
     peerDependencies:
@@ -822,6 +825,9 @@ packages:
   base-x@3.0.11:
     resolution: {integrity: sha512-xz7wQ8xDhdyP7tQxwdteLYeFfS68tSMNCZ/Y37WJ4bhGfKPpqEIlmIyueQHqOyoPhE6xNUqjzRr8ra0eF9VRvA==}
 
+  base-x@5.0.1:
+    resolution: {integrity: sha512-M7uio8Zt++eg3jPj+rHMfCC+IuygQHHCOU+IYsVtik6FWjuYpVt/+MRKcgsAMHh8mMFAwnB+Bs+mTrFiXjMzKg==}
+
   base64-js@1.5.1:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
 
@@ -849,6 +855,9 @@ packages:
 
   bs58@4.0.1:
     resolution: {integrity: sha512-Ok3Wdf5vOIlBrgCvTq96gBkJw+JUEzdBgyaza5HLtPm7yTHkjRy8+JzNyHF7BHa0bNWOQIp3m5YF0nnFcOIKLw==}
+
+  bs58@6.0.0:
+    resolution: {integrity: sha512-PD0wEnEYg6ijszw/u8s+iI3H17cTymlrwkKhDhPZq+Sokl3AU4htyBFTjAeNAlCCmg0f53g6ih3jATyCKftTfw==}
 
   buffer@6.0.3:
     resolution: {integrity: sha512-FTiCpNxtwiZZHEZbcbTIcZjERVICn9yq/pDFkTl95/AxzD1naBctN7YO68riM/gLSDY7sdrMby8hofADYuuqOA==}
@@ -1698,7 +1707,7 @@ snapshots:
   '@babel/runtime@7.28.6':
     optional: true
 
-  '@blockrun/clawrouter@0.9.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)':
+  '@blockrun/clawrouter@0.10.19(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)':
     dependencies:
       viem: 2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
     transitivePeerDependencies:
@@ -2388,6 +2397,8 @@ snapshots:
       safe-buffer: 5.2.1
     optional: true
 
+  base-x@5.0.1: {}
+
   base64-js@1.5.1:
     optional: true
 
@@ -2427,6 +2438,10 @@ snapshots:
     dependencies:
       base-x: 3.0.11
     optional: true
+
+  bs58@6.0.0:
+    dependencies:
+      base-x: 5.0.1
 
   buffer@6.0.3:
     dependencies:

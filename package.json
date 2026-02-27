@@ -49,11 +49,12 @@
   },
   "dependencies": {
     "@blockrun/clawrouter": "^0.10.18",
+    "bs58": "^6.0.0",
     "viem": "^2.21.0"
   },
   "optionalDependencies": {
-    "@solana/web3.js": "^1.98.0",
-    "@solana/spl-token": "^0.4.0"
+    "@solana/spl-token": "^0.4.0",
+    "@solana/web3.js": "^1.98.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
