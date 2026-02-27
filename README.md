@@ -35,13 +35,44 @@ That's it. The SDK handles x402 payment automatically.
 ## Quick Start (Solana)
 
 ```typescript
-import { LLMClient } from '@blockrun/llm';
+import { SolanaLLMClient } from '@blockrun/llm';
 
-const client = new LLMClient({ network: 'solana' });  // Uses BLOCKRUN_SOLANA_KEY
-const response = await client.chat('openai/gpt-4o', 'Hello!');
+// SOLANA_WALLET_KEY env var (bs58-encoded Solana secret key)
+const client = new SolanaLLMClient();
+const response = await client.chat('openai/gpt-4o', 'gm Solana');
+console.log(response);
 ```
 
-For Solana, set `BLOCKRUN_SOLANA_KEY` environment variable with your base58-encoded Solana secret key.
+Set `SOLANA_WALLET_KEY` to your bs58-encoded Solana secret key. Payments are automatic via x402 — your key never leaves your machine.
+
+## Solana Support
+
+Pay for AI calls with Solana USDC via [sol.blockrun.ai](https://sol.blockrun.ai):
+
+```typescript
+import { SolanaLLMClient } from '@blockrun/llm';
+
+// SOLANA_WALLET_KEY env var (bs58-encoded Solana secret key)
+const client = new SolanaLLMClient();
+
+// Or pass key directly
+const client2 = new SolanaLLMClient({ privateKey: 'your-bs58-solana-key' });
+
+// Same API as LLMClient
+const response = await client.chat('openai/gpt-4o', 'gm Solana');
+console.log(response);
+
+// Live Search with Grok (Solana payment)
+const tweet = await client.chat('xai/grok-3-mini', 'What is trending on X?', { search: true });
+```
+
+**Setup:**
+1. Export your Solana wallet key: `export SOLANA_WALLET_KEY="your-bs58-key"`
+2. Fund with USDC on Solana mainnet
+3. That's it — payments are automatic via x402
+
+**Supported endpoint:** `https://sol.blockrun.ai/api`
+**Payment:** Solana USDC (SPL, mainnet)
 
 ## How It Works
 
@@ -330,9 +361,8 @@ const client = new LLMClient({
 
 | Variable | Description |
 |----------|-------------|
-| `BASE_CHAIN_WALLET_KEY` | Your Base chain wallet private key (for Base) |
-| `BLOCKRUN_SOLANA_KEY` | Your Solana wallet secret key - base58 (for Solana) |
-| `BLOCKRUN_NETWORK` | Default network: `base` or `solana` (optional, default: base) |
+| `BASE_CHAIN_WALLET_KEY` | Your Base chain wallet private key (for Base / `LLMClient`) |
+| `SOLANA_WALLET_KEY` | Your Solana wallet secret key - bs58 encoded (for `SolanaLLMClient`) |
 | `BLOCKRUN_API_URL` | API endpoint (optional, default: https://blockrun.ai/api) |
 
 ## Error Handling
@@ -394,11 +424,11 @@ BASE_CHAIN_WALLET_KEY=0x...
 ### Solana
 1. Create a Solana wallet (Phantom, Backpack, Solflare, etc.)
 2. Get USDC on Solana for API payments
-3. Export your secret key and set as `BLOCKRUN_SOLANA_KEY`
+3. Export your secret key and set as `SOLANA_WALLET_KEY`
 
 ```bash
 # .env
-BLOCKRUN_SOLANA_KEY=...your_base58_secret_key
+SOLANA_WALLET_KEY=...your_bs58_secret_key
 ```
 
 Note: Solana transactions are gasless for the user - the CDP facilitator pays for transaction fees.
