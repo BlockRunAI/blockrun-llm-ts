@@ -52,6 +52,7 @@ export {
   type ImageModel,
   type ImageClientOptions,
   type ImageGenerateOptions,
+  type ImageEditOptions,
   // xAI Live Search types
   type WebSearchSource,
   type XSearchSource,
@@ -59,6 +60,9 @@ export {
   type RssSearchSource,
   type SearchSource,
   type SearchParameters,
+  // Search result
+  type SearchResult,
+  type SearchOptions,
   // Spending tracking
   type Spending,
   // Smart routing types
@@ -67,6 +71,25 @@ export {
   type RoutingDecision,
   type SmartChatOptions,
   type SmartChatResponse,
+  // X/Twitter types (powered by AttentionVC)
+  type XUser,
+  type XUserLookupResponse,
+  type XFollower,
+  type XFollowersResponse,
+  type XFollowingsResponse,
+  type XUserInfoResponse,
+  type XVerifiedFollowersResponse,
+  type XTweet,
+  type XTweetsResponse,
+  type XMentionsResponse,
+  type XTweetLookupResponse,
+  type XTweetRepliesResponse,
+  type XTweetThreadResponse,
+  type XSearchResponse,
+  type XTrendingResponse,
+  type XArticlesRisingResponse,
+  type XAuthorAnalyticsResponse,
+  type XCompareAuthorsResponse,
   // Error classes
   BlockrunError,
   PaymentError,

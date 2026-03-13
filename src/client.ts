@@ -24,10 +24,29 @@ import {
   type LLMClientOptions,
   type Model,
   type ImageModel,
+  type ImageResponse,
+  type ImageEditOptions,
   type Spending,
   type SmartChatOptions,
   type SmartChatResponse,
   type RoutingDecision,
+  type SearchResult,
+  type SearchOptions,
+  type XUserLookupResponse,
+  type XFollowersResponse,
+  type XFollowingsResponse,
+  type XUserInfoResponse,
+  type XVerifiedFollowersResponse,
+  type XTweetsResponse,
+  type XMentionsResponse,
+  type XTweetLookupResponse,
+  type XTweetRepliesResponse,
+  type XTweetThreadResponse,
+  type XSearchResponse,
+  type XTrendingResponse,
+  type XArticlesRisingResponse,
+  type XAuthorAnalyticsResponse,
+  type XCompareAuthorsResponse,
   APIError,
   PaymentError,
 } from "./types";
@@ -443,6 +462,125 @@ export class LLMClient {
   }
 
   /**
+   * Make a request with automatic x402 payment handling, returning raw JSON.
+   * Used for non-ChatResponse endpoints (X/Twitter, search, image edit, etc.).
+   */
+  private async requestWithPaymentRaw(
+    endpoint: string,
+    body: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const url = `${this.apiUrl}${endpoint}`;
+
+    const response = await this.fetchWithTimeout(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
+      body: JSON.stringify(body),
+    });
+
+    if (response.status === 402) {
+      return this.handlePaymentAndRetryRaw(url, body, response);
+    }
+
+    if (!response.ok) {
+      let errorBody: unknown;
+      try {
+        errorBody = await response.json();
+      } catch {
+        errorBody = { error: "Request failed" };
+      }
+      throw new APIError(
+        `API error: ${response.status}`,
+        response.status,
+        sanitizeErrorResponse(errorBody)
+      );
+    }
+
+    return response.json() as Promise<Record<string, unknown>>;
+  }
+
+  /**
+   * Handle 402 response for raw endpoints: parse requirements, sign payment, retry.
+   */
+  private async handlePaymentAndRetryRaw(
+    url: string,
+    body: Record<string, unknown>,
+    response: Response
+  ): Promise<Record<string, unknown>> {
+    let paymentHeader = response.headers.get("payment-required");
+
+    if (!paymentHeader) {
+      try {
+        const respBody = await response.json() as Record<string, unknown>;
+        if (respBody.x402 || respBody.accepts) {
+          paymentHeader = btoa(JSON.stringify(respBody));
+        }
+      } catch {
+        console.debug("Failed to parse payment header from response body");
+      }
+    }
+
+    if (!paymentHeader) {
+      throw new PaymentError("402 response but no payment requirements found");
+    }
+
+    const paymentRequired = parsePaymentRequired(paymentHeader);
+    const details = extractPaymentDetails(paymentRequired);
+
+    const extensions = ((paymentRequired as unknown) as Record<string, unknown>).extensions as Record<string, unknown> | undefined;
+    const paymentPayload = await createPaymentPayload(
+      this.privateKey,
+      this.account.address,
+      details.recipient,
+      details.amount,
+      details.network || "eip155:8453",
+      {
+        resourceUrl: validateResourceUrl(
+          details.resource?.url || url,
+          this.apiUrl
+        ),
+        resourceDescription: details.resource?.description || "BlockRun AI API call",
+        maxTimeoutSeconds: details.maxTimeoutSeconds || 300,
+        extra: details.extra,
+        extensions,
+      }
+    );
+
+    const retryResponse = await this.fetchWithTimeout(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": USER_AGENT,
+        "PAYMENT-SIGNATURE": paymentPayload,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (retryResponse.status === 402) {
+      throw new PaymentError("Payment was rejected. Check your wallet balance.");
+    }
+
+    if (!retryResponse.ok) {
+      let errorBody: unknown;
+      try {
+        errorBody = await retryResponse.json();
+      } catch {
+        errorBody = { error: "Request failed" };
+      }
+      throw new APIError(
+        `API error after payment: ${retryResponse.status}`,
+        retryResponse.status,
+        sanitizeErrorResponse(errorBody)
+      );
+    }
+
+    const costUsd = parseFloat(details.amount) / 1e6;
+    this.sessionCalls += 1;
+    this.sessionTotalUsd += costUsd;
+
+    return retryResponse.json() as Promise<Record<string, unknown>>;
+  }
+
+  /**
    * Fetch with timeout.
    */
   private async fetchWithTimeout(
@@ -538,6 +676,333 @@ export class LLMClient {
     }
 
     return [...llmModels, ...imageModels];
+  }
+
+  /**
+   * Edit an image using img2img.
+   *
+   * @param prompt - Text description of the desired edit
+   * @param image - Base64-encoded image or URL of the source image
+   * @param options - Optional edit parameters
+   * @returns ImageResponse with edited image URLs
+   */
+  async imageEdit(
+    prompt: string,
+    image: string,
+    options?: ImageEditOptions
+  ): Promise<ImageResponse> {
+    const body: Record<string, unknown> = {
+      model: options?.model || "openai/gpt-image-1",
+      prompt,
+      image,
+      size: options?.size || "1024x1024",
+      n: options?.n || 1,
+    };
+    if (options?.mask !== undefined) {
+      body.mask = options.mask;
+    }
+    const data = await this.requestWithPaymentRaw("/v1/images/image2image", body);
+    return data as unknown as ImageResponse;
+  }
+
+  /**
+   * Standalone search (web, X/Twitter, news).
+   *
+   * @param query - Search query
+   * @param options - Optional search parameters
+   * @returns SearchResult with summary and citations
+   */
+  async search(query: string, options?: SearchOptions): Promise<SearchResult> {
+    const body: Record<string, unknown> = {
+      query,
+      max_results: options?.maxResults || 10,
+    };
+    if (options?.sources !== undefined) body.sources = options.sources;
+    if (options?.fromDate !== undefined) body.from_date = options.fromDate;
+    if (options?.toDate !== undefined) body.to_date = options.toDate;
+
+    const data = await this.requestWithPaymentRaw("/v1/search", body);
+    return data as unknown as SearchResult;
+  }
+
+  /**
+   * Get USDC balance on Base network.
+   *
+   * Automatically detects mainnet vs testnet based on API URL.
+   *
+   * @returns USDC balance as a float (6 decimal places normalized)
+   *
+   * @example
+   * const balance = await client.getBalance();
+   * console.log(`Balance: $${balance.toFixed(2)} USDC`);
+   */
+  async getBalance(): Promise<number> {
+    const isTestnet = this.isTestnet();
+    const usdcContract = isTestnet
+      ? "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+      : "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+    const rpcs = isTestnet
+      ? ["https://sepolia.base.org", "https://base-sepolia-rpc.publicnode.com"]
+      : ["https://base.publicnode.com", "https://mainnet.base.org", "https://base.meowrpc.com"];
+
+    const selector = "0x70a08231";
+    const paddedAddress = this.account.address.slice(2).toLowerCase().padStart(64, "0");
+    const data = selector + paddedAddress;
+
+    const payload = {
+      jsonrpc: "2.0",
+      method: "eth_call",
+      params: [{ to: usdcContract, data }, "latest"],
+      id: 1,
+    };
+
+    let lastError: unknown;
+    for (const rpc of rpcs) {
+      try {
+        const response = await fetch(rpc, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const result = (await response.json()) as { result?: string };
+        const balanceRaw = parseInt(result.result || "0x0", 16);
+        return balanceRaw / 1_000_000;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    throw lastError || new Error("All RPCs failed");
+  }
+
+  // ============================================================
+  // X/Twitter endpoints (powered by AttentionVC)
+  // ============================================================
+
+  /**
+   * Look up X/Twitter user profiles by username.
+   *
+   * Powered by AttentionVC. $0.002 per user (min $0.02, max $0.20).
+   *
+   * @param usernames - Single username or array of usernames (without @)
+   */
+  async xUserLookup(usernames: string | string[]): Promise<XUserLookupResponse> {
+    const names = Array.isArray(usernames) ? usernames : [usernames];
+    const data = await this.requestWithPaymentRaw("/v1/x/users/lookup", { usernames: names });
+    return data as unknown as XUserLookupResponse;
+  }
+
+  /**
+   * Get followers of an X/Twitter user.
+   *
+   * Powered by AttentionVC. $0.05 per page (~200 accounts).
+   *
+   * @param username - X/Twitter username (without @)
+   * @param cursor - Pagination cursor from previous response
+   */
+  async xFollowers(username: string, cursor?: string): Promise<XFollowersResponse> {
+    const body: Record<string, unknown> = { username };
+    if (cursor !== undefined) body.cursor = cursor;
+    const data = await this.requestWithPaymentRaw("/v1/x/users/followers", body);
+    return data as unknown as XFollowersResponse;
+  }
+
+  /**
+   * Get accounts an X/Twitter user is following.
+   *
+   * Powered by AttentionVC. $0.05 per page (~200 accounts).
+   *
+   * @param username - X/Twitter username (without @)
+   * @param cursor - Pagination cursor from previous response
+   */
+  async xFollowings(username: string, cursor?: string): Promise<XFollowingsResponse> {
+    const body: Record<string, unknown> = { username };
+    if (cursor !== undefined) body.cursor = cursor;
+    const data = await this.requestWithPaymentRaw("/v1/x/users/followings", body);
+    return data as unknown as XFollowingsResponse;
+  }
+
+  /**
+   * Get detailed profile info for a single X/Twitter user.
+   *
+   * Powered by AttentionVC. $0.002 per request.
+   *
+   * @param username - X/Twitter username (without @)
+   */
+  async xUserInfo(username: string): Promise<XUserInfoResponse> {
+    const data = await this.requestWithPaymentRaw("/v1/x/users/info", { username });
+    return data as unknown as XUserInfoResponse;
+  }
+
+  /**
+   * Get verified (blue-check) followers of an X/Twitter user.
+   *
+   * Powered by AttentionVC. $0.048 per page.
+   *
+   * @param userId - X/Twitter user ID (not username)
+   * @param cursor - Pagination cursor from previous response
+   */
+  async xVerifiedFollowers(userId: string, cursor?: string): Promise<XVerifiedFollowersResponse> {
+    const body: Record<string, unknown> = { userId };
+    if (cursor !== undefined) body.cursor = cursor;
+    const data = await this.requestWithPaymentRaw("/v1/x/users/verified-followers", body);
+    return data as unknown as XVerifiedFollowersResponse;
+  }
+
+  /**
+   * Get tweets posted by an X/Twitter user.
+   *
+   * Powered by AttentionVC. $0.032 per page.
+   *
+   * @param username - X/Twitter username (without @)
+   * @param includeReplies - Include reply tweets (default: false)
+   * @param cursor - Pagination cursor from previous response
+   */
+  async xUserTweets(
+    username: string,
+    includeReplies = false,
+    cursor?: string
+  ): Promise<XTweetsResponse> {
+    const body: Record<string, unknown> = { username, includeReplies };
+    if (cursor !== undefined) body.cursor = cursor;
+    const data = await this.requestWithPaymentRaw("/v1/x/users/tweets", body);
+    return data as unknown as XTweetsResponse;
+  }
+
+  /**
+   * Get tweets that mention an X/Twitter user.
+   *
+   * Powered by AttentionVC. $0.032 per page.
+   *
+   * @param username - X/Twitter username (without @)
+   * @param sinceTime - Start time filter (ISO8601 or Unix timestamp)
+   * @param untilTime - End time filter (ISO8601 or Unix timestamp)
+   * @param cursor - Pagination cursor from previous response
+   */
+  async xUserMentions(
+    username: string,
+    sinceTime?: string,
+    untilTime?: string,
+    cursor?: string
+  ): Promise<XMentionsResponse> {
+    const body: Record<string, unknown> = { username };
+    if (sinceTime !== undefined) body.sinceTime = sinceTime;
+    if (untilTime !== undefined) body.untilTime = untilTime;
+    if (cursor !== undefined) body.cursor = cursor;
+    const data = await this.requestWithPaymentRaw("/v1/x/users/mentions", body);
+    return data as unknown as XMentionsResponse;
+  }
+
+  /**
+   * Fetch full tweet data for up to 200 tweet IDs.
+   *
+   * Powered by AttentionVC. $0.16 per batch.
+   *
+   * @param tweetIds - Single tweet ID or array of tweet IDs (max 200)
+   */
+  async xTweetLookup(tweetIds: string | string[]): Promise<XTweetLookupResponse> {
+    const ids = Array.isArray(tweetIds) ? tweetIds : [tweetIds];
+    const data = await this.requestWithPaymentRaw("/v1/x/tweets/lookup", { tweet_ids: ids });
+    return data as unknown as XTweetLookupResponse;
+  }
+
+  /**
+   * Get replies to a specific tweet.
+   *
+   * Powered by AttentionVC. $0.032 per page.
+   *
+   * @param tweetId - The tweet ID to get replies for
+   * @param queryType - Sort order: 'Latest' or 'Default'
+   * @param cursor - Pagination cursor from previous response
+   */
+  async xTweetReplies(
+    tweetId: string,
+    queryType = "Latest",
+    cursor?: string
+  ): Promise<XTweetRepliesResponse> {
+    const body: Record<string, unknown> = { tweetId, queryType };
+    if (cursor !== undefined) body.cursor = cursor;
+    const data = await this.requestWithPaymentRaw("/v1/x/tweets/replies", body);
+    return data as unknown as XTweetRepliesResponse;
+  }
+
+  /**
+   * Get the full thread context for a tweet.
+   *
+   * Powered by AttentionVC. $0.032 per page.
+   *
+   * @param tweetId - The tweet ID to get thread for
+   * @param cursor - Pagination cursor from previous response
+   */
+  async xTweetThread(tweetId: string, cursor?: string): Promise<XTweetThreadResponse> {
+    const body: Record<string, unknown> = { tweetId };
+    if (cursor !== undefined) body.cursor = cursor;
+    const data = await this.requestWithPaymentRaw("/v1/x/tweets/thread", body);
+    return data as unknown as XTweetThreadResponse;
+  }
+
+  /**
+   * Search X/Twitter with advanced query operators.
+   *
+   * Powered by AttentionVC. $0.032 per page.
+   *
+   * @param query - Search query (supports Twitter search operators)
+   * @param queryType - Sort order: 'Latest', 'Top', or 'Default'
+   * @param cursor - Pagination cursor from previous response
+   */
+  async xSearch(
+    query: string,
+    queryType = "Latest",
+    cursor?: string
+  ): Promise<XSearchResponse> {
+    const body: Record<string, unknown> = { query, queryType };
+    if (cursor !== undefined) body.cursor = cursor;
+    const data = await this.requestWithPaymentRaw("/v1/x/search", body);
+    return data as unknown as XSearchResponse;
+  }
+
+  /**
+   * Get current trending topics on X/Twitter.
+   *
+   * Powered by AttentionVC. $0.002 per request.
+   */
+  async xTrending(): Promise<XTrendingResponse> {
+    const data = await this.requestWithPaymentRaw("/v1/x/trending", {});
+    return data as unknown as XTrendingResponse;
+  }
+
+  /**
+   * Get rising/viral articles from X/Twitter.
+   *
+   * Powered by AttentionVC intelligence layer. $0.05 per request.
+   */
+  async xArticlesRising(): Promise<XArticlesRisingResponse> {
+    const data = await this.requestWithPaymentRaw("/v1/x/articles/rising", {});
+    return data as unknown as XArticlesRisingResponse;
+  }
+
+  /**
+   * Get author analytics and intelligence metrics for an X/Twitter user.
+   *
+   * Powered by AttentionVC intelligence layer. $0.02 per request.
+   *
+   * @param handle - X/Twitter handle (without @)
+   */
+  async xAuthorAnalytics(handle: string): Promise<XAuthorAnalyticsResponse> {
+    const data = await this.requestWithPaymentRaw("/v1/x/authors", { handle });
+    return data as unknown as XAuthorAnalyticsResponse;
+  }
+
+  /**
+   * Compare two X/Twitter authors side-by-side with intelligence metrics.
+   *
+   * Powered by AttentionVC intelligence layer. $0.05 per request.
+   *
+   * @param handle1 - First X/Twitter handle (without @)
+   * @param handle2 - Second X/Twitter handle (without @)
+   */
+  async xCompareAuthors(handle1: string, handle2: string): Promise<XCompareAuthorsResponse> {
+    const data = await this.requestWithPaymentRaw("/v1/x/compare", { handle1, handle2 });
+    return data as unknown as XCompareAuthorsResponse;
   }
 
   /**
