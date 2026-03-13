@@ -270,6 +270,182 @@ export interface SmartChatResponse {
   routing: RoutingDecision;
 }
 
+// Standalone search result
+export interface SearchResult {
+  query: string;
+  summary: string;
+  citations?: Array<Record<string, string>>;
+  sources_used?: number;
+  model?: string;
+}
+
+// Image editing options
+export interface ImageEditOptions {
+  /** Model ID (default: "openai/gpt-image-1") */
+  model?: string;
+  /** Optional base64-encoded mask image */
+  mask?: string;
+  /** Image size (default: "1024x1024") */
+  size?: string;
+  /** Number of images to generate (default: 1) */
+  n?: number;
+}
+
+// Search options for standalone search endpoint
+export interface SearchOptions {
+  /** Source types to search (e.g. ["web", "x", "news"]) */
+  sources?: string[];
+  /** Maximum number of results (default: 10) */
+  maxResults?: number;
+  /** Start date filter (YYYY-MM-DD) */
+  fromDate?: string;
+  /** End date filter (YYYY-MM-DD) */
+  toDate?: string;
+}
+
+// X/Twitter types (powered by AttentionVC)
+export interface XUser {
+  id: string;
+  userName: string;
+  name: string;
+  profilePicture?: string;
+  description?: string;
+  followers?: number;
+  following?: number;
+  isBlueVerified?: boolean;
+  verifiedType?: string;
+  location?: string;
+  joined?: string;
+}
+
+export interface XUserLookupResponse {
+  users: XUser[];
+  not_found?: string[];
+  total_requested?: number;
+  total_found?: number;
+}
+
+export interface XFollower {
+  id: string;
+  name?: string;
+  screen_name?: string;
+  userName?: string;
+  location?: string;
+  description?: string;
+  protected?: boolean;
+  verified?: boolean;
+  followers_count?: number;
+  following_count?: number;
+  favourites_count?: number;
+  statuses_count?: number;
+  created_at?: string;
+  profile_image_url_https?: string;
+  can_dm?: boolean;
+}
+
+export interface XFollowersResponse {
+  followers: XFollower[];
+  has_next_page?: boolean;
+  next_cursor?: string;
+  total_returned?: number;
+  username?: string;
+}
+
+export interface XFollowingsResponse {
+  followings: XFollower[];
+  has_next_page?: boolean;
+  next_cursor?: string;
+  total_returned?: number;
+  username?: string;
+}
+
+export interface XUserInfoResponse {
+  data: Record<string, unknown>;
+  username?: string;
+}
+
+export interface XVerifiedFollowersResponse {
+  followers: XFollower[];
+  has_next_page?: boolean;
+  next_cursor?: string;
+  total_returned?: number;
+}
+
+export interface XTweet {
+  id: string;
+  text?: string;
+  created_at?: string;
+  author?: Record<string, unknown>;
+  favorite_count?: number;
+  retweet_count?: number;
+  reply_count?: number;
+  view_count?: number;
+  lang?: string;
+  entities?: Record<string, unknown>;
+  media?: Array<Record<string, unknown>>;
+  [key: string]: unknown;
+}
+
+export interface XTweetsResponse {
+  tweets: XTweet[];
+  has_next_page?: boolean;
+  next_cursor?: string;
+  total_returned?: number;
+}
+
+export interface XMentionsResponse {
+  tweets: XTweet[];
+  has_next_page?: boolean;
+  next_cursor?: string;
+  total_returned?: number;
+  username?: string;
+}
+
+export interface XTweetLookupResponse {
+  tweets: XTweet[];
+  not_found?: string[];
+  total_requested?: number;
+  total_found?: number;
+}
+
+export interface XTweetRepliesResponse {
+  replies: XTweet[];
+  has_next_page?: boolean;
+  next_cursor?: string;
+  total_returned?: number;
+}
+
+export interface XTweetThreadResponse {
+  tweets: XTweet[];
+  has_next_page?: boolean;
+  next_cursor?: string;
+  total_returned?: number;
+}
+
+export interface XSearchResponse {
+  tweets: XTweet[];
+  has_next_page?: boolean;
+  next_cursor?: string;
+  total_returned?: number;
+}
+
+export interface XTrendingResponse {
+  data: Record<string, unknown>;
+}
+
+export interface XArticlesRisingResponse {
+  data: Record<string, unknown>;
+}
+
+export interface XAuthorAnalyticsResponse {
+  data: Record<string, unknown>;
+  handle?: string;
+}
+
+export interface XCompareAuthorsResponse {
+  data: Record<string, unknown>;
+}
+
 export class BlockrunError extends Error {
   constructor(message: string) {
     super(message);

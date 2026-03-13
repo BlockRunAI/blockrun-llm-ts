@@ -22,6 +22,7 @@ import {
   type ImageResponse,
   type ImageModel,
   type ImageGenerateOptions,
+  type ImageEditOptions,
   type Spending,
   APIError,
   PaymentError,
@@ -120,6 +121,38 @@ export class ImageClient {
     }
 
     return this.requestWithPayment("/v1/images/generations", body);
+  }
+
+  /**
+   * Edit an image using img2img.
+   *
+   * @param prompt - Text description of the desired edit
+   * @param image - Base64-encoded image or URL of the source image
+   * @param options - Optional edit parameters
+   * @returns ImageResponse with edited image URLs
+   *
+   * @example
+   * const result = await client.edit('Make it a painting', imageBase64);
+   * console.log(result.data[0].url);
+   */
+  async edit(
+    prompt: string,
+    image: string,
+    options?: ImageEditOptions
+  ): Promise<ImageResponse> {
+    const body: Record<string, unknown> = {
+      model: options?.model || "openai/gpt-image-1",
+      prompt,
+      image,
+      size: options?.size || "1024x1024",
+      n: options?.n || 1,
+    };
+
+    if (options?.mask !== undefined) {
+      body.mask = options.mask;
+    }
+
+    return this.requestWithPayment("/v1/images/image2image", body);
   }
 
   /**
