@@ -581,6 +581,126 @@ export class LLMClient {
   }
 
   /**
+   * GET with automatic x402 payment handling, returning raw JSON.
+   * Used for Predexon prediction market endpoints that use GET + query params.
+   */
+  private async getWithPaymentRaw(
+    endpoint: string,
+    params?: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    const query = params ? "?" + new URLSearchParams(params).toString() : "";
+    const url = `${this.apiUrl}${endpoint}${query}`;
+
+    const response = await this.fetchWithTimeout(url, {
+      method: "GET",
+      headers: { "User-Agent": USER_AGENT },
+    });
+
+    if (response.status === 402) {
+      return this.handleGetPaymentAndRetryRaw(url, endpoint, params, response);
+    }
+
+    if (!response.ok) {
+      let errorBody: unknown;
+      try {
+        errorBody = await response.json();
+      } catch {
+        errorBody = { error: "Request failed" };
+      }
+      throw new APIError(
+        `API error: ${response.status}`,
+        response.status,
+        sanitizeErrorResponse(errorBody)
+      );
+    }
+
+    return response.json() as Promise<Record<string, unknown>>;
+  }
+
+  /**
+   * Handle 402 response for GET endpoints: parse requirements, sign payment, retry with GET.
+   */
+  private async handleGetPaymentAndRetryRaw(
+    url: string,
+    endpoint: string,
+    params: Record<string, string> | undefined,
+    response: Response
+  ): Promise<Record<string, unknown>> {
+    let paymentHeader = response.headers.get("payment-required");
+
+    if (!paymentHeader) {
+      try {
+        const respBody = await response.json() as Record<string, unknown>;
+        if (respBody.x402 || respBody.accepts) {
+          paymentHeader = btoa(JSON.stringify(respBody));
+        }
+      } catch {
+        console.debug("Failed to parse payment header from response body");
+      }
+    }
+
+    if (!paymentHeader) {
+      throw new PaymentError("402 response but no payment requirements found");
+    }
+
+    const paymentRequired = parsePaymentRequired(paymentHeader);
+    const details = extractPaymentDetails(paymentRequired);
+
+    const extensions = ((paymentRequired as unknown) as Record<string, unknown>).extensions as Record<string, unknown> | undefined;
+    const paymentPayload = await createPaymentPayload(
+      this.privateKey,
+      this.account.address,
+      details.recipient,
+      details.amount,
+      details.network || "eip155:8453",
+      {
+        resourceUrl: validateResourceUrl(
+          details.resource?.url || url,
+          this.apiUrl
+        ),
+        resourceDescription: details.resource?.description || "BlockRun AI API call",
+        maxTimeoutSeconds: details.maxTimeoutSeconds || 300,
+        extra: details.extra,
+        extensions,
+      }
+    );
+
+    const query = params ? "?" + new URLSearchParams(params).toString() : "";
+    const retryUrl = `${this.apiUrl}${endpoint}${query}`;
+    const retryResponse = await this.fetchWithTimeout(retryUrl, {
+      method: "GET",
+      headers: {
+        "User-Agent": USER_AGENT,
+        "PAYMENT-SIGNATURE": paymentPayload,
+      },
+    });
+
+    if (retryResponse.status === 402) {
+      throw new PaymentError("Payment was rejected. Check your wallet balance.");
+    }
+
+    if (!retryResponse.ok) {
+      let errorBody: unknown;
+      try {
+        errorBody = await retryResponse.json();
+      } catch {
+        errorBody = { error: "Request failed" };
+      }
+      throw new APIError(
+        `API error after payment: ${retryResponse.status}`,
+        retryResponse.status,
+        sanitizeErrorResponse(errorBody)
+      );
+    }
+
+    const costUsd = parseFloat(details.amount) / 1e6;
+    this.sessionCalls += 1;
+    this.sessionTotalUsd += costUsd;
+
+    return retryResponse.json() as Promise<Record<string, unknown>>;
+  }
+
+  /**
    * Fetch with timeout.
    */
   private async fetchWithTimeout(
@@ -1003,6 +1123,41 @@ export class LLMClient {
   async xCompareAuthors(handle1: string, handle2: string): Promise<XCompareAuthorsResponse> {
     const data = await this.requestWithPaymentRaw("/v1/x/compare", { handle1, handle2 });
     return data as unknown as XCompareAuthorsResponse;
+  }
+
+  // ── Prediction Markets (Powered by Predexon) ────────────────────────────
+
+  /**
+   * Query Predexon prediction market data (GET endpoints).
+   *
+   * Access real-time data from Polymarket, Kalshi, dFlow, and Binance Futures.
+   * Powered by Predexon. $0.001 per request.
+   *
+   * @param path - Endpoint path, e.g. "polymarket/events", "kalshi/markets/12345"
+   * @param params - Query parameters passed to the endpoint
+   *
+   * @example
+   * const events = await client.pm("polymarket/events");
+   * const market = await client.pm("kalshi/markets/KXBTC-25MAR14");
+   * const results = await client.pm("polymarket/search", { q: "bitcoin" });
+   */
+  async pm(path: string, params?: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.getWithPaymentRaw(`/v1/pm/${path}`, params);
+  }
+
+  /**
+   * Structured query for Predexon prediction market data (POST endpoints).
+   *
+   * For complex queries that require a JSON body. $0.005 per request.
+   *
+   * @param path - Endpoint path, e.g. "polymarket/query", "kalshi/query"
+   * @param query - JSON body for the structured query
+   *
+   * @example
+   * const data = await client.pmQuery("polymarket/query", { filter: "active", limit: 10 });
+   */
+  async pmQuery(path: string, query: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestWithPaymentRaw(`/v1/pm/${path}`, query);
   }
 
   /**

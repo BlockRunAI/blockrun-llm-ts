@@ -343,6 +343,67 @@ const [gpt, claude, gemini] = await Promise.all([
 ]);
 ```
 
+## Prediction Markets (Powered by Predexon)
+
+Access real-time prediction market data from Polymarket, Kalshi, and Binance Futures via [Predexon](https://predexon.com). No API keys needed — pay-per-request via x402.
+
+### Polymarket
+
+```typescript
+import { LLMClient } from '@blockrun/llm';
+
+const client = new LLMClient();
+
+// List markets with optional filters ($0.001/request)
+const markets = await client.pm("polymarket/markets");
+const filtered = await client.pm("polymarket/markets", { status: "active", limit: 10 });
+const searched = await client.pm("polymarket/markets", { search: "bitcoin" });
+
+// List events ($0.001/request)
+const events = await client.pm("polymarket/events");
+
+// Historical trades ($0.001/request)
+const trades = await client.pm("polymarket/trades");
+
+// OHLCV candlestick data for a specific condition ($0.001/request)
+const candles = await client.pm("polymarket/candlesticks/0x1234abcd...");
+
+// Wallet profile ($0.005/request — tier 2)
+const profile = await client.pm("polymarket/wallet/0xABC123...");
+
+// Wallet P&L ($0.005/request — tier 2)
+const pnl = await client.pm("polymarket/wallet/pnl/0xABC123...");
+
+// Global leaderboard ($0.001/request)
+const leaderboard = await client.pm("polymarket/leaderboard");
+```
+
+### Kalshi & Binance
+
+```typescript
+// Kalshi markets ($0.001/request)
+const kalshiMarkets = await client.pm("kalshi/markets");
+
+// Kalshi trades ($0.001/request)
+const kalshiTrades = await client.pm("kalshi/trades");
+
+// Binance candles for supported pairs ($0.001/request)
+const btcCandles = await client.pm("binance/candles/BTCUSDT");
+const ethCandles = await client.pm("binance/candles/ETHUSDT");
+// Also: SOLUSDT, XRPUSDT
+```
+
+### Cross-Platform
+
+```typescript
+// Cross-platform matching pairs ($0.001/request)
+const pairs = await client.pm("matching-markets/pairs");
+```
+
+All current endpoints are GET. The `pmQuery()` method is available for future POST endpoints.
+
+Works on both `LLMClient` (Base) and `SolanaLLMClient`.
+
 ## Configuration
 
 ```typescript
