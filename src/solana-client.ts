@@ -308,6 +308,16 @@ export class SolanaLLMClient {
     return data as unknown as XCompareAuthorsResponse;
   }
 
+  // ── Prediction Markets (Powered by Predexon) ────────────────────────────
+
+  async pm(path: string, params?: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.getWithPaymentRaw(`/v1/pm/${path}`, params);
+  }
+
+  async pmQuery(path: string, query: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestWithPaymentRaw(`/v1/pm/${path}`, query);
+  }
+
   /** Get session spending. */
   getSpending(): Spending {
     return { totalUsd: this.sessionTotalUsd, calls: this.sessionCalls };
@@ -511,6 +521,114 @@ export class SolanaLLMClient {
         "PAYMENT-SIGNATURE": paymentPayload,
       },
       body: JSON.stringify(body),
+    });
+
+    if (retryResponse.status === 402) {
+      throw new PaymentError("Payment was rejected. Check your Solana USDC balance.");
+    }
+
+    if (!retryResponse.ok) {
+      let errorBody: unknown;
+      try { errorBody = await retryResponse.json(); } catch { errorBody = { error: "Request failed" }; }
+      throw new APIError(`API error after payment: ${retryResponse.status}`, retryResponse.status, sanitizeErrorResponse(errorBody));
+    }
+
+    const costUsd = parseFloat(details.amount) / 1e6;
+    this.sessionCalls += 1;
+    this.sessionTotalUsd += costUsd;
+
+    return retryResponse.json() as Promise<Record<string, unknown>>;
+  }
+
+  private async getWithPaymentRaw(
+    endpoint: string,
+    params?: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    const query = params ? "?" + new URLSearchParams(params).toString() : "";
+    const url = `${this.apiUrl}${endpoint}${query}`;
+
+    const response = await this.fetchWithTimeout(url, {
+      method: "GET",
+      headers: { "User-Agent": USER_AGENT },
+    });
+
+    if (response.status === 402) {
+      return this.handleGetPaymentAndRetryRaw(url, endpoint, params, response);
+    }
+
+    if (!response.ok) {
+      let errorBody: unknown;
+      try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
+      throw new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(errorBody));
+    }
+
+    return response.json() as Promise<Record<string, unknown>>;
+  }
+
+  private async handleGetPaymentAndRetryRaw(
+    url: string,
+    endpoint: string,
+    params: Record<string, string> | undefined,
+    response: Response
+  ): Promise<Record<string, unknown>> {
+    let paymentHeader = response.headers.get("payment-required");
+
+    if (!paymentHeader) {
+      try {
+        const respBody = await response.json() as Record<string, unknown>;
+        if (respBody.accepts || respBody.x402Version) {
+          paymentHeader = btoa(JSON.stringify(respBody));
+        }
+      } catch { /* ignore */ }
+    }
+
+    if (!paymentHeader) {
+      throw new PaymentError("402 response but no payment requirements found");
+    }
+
+    const paymentRequired = parsePaymentRequired(paymentHeader);
+    const details = extractPaymentDetails(paymentRequired, SOLANA_NETWORK);
+
+    if (!details.network?.startsWith("solana:")) {
+      throw new PaymentError(
+        `Expected Solana payment network, got: ${details.network}. Use LLMClient for Base payments.`
+      );
+    }
+
+    const feePayer = (details.extra as { feePayer?: string })?.feePayer;
+    if (!feePayer) throw new PaymentError("Missing feePayer in 402 extra field");
+
+    const fromAddress = await this.getWalletAddress();
+    const secretKey = await solanaKeyToBytes(this.privateKey);
+    const extensions = ((paymentRequired as unknown) as Record<string, unknown>).extensions as Record<string, unknown> | undefined;
+
+    const paymentPayload = await createSolanaPaymentPayload(
+      secretKey,
+      fromAddress,
+      details.recipient,
+      details.amount,
+      feePayer,
+      {
+        resourceUrl: validateResourceUrl(
+          details.resource?.url || url,
+          this.apiUrl
+        ),
+        resourceDescription: details.resource?.description || "BlockRun Solana AI API call",
+        maxTimeoutSeconds: details.maxTimeoutSeconds || 300,
+        extra: details.extra as Record<string, unknown>,
+        extensions,
+        rpcUrl: this.rpcUrl,
+      }
+    );
+
+    const query = params ? "?" + new URLSearchParams(params).toString() : "";
+    const retryUrl = `${this.apiUrl}${endpoint}${query}`;
+    const retryResponse = await this.fetchWithTimeout(retryUrl, {
+      method: "GET",
+      headers: {
+        "User-Agent": USER_AGENT,
+        "PAYMENT-SIGNATURE": paymentPayload,
+      },
     });
 
     if (retryResponse.status === 402) {
