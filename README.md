@@ -159,6 +159,7 @@ const tweet = await client.chat('xai/grok-3-mini', 'What is trending on X?', { s
 ### MiniMax
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
+| `minimax/minimax-m2.7` | $0.30/M | $1.20/M |
 | `minimax/minimax-m2.5` | $0.30/M | $1.20/M |
 
 ### NVIDIA (Free & Hosted)
