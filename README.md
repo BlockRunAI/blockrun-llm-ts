@@ -558,6 +558,84 @@ import {
 } from '@blockrun/llm';
 ```
 
+## Agent Wallet Setup
+
+One-line setup for agent runtimes (Claude Code skills, MCP servers, etc.):
+
+```typescript
+import { setupAgentWallet } from '@blockrun/llm';
+
+// Auto-creates wallet if none exists, returns ready client
+const client = setupAgentWallet();
+const response = await client.chat('openai/gpt-5.4', 'Hello!');
+```
+
+For Solana:
+
+```typescript
+import { setupAgentSolanaWallet } from '@blockrun/llm';
+
+const client = await setupAgentSolanaWallet();
+const response = await client.chat('anthropic/claude-sonnet-4.6', 'Hello!');
+```
+
+Check wallet status:
+
+```typescript
+import { status } from '@blockrun/llm';
+
+await status();
+// Wallet: 0xCC8c...5EF8
+// Balance: $5.30 USDC
+```
+
+## Wallet Scanning
+
+The SDK auto-detects wallets from any provider on your system:
+
+```typescript
+import { scanWallets, scanSolanaWallets } from '@blockrun/llm';
+
+// Scans ~/.<dir>/wallet.json for Base wallets
+const baseWallets = scanWallets();
+
+// Scans ~/.<dir>/solana-wallet.json and ~/.brcc/wallet.json
+const solWallets = scanSolanaWallets();
+```
+
+`getOrCreateWallet()` checks scanned wallets first, so if you already have a wallet from another BlockRun tool, it will be reused automatically.
+
+## Response Caching
+
+The SDK caches responses to avoid duplicate payments:
+
+```typescript
+import { getCachedByRequest, saveToCache, clearCache } from '@blockrun/llm';
+
+// Automatic TTLs by endpoint:
+// - X/Twitter: 1 hour
+// - Search: 15 minutes
+// - Models: 24 hours
+// - Chat/Image: no cache (every call is unique)
+
+// Manual cache management
+clearCache(); // Remove all cached responses
+```
+
+## Cost Logging
+
+Track spending across sessions:
+
+```typescript
+import { logCost, getCostSummary } from '@blockrun/llm';
+
+// Costs are logged to ~/.blockrun/data/costs.jsonl
+const summary = getCostSummary();
+console.log(`Total: $${summary.totalUsd.toFixed(2)}`);
+console.log(`Calls: ${summary.calls}`);
+console.log(`By model:`, summary.byModel);
+```
+
 ## Links
 
 - [Website](https://blockrun.ai)
