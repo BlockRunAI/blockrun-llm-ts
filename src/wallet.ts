@@ -62,12 +62,55 @@ export function saveWallet(privateKey: string): string {
 }
 
 /**
+ * Scan ~/.<dir>/wallet.json files from any provider (agentcash, etc.).
+ *
+ * Each file should contain JSON with "privateKey" and "address" fields.
+ * Results are sorted by modification time (most recent first).
+ *
+ * @returns Array of wallet objects with privateKey and address
+ */
+export function scanWallets(): Array<{ privateKey: string; address: string }> {
+  const home = os.homedir();
+  const results: Array<{ mtime: number; privateKey: string; address: string }> = [];
+
+  try {
+    const entries = fs.readdirSync(home, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.name.startsWith(".") || !entry.isDirectory()) continue;
+      const walletFile = path.join(home, entry.name, "wallet.json");
+      if (!fs.existsSync(walletFile)) continue;
+      try {
+        const data = JSON.parse(fs.readFileSync(walletFile, "utf-8"));
+        const pk = data.privateKey || "";
+        const addr = data.address || "";
+        if (pk && addr) {
+          const mtime = fs.statSync(walletFile).mtimeMs;
+          results.push({ mtime, privateKey: pk, address: addr });
+        }
+      } catch { continue; }
+    }
+  } catch { /* ignore */ }
+
+  results.sort((a, b) => b.mtime - a.mtime);
+  return results.map(({ privateKey, address }) => ({ privateKey, address }));
+}
+
+/**
  * Load wallet private key from file.
+ *
+ * Priority:
+ * 1. Scan ~/.* /wallet.json (any provider)
+ * 2. Legacy ~/.blockrun/.session
+ * 3. Legacy ~/.blockrun/wallet.key
  *
  * @returns Private key string or null if not found
  */
 export function loadWallet(): string | null {
-  // Check .session first (preferred)
+  // Scan provider wallet files
+  const wallets = scanWallets();
+  if (wallets.length > 0) return wallets[0].privateKey;
+
+  // Check .session (legacy)
   if (fs.existsSync(WALLET_FILE)) {
     const key = fs.readFileSync(WALLET_FILE, "utf-8").trim();
     if (key) return key;
@@ -88,9 +131,10 @@ export function loadWallet(): string | null {
  *
  * Priority:
  * 1. BLOCKRUN_WALLET_KEY environment variable
- * 2. ~/.blockrun/.session file
- * 3. ~/.blockrun/wallet.key file (legacy)
- * 4. Create new wallet
+ * 2. Scan wallet.json files from providers
+ * 3. ~/.blockrun/.session file
+ * 4. ~/.blockrun/wallet.key file - legacy
+ * 5. Create new wallet
  *
  * @returns WalletInfo with address, privateKey, and isNew flag
  */
