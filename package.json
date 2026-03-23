@@ -18,8 +18,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format cjs,esm --dts --clean --external @anthropic-ai/sdk",
-    "dev": "tsup src/index.ts --format cjs,esm --dts --watch --external @anthropic-ai/sdk",
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean --external @anthropic-ai/sdk --external @solana/web3.js --external @solana/spl-token --external bs58",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch --external @anthropic-ai/sdk --external @solana/web3.js --external @solana/spl-token --external bs58",
     "test": "vitest",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit"
