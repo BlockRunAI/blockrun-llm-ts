@@ -95,7 +95,14 @@ export {
   PaymentError,
   APIError,
 } from "./types";
-export { BASE_CHAIN_ID, USDC_BASE } from "./x402";
+export {
+  BASE_CHAIN_ID,
+  USDC_BASE,
+  createPaymentPayload,
+  parsePaymentRequired,
+  extractPaymentDetails,
+  type CreatePaymentOptions,
+} from "./x402";
 
 // Wallet management utilities
 export {
