@@ -5,12 +5,16 @@
 [![npm](https://img.shields.io/npm/v/@blockrun/llm.svg)](https://www.npmjs.com/package/@blockrun/llm)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**Networks:**
-- **Base Mainnet:** Chain ID 8453 - Production with real USDC
-- **Base Sepolia (Testnet):** Chain ID 84532 - Developer testing with testnet USDC
-- **Solana Mainnet** - Production with real USDC
+## Supported Chains
 
-**Payment:** USDC
+| Chain | Network | Payment | Status |
+|-------|---------|---------|--------|
+| **Base** | Base Mainnet (Chain ID: 8453) | USDC | Primary |
+| **Base Testnet** | Base Sepolia (Chain ID: 84532) | Testnet USDC | Development |
+| **Solana** | Solana Mainnet | USDC (SPL) | New |
+
+> **XRPL (RLUSD):** Use [@blockrun/llm-xrpl](https://www.npmjs.com/package/@blockrun/llm-xrpl) for XRPL payments
+
 **Protocol:** x402 v2 (CDP Facilitator)
 
 ## Installation
@@ -86,6 +90,64 @@ const tweet = await client.chat('xai/grok-3-mini', 'What is trending on X?', { s
 5. You receive the AI response
 
 **Your private key never leaves your machine** - it's only used for local signing.
+
+## Smart Routing (ClawRouter)
+
+Let the SDK automatically pick the cheapest capable model for each request:
+
+```typescript
+import { LLMClient } from '@blockrun/llm';
+
+const client = new LLMClient();
+
+// Auto-routes to cheapest capable model
+const result = await client.smartChat('What is 2+2?');
+console.log(result.response);     // '4'
+console.log(result.model);        // 'nvidia/kimi-k2.5' (cheap, fast)
+console.log(`Saved ${(result.routing.savings * 100).toFixed(0)}%`); // 'Saved 78%'
+
+// Complex reasoning task -> routes to reasoning model
+const complex = await client.smartChat('Prove the Riemann hypothesis step by step');
+console.log(complex.model);  // 'xai/grok-4-1-fast-reasoning'
+```
+
+### Routing Profiles
+
+| Profile | Description | Best For |
+|---------|-------------|----------|
+| `free` | nvidia/gpt-oss-120b only (FREE) | Testing, development |
+| `eco` | Cheapest models per tier (DeepSeek, xAI) | Cost-sensitive production |
+| `auto` | Best balance of cost/quality (default) | General use |
+| `premium` | Top-tier models (OpenAI, Anthropic) | Quality-critical tasks |
+
+```typescript
+// Use premium models for complex tasks
+const result = await client.smartChat(
+  'Write production-grade async TypeScript code',
+  { routingProfile: 'premium' }
+);
+console.log(result.model);  // 'anthropic/claude-opus-4.5'
+```
+
+### How ClawRouter Works
+
+ClawRouter uses a 14-dimension rule-based classifier to analyze each request:
+
+- **Token count** - Short vs long prompts
+- **Code presence** - Programming keywords
+- **Reasoning markers** - "prove", "step by step", etc.
+- **Technical terms** - Architecture, optimization, etc.
+- **Creative markers** - Story, poem, brainstorm, etc.
+- **Agentic patterns** - Multi-step, tool use indicators
+
+The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
+
+| Tier | Example Tasks | Auto Profile Model |
+|------|---------------|-------------------|
+| SIMPLE | "What is 2+2?", definitions | nvidia/kimi-k2.5 |
+| MEDIUM | Code snippets, explanations | xai/grok-code-fast-1 |
+| COMPLEX | Architecture, long documents | google/gemini-3.1-pro |
+| REASONING | Proofs, multi-step reasoning | xai/grok-4-1-fast-reasoning |
 
 ## Available Models
 
@@ -202,6 +264,78 @@ All models below have been tested end-to-end via the TypeScript SDK (Feb 2026):
 | `openai/gpt-oss-120b` | $0.002/request |
 
 *Testnet models use flat pricing (no token counting) for simplicity.*
+
+## X/Twitter Data (Powered by AttentionVC)
+
+Access X/Twitter user profiles, followers, and followings via [AttentionVC](https://attentionvc.ai) partner API. No API keys needed — pay-per-request via x402.
+
+```typescript
+import { LLMClient } from '@blockrun/llm';
+
+const client = new LLMClient();
+
+// Look up user profiles ($0.002/user, min $0.02)
+const users = await client.xUserLookup(['elonmusk', 'blockaborr']);
+for (const user of users.users) {
+  console.log(`@${user.userName}: ${user.followers} followers`);
+}
+
+// Get followers ($0.05/page, ~200 accounts)
+let result = await client.xFollowers('blockaborr');
+for (const f of result.followers) {
+  console.log(`  @${f.screen_name}`);
+}
+
+// Paginate through all followers
+while (result.has_next_page) {
+  result = await client.xFollowers('blockaborr', result.next_cursor);
+}
+
+// Get followings ($0.05/page)
+const followings = await client.xFollowings('blockaborr');
+```
+
+Works on both `LLMClient` (Base) and `SolanaLLMClient`.
+
+## Standalone Search
+
+Search web, X/Twitter, and news without using a chat model:
+
+```typescript
+import { LLMClient } from '@blockrun/llm';
+
+const client = new LLMClient();
+
+const result = await client.search('latest AI agent frameworks 2026');
+console.log(result.summary);
+for (const cite of result.citations ?? []) {
+  console.log(`  - ${cite}`);
+}
+
+// Filter by source type and date range
+const filtered = await client.search('BlockRun x402', {
+  sources: ['web', 'x'],
+  fromDate: '2026-01-01',
+  maxResults: 5,
+});
+```
+
+## Image Editing (img2img)
+
+Edit existing images with text prompts:
+
+```typescript
+import { LLMClient } from '@blockrun/llm';
+
+const client = new LLMClient();
+
+const result = await client.imageEdit(
+  'Make the sky purple and add northern lights',
+  'data:image/png;base64,...',  // base64 or URL
+  { model: 'openai/gpt-image-1' }
+);
+console.log(result.data[0].url);
+```
 
 ## Testnet Usage
 
