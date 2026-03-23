@@ -154,3 +154,7 @@ export type {
   OpenAIChatCompletionChoice,
   OpenAIChatCompletionChunk,
 } from "./openai-compat";
+
+// Anthropic-compatible API
+export { AnthropicClient } from "./anthropic-compat";
+export type { BlockRunAnthropicOptions } from "./anthropic-compat";
