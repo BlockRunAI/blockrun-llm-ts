@@ -1,0 +1,8 @@
+src/
+test/
+docs/
+*.test.ts
+tsconfig.json
+vitest.config.ts
+eslint.config.js
+.github/

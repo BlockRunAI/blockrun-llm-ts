@@ -1,6 +1,6 @@
 {
   "name": "@blockrun/llm",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "type": "module",
   "description": "BlockRun LLM Gateway SDK - Pay-per-request AI via x402 on Base and Solana",
   "main": "dist/index.cjs",
