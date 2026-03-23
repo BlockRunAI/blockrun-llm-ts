@@ -102,6 +102,7 @@ export {
   createWallet,
   saveWallet,
   loadWallet,
+  scanWallets,
   getOrCreateWallet,
   getWalletAddress,
   getEip681Uri,
@@ -124,6 +125,7 @@ export {
   createSolanaWallet,
   saveSolanaWallet,
   loadSolanaWallet,
+  scanSolanaWallets,
   getOrCreateSolanaWallet,
   solanaKeyToBytes,
   solanaPublicKey,
@@ -133,6 +135,15 @@ export {
 
 // Solana x402 constants
 export { SOLANA_NETWORK, USDC_SOLANA, createSolanaPaymentPayload } from "./x402";
+
+// Cache utilities
+export { getCached, setCache, clearCache, saveToCache, getCachedByRequest } from "./cache";
+
+// Agent wallet setup
+export { setupAgentWallet, setupAgentSolanaWallet, status } from "./setup";
+
+// Cost logging
+export { logCost, getCostSummary, type CostEntry } from "./cost-log";
 
 // OpenAI-compatible API
 export { OpenAI } from "./openai-compat";
