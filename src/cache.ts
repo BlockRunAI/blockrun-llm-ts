@@ -51,8 +51,8 @@ export function getCached(key: string): unknown | null {
 
   try {
     const raw = fs.readFileSync(filePath, 'utf-8');
-    const entry: CacheEntry = JSON.parse(raw);
-    const ttl = getTtl(entry.endpoint);
+    const entry = JSON.parse(raw);
+    const ttl = entry.ttlMs ?? getTtl(entry.endpoint ?? '');
     if (ttl <= 0) return null;
     if (Date.now() - entry.cachedAt > ttl) {
       try { fs.unlinkSync(filePath); } catch { /* ignore */ }
