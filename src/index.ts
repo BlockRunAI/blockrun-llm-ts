@@ -140,8 +140,16 @@ export {
   type SolanaWalletInfo,
 } from "./solana-wallet";
 
-// Solana x402 constants
-export { SOLANA_NETWORK, USDC_SOLANA, createSolanaPaymentPayload } from "./x402";
+// x402 payment utilities
+export {
+  SOLANA_NETWORK,
+  USDC_SOLANA,
+  createSolanaPaymentPayload,
+  createPaymentPayload,
+  parsePaymentRequired,
+  extractPaymentDetails,
+} from "./x402";
+export type { CreatePaymentOptions } from "./x402";
 
 // Cache utilities
 export { getCached, setCache, clearCache, saveToCache, getCachedByRequest } from "./cache";
