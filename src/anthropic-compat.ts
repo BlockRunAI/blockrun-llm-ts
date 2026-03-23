@@ -51,7 +51,7 @@ export class AnthropicClient {
     this._clientPromise = (async () => {
       const { default: Anthropic } = await import('@anthropic-ai/sdk');
       this._client = new Anthropic({
-        baseURL: `${this._apiUrl}/v1`,
+        baseURL: this._apiUrl,
         apiKey: 'blockrun',
         fetch: this._x402Fetch.bind(this),
       });
