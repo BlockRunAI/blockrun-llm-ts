@@ -770,6 +770,32 @@ console.log(`Calls: ${summary.calls}`);
 console.log(`By model:`, summary.byModel);
 ```
 
+## Anthropic SDK Compatibility
+
+Use the official Anthropic SDK interface with BlockRun's pay-per-request backend:
+
+```typescript
+import { AnthropicClient } from '@blockrun/llm';
+
+const client = new AnthropicClient();  // Auto-detects wallet, auto-pays
+
+const response = await client.messages.create({
+  model: 'claude-sonnet-4-6',
+  max_tokens: 1024,
+  messages: [{ role: 'user', content: 'Hello!' }],
+});
+console.log(response.content[0].text);
+
+// Any model works in Anthropic format
+const gptResponse = await client.messages.create({
+  model: 'openai/gpt-5.4',
+  max_tokens: 1024,
+  messages: [{ role: 'user', content: 'Hello from GPT!' }],
+});
+```
+
+The `AnthropicClient` wraps the official `@anthropic-ai/sdk` with a custom fetch that handles x402 payment automatically. Your private key never leaves your machine.
+
 ## Links
 
 - [Website](https://blockrun.ai)
