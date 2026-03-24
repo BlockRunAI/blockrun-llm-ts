@@ -17,6 +17,112 @@ import type { Account } from "viem/accounts";
 const LOCALHOST_DOMAINS = ["localhost", "127.0.0.1"];
 
 /**
+ * Known LLM providers (for optional validation).
+ */
+export const KNOWN_PROVIDERS = new Set([
+  "openai",
+  "anthropic",
+  "google",
+  "deepseek",
+  "mistralai",
+  "meta-llama",
+  "together",
+  "xai",
+  "moonshot",
+  "nvidia",
+  "minimax",
+  "zai",
+]);
+
+/**
+ * Validates that a model ID is a non-empty string.
+ *
+ * @param model - The model ID (e.g., "openai/gpt-5.2", "anthropic/claude-sonnet-4.5")
+ * @throws {Error} If the model is invalid
+ *
+ * @example
+ * validateModel("openai/gpt-5.2");
+ */
+export function validateModel(model: string): void {
+  if (!model || typeof model !== "string") {
+    throw new Error("Model must be a non-empty string");
+  }
+}
+
+/**
+ * Validates that max_tokens is an integer between 1 and 100,000.
+ *
+ * @param maxTokens - Maximum number of tokens to generate
+ * @throws {Error} If maxTokens is invalid
+ *
+ * @example
+ * validateMaxTokens(1000);
+ */
+export function validateMaxTokens(maxTokens?: number): void {
+  if (maxTokens === undefined || maxTokens === null) {
+    return;
+  }
+
+  if (typeof maxTokens !== "number" || !Number.isInteger(maxTokens)) {
+    throw new Error("maxTokens must be an integer");
+  }
+
+  if (maxTokens < 1) {
+    throw new Error("maxTokens must be positive (minimum: 1)");
+  }
+
+  if (maxTokens > 100000) {
+    throw new Error("maxTokens too large (maximum: 100000)");
+  }
+}
+
+/**
+ * Validates that temperature is a number between 0 and 2.
+ *
+ * @param temperature - Sampling temperature (0-2)
+ * @throws {Error} If temperature is invalid
+ *
+ * @example
+ * validateTemperature(0.7);
+ */
+export function validateTemperature(temperature?: number): void {
+  if (temperature === undefined || temperature === null) {
+    return;
+  }
+
+  if (typeof temperature !== "number") {
+    throw new Error("temperature must be a number");
+  }
+
+  if (temperature < 0 || temperature > 2) {
+    throw new Error("temperature must be between 0 and 2");
+  }
+}
+
+/**
+ * Validates that top_p is a number between 0 and 1.
+ *
+ * @param topP - Top-p sampling parameter (0-1)
+ * @throws {Error} If topP is invalid
+ *
+ * @example
+ * validateTopP(0.9);
+ */
+export function validateTopP(topP?: number): void {
+  if (topP === undefined || topP === null) {
+    return;
+  }
+
+  if (typeof topP !== "number") {
+    throw new Error("topP must be a number");
+  }
+
+  if (topP < 0 || topP > 1) {
+    throw new Error("topP must be between 0 and 1");
+  }
+}
+
+/**
  * Validates that a private key is properly formatted.
  *
  * @param key - The private key to validate
