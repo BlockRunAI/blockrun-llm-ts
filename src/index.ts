@@ -65,6 +65,10 @@ export {
   type SearchOptions,
   // Spending tracking
   type Spending,
+  type SearchUsage,
+  type CostEstimate,
+  type SpendingReport,
+  type ChatResponseWithCost,
   // Smart routing types
   type RoutingProfile,
   type RoutingTier,
@@ -165,3 +169,12 @@ export type {
 // Anthropic-compatible API
 export { AnthropicClient } from "./anthropic-compat";
 export type { BlockRunAnthropicOptions } from "./anthropic-compat";
+
+// Validation utilities
+export {
+  KNOWN_PROVIDERS,
+  validateModel,
+  validateMaxTokens,
+  validateTemperature,
+  validateTopP,
+} from "./validation";
