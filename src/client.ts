@@ -743,8 +743,21 @@ export class LLMClient {
       );
     }
 
-    const data = (await response.json()) as { data?: Model[] };
-    return data.data || [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = (await response.json()) as { data?: any[] };
+    // Map API snake_case response to SDK camelCase Model interface
+    return (data.data || []).map((m) => ({
+      id: m.id,
+      name: m.name || m.id,
+      provider: m.owned_by || "",
+      description: m.description || "",
+      inputPrice: m.pricing?.input ?? m.pricing?.flat ?? 0,
+      outputPrice: m.pricing?.output ?? 0,
+      contextWindow: m.context_window || 0,
+      maxOutput: m.max_output || 0,
+      categories: m.categories || [],
+      available: true,
+    }));
   }
 
   /**

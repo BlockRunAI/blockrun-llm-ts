@@ -72,6 +72,7 @@ export interface Model {
   outputPrice: number;
   contextWindow: number;
   maxOutput: number;
+  categories: string[];
   available: boolean;
   type?: "llm" | "image"; // For listAllModels()
 }
