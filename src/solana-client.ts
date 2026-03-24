@@ -10,7 +10,7 @@
  *   // Or pass key directly
  *   const client = new SolanaLLMClient({ privateKey: 'your-bs58-key' });
  *
- *   const response = await client.chat('openai/gpt-4o', 'gm Solana');
+ *   const response = await client.chat('openai/gpt-5.2', 'gm Solana');
  */
 import type {
   ChatMessage,

@@ -50,7 +50,7 @@ export interface ChatUsage {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
-  num_sources_used?: number; // xAI Live Search sources used
+  num_sources_used?: number; // Live Search sources used
 }
 
 export interface ChatResponse {
@@ -60,7 +60,7 @@ export interface ChatResponse {
   model: string;
   choices: ChatChoice[];
   usage?: ChatUsage;
-  citations?: string[]; // xAI Live Search citation URLs
+  citations?: string[]; // Live Search citation URLs
 }
 
 export interface Model {
@@ -121,7 +121,7 @@ export interface ImageGenerateOptions {
   quality?: "standard" | "hd";
 }
 
-// xAI Live Search types
+// Live Search types
 export interface WebSearchSource {
   type: "web";
   country?: string;
@@ -166,7 +166,7 @@ export interface SearchParameters {
   maxSearchResults?: number;
 }
 
-/** Usage info for xAI Live Search sources */
+/** Usage info for Live Search sources */
 export interface SearchUsage {
   /** Number of search sources used in the response */
   numSourcesUsed?: number;
@@ -258,9 +258,9 @@ export interface ChatOptions {
   temperature?: number;
   /** Nucleus sampling parameter */
   topP?: number;
-  /** Enable xAI Live Search (shortcut for searchParameters.mode = "on") */
+  /** Enable Live Search (shortcut for searchParameters.mode = "on") */
   search?: boolean;
-  /** Full xAI Live Search configuration (for Grok models) */
+  /** Full Live Search configuration (for search-enabled models) */
   searchParameters?: SearchParameters;
 }
 
@@ -271,9 +271,9 @@ export interface ChatCompletionOptions {
   temperature?: number;
   /** Nucleus sampling parameter */
   topP?: number;
-  /** Enable xAI Live Search (shortcut for searchParameters.mode = "on") */
+  /** Enable Live Search (shortcut for searchParameters.mode = "on") */
   search?: boolean;
-  /** Full xAI Live Search configuration (for Grok models) */
+  /** Full Live Search configuration (for search-enabled models) */
   searchParameters?: SearchParameters;
   /** Tool definitions for function calling */
   tools?: Tool[];
