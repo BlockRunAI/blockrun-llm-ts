@@ -166,10 +166,52 @@ export interface SearchParameters {
   maxSearchResults?: number;
 }
 
+/** Usage info for xAI Live Search sources */
+export interface SearchUsage {
+  /** Number of search sources used in the response */
+  numSourcesUsed?: number;
+}
+
 // Spending tracking
 export interface Spending {
   totalUsd: number;
   calls: number;
+}
+
+/** Pre-request cost estimate for a chat call */
+export interface CostEstimate {
+  /** Model ID used for the estimate */
+  model: string;
+  /** Estimated input token count */
+  estimatedInputTokens: number;
+  /** Estimated output token count */
+  estimatedOutputTokens: number;
+  /** Estimated cost in USD */
+  estimatedCostUsd: number;
+}
+
+/** Per-call spending report with running session totals */
+export interface SpendingReport {
+  /** Model ID used */
+  model: string;
+  /** Input tokens consumed */
+  inputTokens: number;
+  /** Output tokens consumed */
+  outputTokens: number;
+  /** Cost of this call in USD */
+  costUsd: number;
+  /** Cumulative session spend in USD */
+  sessionTotalUsd: number;
+  /** Total number of calls in this session */
+  sessionCalls: number;
+}
+
+/** Chat response bundled with its spending report */
+export interface ChatResponseWithCost {
+  /** The chat completion response */
+  response: ChatResponse;
+  /** Spending report for this call */
+  spendingReport: SpendingReport;
 }
 
 export interface ResourceInfo {
