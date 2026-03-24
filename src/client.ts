@@ -783,6 +783,30 @@ export class LLMClient {
       },
     });
 
+    // Auto-retry on transient server errors (502/503) after payment
+    if (retryResponse.status === 502 || retryResponse.status === 503) {
+      await new Promise(r => setTimeout(r, 1000));
+      const retryResp2 = await this.fetchWithTimeout(retryUrl, {
+        method: "GET",
+        headers: {
+          "User-Agent": USER_AGENT,
+          "PAYMENT-SIGNATURE": paymentPayload,
+        },
+      });
+      if (retryResp2.status !== 502 && retryResp2.status !== 503) {
+        if (retryResp2.status === 402) throw new PaymentError("Payment was rejected. Check your wallet balance.");
+        if (!retryResp2.ok) {
+          let errorBody: unknown;
+          try { errorBody = await retryResp2.json(); } catch { errorBody = { error: "Request failed" }; }
+          throw new APIError(`API error after payment: ${retryResp2.status}`, retryResp2.status, sanitizeErrorResponse(errorBody));
+        }
+        const costUsd = parseFloat(details.amount) / 1e6;
+        this.sessionCalls += 1;
+        this.sessionTotalUsd += costUsd;
+        return retryResp2.json() as Promise<Record<string, unknown>>;
+      }
+    }
+
     if (retryResponse.status === 402) {
       throw new PaymentError("Payment was rejected. Check your wallet balance.");
     }
