@@ -14,7 +14,7 @@
  *
  * // Rest of your code stays exactly the same!
  * const response = await client.chat.completions.create({
- *   model: 'gpt-4o',
+ *   model: 'gpt-5.2',
  *   messages: [{ role: 'user', content: 'Hello!' }]
  * });
  */
@@ -294,7 +294,7 @@ class Chat {
  * const client = new OpenAI({ walletKey: '0x...' });
  *
  * const response = await client.chat.completions.create({
- *   model: 'gpt-4o',
+ *   model: 'gpt-5.2',
  *   messages: [{ role: 'user', content: 'Hello!' }]
  * });
  *

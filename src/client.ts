@@ -10,7 +10,7 @@
  *   // Option 2: Pass private key directly
  *   const client = new LLMClient({ privateKey: '0x...' });
  *
- *   const response = await client.chat('openai/gpt-4o', 'Hello!');
+ *   const response = await client.chat('openai/gpt-5.2', 'Hello!');
  *   console.log(response);
  */
 
@@ -75,7 +75,7 @@ const DEFAULT_MAX_TOKENS = 1024;
 const DEFAULT_TIMEOUT = 60000;
 
 // SDK version for User-Agent header (client identification in server logs)
-const SDK_VERSION = "0.3.0";
+const SDK_VERSION = "1.5.0";
 const USER_AGENT = `blockrun-ts/${SDK_VERSION}`;
 
 /**
@@ -152,13 +152,13 @@ export class LLMClient {
   /**
    * Simple 1-line chat interface.
    *
-   * @param model - Model ID (e.g., 'openai/gpt-4o', 'anthropic/claude-sonnet-4')
+   * @param model - Model ID (e.g., 'openai/gpt-5.2', 'anthropic/claude-sonnet-4.6')
    * @param prompt - User message
    * @param options - Optional chat parameters
    * @returns Assistant's response text
    *
    * @example
-   * const response = await client.chat('gpt-4o', 'What is the capital of France?');
+   * const response = await client.chat('gpt-5.2', 'What is the capital of France?');
    * console.log(response); // 'The capital of France is Paris.'
    */
   async chat(model: string, prompt: string, options?: ChatOptions): Promise<string> {
@@ -310,7 +310,7 @@ export class LLMClient {
       body.top_p = options.topP;
     }
 
-    // Handle xAI Live Search parameters
+    // Handle Live Search parameters
     if (options?.searchParameters !== undefined) {
       body.search_parameters = options.searchParameters;
     } else if (options?.search === true) {
@@ -344,6 +344,25 @@ export class LLMClient {
       headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
       body: JSON.stringify(body),
     });
+
+    // Auto-retry on transient server errors (502/503)
+    if (response.status === 502 || response.status === 503) {
+      await new Promise(r => setTimeout(r, 1000));
+      const retryResp = await this.fetchWithTimeout(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
+        body: JSON.stringify(body),
+      });
+      if (retryResp.status !== 502 && retryResp.status !== 503) {
+        if (retryResp.status === 402) return this.handlePaymentAndRetry(url, body, retryResp);
+        if (!retryResp.ok) {
+          let errorBody: unknown;
+          try { errorBody = await retryResp.json(); } catch { errorBody = { error: "Request failed" }; }
+          throw new APIError(`API error: ${retryResp.status}`, retryResp.status, sanitizeErrorResponse(errorBody));
+        }
+        return retryResp.json() as Promise<ChatResponse>;
+      }
+    }
 
     // Handle 402 Payment Required
     if (response.status === 402) {
@@ -434,6 +453,32 @@ export class LLMClient {
       body: JSON.stringify(body),
     });
 
+    // Auto-retry on transient server errors (502/503) after payment
+    if (retryResponse.status === 502 || retryResponse.status === 503) {
+      await new Promise(r => setTimeout(r, 1000));
+      const retryResp2 = await this.fetchWithTimeout(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": USER_AGENT,
+          "PAYMENT-SIGNATURE": paymentPayload,
+        },
+        body: JSON.stringify(body),
+      });
+      if (retryResp2.status !== 502 && retryResp2.status !== 503) {
+        if (retryResp2.status === 402) throw new PaymentError("Payment was rejected. Check your wallet balance.");
+        if (!retryResp2.ok) {
+          let errorBody: unknown;
+          try { errorBody = await retryResp2.json(); } catch { errorBody = { error: "Request failed" }; }
+          throw new APIError(`API error after payment: ${retryResp2.status}`, retryResp2.status, sanitizeErrorResponse(errorBody));
+        }
+        const costUsd = parseFloat(details.amount) / 1e6;
+        this.sessionCalls += 1;
+        this.sessionTotalUsd += costUsd;
+        return retryResp2.json() as Promise<ChatResponse>;
+      }
+    }
+
     // Check for errors
     if (retryResponse.status === 402) {
       throw new PaymentError("Payment was rejected. Check your wallet balance.");
@@ -476,6 +521,25 @@ export class LLMClient {
       headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
       body: JSON.stringify(body),
     });
+
+    // Auto-retry on transient server errors (502/503)
+    if (response.status === 502 || response.status === 503) {
+      await new Promise(r => setTimeout(r, 1000));
+      const retryResp = await this.fetchWithTimeout(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
+        body: JSON.stringify(body),
+      });
+      if (retryResp.status !== 502 && retryResp.status !== 503) {
+        if (retryResp.status === 402) return this.handlePaymentAndRetryRaw(url, body, retryResp);
+        if (!retryResp.ok) {
+          let errorBody: unknown;
+          try { errorBody = await retryResp.json(); } catch { errorBody = { error: "Request failed" }; }
+          throw new APIError(`API error: ${retryResp.status}`, retryResp.status, sanitizeErrorResponse(errorBody));
+        }
+        return retryResp.json() as Promise<Record<string, unknown>>;
+      }
+    }
 
     if (response.status === 402) {
       return this.handlePaymentAndRetryRaw(url, body, response);
@@ -555,6 +619,32 @@ export class LLMClient {
       body: JSON.stringify(body),
     });
 
+    // Auto-retry on transient server errors (502/503) after payment
+    if (retryResponse.status === 502 || retryResponse.status === 503) {
+      await new Promise(r => setTimeout(r, 1000));
+      const retryResp2 = await this.fetchWithTimeout(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": USER_AGENT,
+          "PAYMENT-SIGNATURE": paymentPayload,
+        },
+        body: JSON.stringify(body),
+      });
+      if (retryResp2.status !== 502 && retryResp2.status !== 503) {
+        if (retryResp2.status === 402) throw new PaymentError("Payment was rejected. Check your wallet balance.");
+        if (!retryResp2.ok) {
+          let errorBody: unknown;
+          try { errorBody = await retryResp2.json(); } catch { errorBody = { error: "Request failed" }; }
+          throw new APIError(`API error after payment: ${retryResp2.status}`, retryResp2.status, sanitizeErrorResponse(errorBody));
+        }
+        const costUsd = parseFloat(details.amount) / 1e6;
+        this.sessionCalls += 1;
+        this.sessionTotalUsd += costUsd;
+        return retryResp2.json() as Promise<Record<string, unknown>>;
+      }
+    }
+
     if (retryResponse.status === 402) {
       throw new PaymentError("Payment was rejected. Check your wallet balance.");
     }
@@ -595,6 +685,24 @@ export class LLMClient {
       method: "GET",
       headers: { "User-Agent": USER_AGENT },
     });
+
+    // Auto-retry on transient server errors (502/503)
+    if (response.status === 502 || response.status === 503) {
+      await new Promise(r => setTimeout(r, 1000));
+      const retryResp = await this.fetchWithTimeout(url, {
+        method: "GET",
+        headers: { "User-Agent": USER_AGENT },
+      });
+      if (retryResp.status !== 502 && retryResp.status !== 503) {
+        if (retryResp.status === 402) return this.handleGetPaymentAndRetryRaw(url, endpoint, params, retryResp);
+        if (!retryResp.ok) {
+          let errorBody: unknown;
+          try { errorBody = await retryResp.json(); } catch { errorBody = { error: "Request failed" }; }
+          throw new APIError(`API error: ${retryResp.status}`, retryResp.status, sanitizeErrorResponse(errorBody));
+        }
+        return retryResp.json() as Promise<Record<string, unknown>>;
+      }
+    }
 
     if (response.status === 402) {
       return this.handleGetPaymentAndRetryRaw(url, endpoint, params, response);

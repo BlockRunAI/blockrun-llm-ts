@@ -7,7 +7,7 @@
  * import { LLMClient } from '@blockrun/llm';
  *
  * const client = new LLMClient({ privateKey: '0x...' });
- * const response = await client.chat('gpt-4o', 'Hello!');
+ * const response = await client.chat('gpt-5.2', 'Hello!');
  * console.log(response);
  *
  * @example OpenAI-compatible API (drop-in replacement)
@@ -15,7 +15,7 @@
  *
  * const client = new OpenAI({ walletKey: '0x...' });
  * const response = await client.chat.completions.create({
- *   model: 'gpt-4o',
+ *   model: 'gpt-5.2',
  *   messages: [{ role: 'user', content: 'Hello!' }]
  * });
  * console.log(response.choices[0].message.content);
@@ -53,7 +53,7 @@ export {
   type ImageClientOptions,
   type ImageGenerateOptions,
   type ImageEditOptions,
-  // xAI Live Search types
+  // Live Search types
   type WebSearchSource,
   type XSearchSource,
   type NewsSearchSource,
