@@ -148,7 +148,7 @@ export {
 export { SOLANA_NETWORK, USDC_SOLANA, createSolanaPaymentPayload } from "./x402";
 
 // Cache utilities
-export { getCached, setCache, clearCache, saveToCache, getCachedByRequest } from "./cache";
+export { getCached, setCache, clearCache, saveToCache, getCachedByRequest, getCostLogSummary } from "./cache";
 
 // Agent wallet setup
 export { setupAgentWallet, setupAgentSolanaWallet, status } from "./setup";
