@@ -48,7 +48,7 @@
     "url": "https://github.com/BlockRunAI/blockrun-llm-ts/issues"
   },
   "dependencies": {
-    "@blockrun/clawrouter": "^0.10.18",
+    "@blockrun/clawrouter": "^0.12.71",
     "bs58": "^6.0.0",
     "viem": "^2.21.0"
   },
