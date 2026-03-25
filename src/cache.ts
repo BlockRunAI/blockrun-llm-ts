@@ -135,7 +135,7 @@ function readableFilename(endpoint: string, body: Record<string, unknown>): stri
     ''
   );
   // Sanitize for filesystem
-  label = String(label).replace(/[^a-zA-Z0-9_\-]/g, '_').slice(0, 40).replace(/^_+|_+$/g, '');
+  label = String(label).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40).replace(/^_+|_+$/g, '');
 
   return label ? `${ep}_${ts}_${label}.json` : `${ep}_${ts}.json`;
 }
