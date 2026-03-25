@@ -877,16 +877,16 @@ export class LLMClient {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const data = (await response.json()) as { data?: any[] };
-    // Map API snake_case response to SDK camelCase Model interface
+    // Map API response to SDK Model interface
     return (data.data || []).map((m) => ({
       id: m.id,
       name: m.name || m.id,
-      provider: m.owned_by || "",
+      provider: m.provider || m.owned_by || "",
       description: m.description || "",
-      inputPrice: m.pricing?.input ?? m.pricing?.flat ?? 0,
-      outputPrice: m.pricing?.output ?? 0,
-      contextWindow: m.context_window || 0,
-      maxOutput: m.max_output || 0,
+      inputPrice: m.inputPrice ?? m.input_price ?? m.pricing?.input ?? 0,
+      outputPrice: m.outputPrice ?? m.output_price ?? m.pricing?.output ?? 0,
+      contextWindow: m.contextWindow ?? m.context_window ?? 0,
+      maxOutput: m.maxOutput ?? m.max_output ?? 0,
       categories: m.categories || [],
       available: true,
     }));
