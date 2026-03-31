@@ -346,6 +346,76 @@ export interface SearchOptions {
   toDate?: string;
 }
 
+// =============================================================================
+// Exa Web Search Types
+// =============================================================================
+
+export interface ExaSearchOptions {
+  /** Number of results to return (default: 10, max: 100) */
+  numResults?: number;
+  /** Restrict to a content category */
+  category?: "github" | "news" | "research paper" | "linkedin profile" | "personal site" | "tweet" | "financial report" | "pdf" | "company";
+  /** Only include pages published after this date (ISO 8601) */
+  startPublishedDate?: string;
+  /** Only include pages published before this date (ISO 8601) */
+  endPublishedDate?: string;
+  /** Only search within these domains */
+  includeDomains?: string[];
+  /** Exclude these domains from results */
+  excludeDomains?: string[];
+}
+
+export interface ExaSearchItem {
+  id: string;
+  url: string;
+  title: string;
+  publishedDate?: string;
+  author?: string;
+  score?: number;
+}
+
+export interface ExaSearchResponse {
+  requestId: string;
+  resolvedSearchType: string;
+  results: ExaSearchItem[];
+  searchTime: number;
+  costDollars: { total: number };
+}
+
+export interface ExaAnswerCitation {
+  id: string;
+  title: string;
+  url: string;
+  publishedDate?: string;
+  favicon?: string;
+}
+
+export interface ExaAnswerResponse {
+  requestId: string;
+  answer: string;
+  citations: ExaAnswerCitation[];
+}
+
+export interface ExaContentItem {
+  id: string;
+  url: string;
+  title: string;
+  text: string;
+  author?: string | null;
+}
+
+export interface ExaContentsResponse {
+  results: ExaContentItem[];
+  costDollars: { total: number };
+}
+
+export interface ExaFindSimilarOptions {
+  /** Number of results to return (default: 10, max: 100) */
+  numResults?: number;
+  /** Exclude pages from the same domain as the reference URL */
+  excludeSourceDomain?: boolean;
+}
+
 // X/Twitter types (powered by AttentionVC)
 export interface XUser {
   id: string;
