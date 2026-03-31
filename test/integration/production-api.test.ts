@@ -168,3 +168,87 @@ describeIf("Production API Error Handling", () => {
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }, 30000);
 });
+
+// =============================================================================
+// Solana + Exa Integration Tests
+// =============================================================================
+
+import { SolanaLLMClient } from "../../src/solana-client";
+
+const SOLANA_WALLET_KEY = process.env.SOLANA_WALLET_KEY;
+const SOLANA_API = "https://sol.blockrun.ai/api";
+
+const describeSolana = SOLANA_WALLET_KEY ? describe : describe.skip;
+
+describeSolana("Solana + Exa Integration", () => {
+  let solClient: SolanaLLMClient;
+
+  beforeAll(async () => {
+    if (!SOLANA_WALLET_KEY) return;
+    solClient = new SolanaLLMClient({ privateKey: SOLANA_WALLET_KEY, apiUrl: SOLANA_API });
+    const addr = await solClient.getWalletAddress();
+    console.log("\n🧪 Running Solana/Exa integration tests against sol.blockrun.ai");
+    console.log(`   Wallet: ${addr}`);
+    console.log("   Estimated cost: ~$0.04\n");
+  });
+
+  it("exaSearch returns results with url/title", async () => {
+    const result = await solClient.exaSearch("latest AI safety research", { numResults: 3 });
+    expect(result).toBeDefined();
+    expect(Array.isArray(result.results)).toBe(true);
+    const results = result.results as unknown[];
+    expect(results.length).toBeGreaterThan(0);
+    const first = results[0] as Record<string, unknown>;
+    expect(first.url || first.title).toBeTruthy();
+    const spending = solClient.getSpending();
+    expect(spending.totalUsd).toBeGreaterThanOrEqual(0.009);
+    expect(spending.totalUsd).toBeLessThanOrEqual(0.011);
+    console.log(`   ✓ exaSearch: ${results.length} results, cost=$${spending.totalUsd.toFixed(4)}`);
+    await new Promise(r => setTimeout(r, 1000));
+  }, 30000);
+
+  it("exaFindSimilar returns semantically similar pages", async () => {
+    const result = await solClient.exaFindSimilar(
+      "https://openai.com/research/gpt-4",
+      { numResults: 3 }
+    );
+    expect(result).toBeDefined();
+    expect(Array.isArray(result.results)).toBe(true);
+    const results = result.results as unknown[];
+    expect(results.length).toBeGreaterThan(0);
+    console.log(`   ✓ exaFindSimilar: ${results.length} results`);
+    await new Promise(r => setTimeout(r, 1000));
+  }, 30000);
+
+  it("exaContents extracts text from URL", async () => {
+    const result = await solClient.exaContents(["https://www.anthropic.com/research"]);
+    expect(result).toBeDefined();
+    expect(typeof result).toBe("object");
+    console.log(`   ✓ exaContents: response received`);
+    await new Promise(r => setTimeout(r, 1000));
+  }, 30000);
+
+  it("exaAnswer returns AI-generated answer from live web", async () => {
+    const result = await solClient.exaAnswer("What is Anthropic Claude?");
+    expect(result).toBeDefined();
+    expect(typeof result).toBe("object");
+    console.log(`   ✓ exaAnswer: response received`);
+    await new Promise(r => setTimeout(r, 1000));
+  }, 30000);
+
+  it("exa() generic proxy works", async () => {
+    const result = await solClient.exa("search", { query: "blockrun.ai", numResults: 2 });
+    expect(result).toBeDefined();
+    expect(Array.isArray(result.results)).toBe(true);
+    const results = result.results as unknown[];
+    console.log(`   ✓ exa() generic: ${results.length} results`);
+    await new Promise(r => setTimeout(r, 1000));
+  }, 30000);
+
+  it("session spending is tracked across Exa calls", async () => {
+    const spending = solClient.getSpending();
+    expect(spending.totalUsd).toBeGreaterThan(0);
+    expect(spending.calls).toBeGreaterThanOrEqual(3);
+    console.log(`   ✓ Spending: $${spending.totalUsd.toFixed(4)} over ${spending.calls} calls`);
+  });
+});
