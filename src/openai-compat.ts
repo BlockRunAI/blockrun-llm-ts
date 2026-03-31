@@ -198,58 +198,18 @@ class ChatCompletions {
   }
 
   private async createStream(params: OpenAIChatCompletionParams): Promise<AsyncIterable<OpenAIChatCompletionChunk>> {
-    const url = `${this.apiUrl}/v1/chat/completions`;
-    const body: Record<string, unknown> = {
-      model: params.model,
-      messages: params.messages,
-      max_tokens: params.max_tokens || 1024,
-      temperature: params.temperature,
-      top_p: params.top_p,
-      stream: true,
-    };
-    if (params.tools) {
-      body.tools = params.tools;
-    }
-    if (params.tool_choice) {
-      body.tool_choice = params.tool_choice;
-    }
-
-    // First request to get 402
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
-    try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-
-      // Handle 402
-      if (response.status === 402) {
-        const paymentHeader = response.headers.get("payment-required");
-        if (!paymentHeader) {
-          throw new Error("402 response but no payment requirements found");
-        }
-
-        // Streaming with automatic payment is not currently supported
-        // The SDK would need direct access to the private key to sign payments
-        // For now, throw an error asking user to use non-streaming
-        throw new Error(
-          "Streaming with automatic payment requires direct wallet access. " +
-          "Please use non-streaming mode or contact support for streaming setup."
-        );
+    const response = await this.client.chatCompletionStream(
+      params.model,
+      params.messages as ChatMessage[],
+      {
+        maxTokens: params.max_tokens,
+        temperature: params.temperature,
+        topP: params.top_p,
+        tools: params.tools,
+        toolChoice: params.tool_choice,
       }
-
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
-
-      return new StreamingResponse(response, params.model);
-    } finally {
-      clearTimeout(timeoutId);
-    }
+    );
+    return new StreamingResponse(response, params.model);
   }
 
   private transformResponse(response: ChatResponse): OpenAIChatCompletionResponse {

@@ -32,6 +32,11 @@ import {
   type RoutingDecision,
   type SearchResult,
   type SearchOptions,
+  type ExaSearchOptions,
+  type ExaSearchResponse,
+  type ExaAnswerResponse,
+  type ExaContentsResponse,
+  type ExaFindSimilarOptions,
   type XUserLookupResponse,
   type XFollowersResponse,
   type XFollowingsResponse,
@@ -113,6 +118,12 @@ export class LLMClient {
   private sessionCalls: number = 0;
   private modelPricingCache: Map<string, ModelPricing> | null = null;
   private modelPricingPromise: Promise<Map<string, ModelPricing>> | null = null;
+
+  // Pre-auth cache: avoids the 402 round-trip on repeat requests to the same model.
+  // Key = "endpoint:model", value = cached payment header + timestamp.
+  // TTL: 1 hour (mirrors ClawRouter's payment-preauth.ts approach).
+  private preAuthCache: Map<string, { paymentHeader: string; cachedAt: number }> = new Map();
+  private static readonly PRE_AUTH_TTL_MS = 3_600_000;
 
   /**
    * Initialize the BlockRun LLM client.
@@ -504,6 +515,143 @@ export class LLMClient {
     this.sessionTotalUsd += costUsd;
 
     return retryResponse.json() as Promise<ChatResponse>;
+  }
+
+  /**
+   * Sign a payment header and return the PAYMENT-SIGNATURE value.
+   * Extracted to share logic between streaming and non-streaming flows.
+   */
+  private async signPayment(paymentHeader: string): Promise<{ paymentPayload: string; costUsd: number }> {
+    const paymentRequired = parsePaymentRequired(paymentHeader);
+    const details = extractPaymentDetails(paymentRequired);
+    const extensions = ((paymentRequired as unknown) as Record<string, unknown>).extensions as Record<string, unknown> | undefined;
+    const paymentPayload = await createPaymentPayload(
+      this.privateKey,
+      this.account.address,
+      details.recipient,
+      details.amount,
+      details.network || "eip155:8453",
+      {
+        resourceUrl: validateResourceUrl(
+          details.resource?.url || `${this.apiUrl}/v1/chat/completions`,
+          this.apiUrl
+        ),
+        resourceDescription: details.resource?.description || "BlockRun AI API call",
+        maxTimeoutSeconds: details.maxTimeoutSeconds || 300,
+        extra: details.extra,
+        extensions,
+      }
+    );
+    const costUsd = parseFloat(details.amount) / 1e6;
+    return { paymentPayload, costUsd };
+  }
+
+  /**
+   * Streaming chat completion with automatic x402 payment.
+   *
+   * Uses a pre-auth cache so repeat calls to the same model skip the 402
+   * round-trip (~200ms savings). Falls back to the normal 402 flow on cache
+   * miss or if the pre-signed payment is rejected.
+   *
+   * @returns Raw fetch Response with a streaming SSE body.
+   */
+  async chatCompletionStream(
+    model: string,
+    messages: ChatMessage[],
+    options?: ChatCompletionOptions
+  ): Promise<Response> {
+    const url = `${this.apiUrl}/v1/chat/completions`;
+    const body: Record<string, unknown> = {
+      model,
+      messages,
+      max_tokens: options?.maxTokens ?? DEFAULT_MAX_TOKENS,
+      stream: true,
+    };
+    if (options?.temperature !== undefined) body.temperature = options.temperature;
+    if (options?.topP !== undefined) body.top_p = options.topP;
+    if (options?.tools !== undefined) body.tools = options.tools;
+    if (options?.toolChoice !== undefined) body.tool_choice = options.toolChoice;
+
+    const cacheKey = `/v1/chat/completions:${model}`;
+    const cached = this.preAuthCache.get(cacheKey);
+    const now = Date.now();
+
+    // --- Try pre-auth (skip 402 round-trip) ---
+    if (cached && now - cached.cachedAt < LLMClient.PRE_AUTH_TTL_MS) {
+      try {
+        const { paymentPayload, costUsd } = await this.signPayment(cached.paymentHeader);
+        const preAuthResp = await this.fetchWithTimeout(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
+            "PAYMENT-SIGNATURE": paymentPayload,
+          },
+          body: JSON.stringify(body),
+        });
+        if (preAuthResp.status !== 402 && preAuthResp.ok) {
+          this.sessionCalls += 1;
+          this.sessionTotalUsd += costUsd;
+          return preAuthResp; // Pre-auth hit — no 402 round-trip
+        }
+        // Pre-auth rejected (price changed?) — evict and fall through
+        this.preAuthCache.delete(cacheKey);
+      } catch {
+        this.preAuthCache.delete(cacheKey);
+      }
+    }
+
+    // --- Normal flow: send request, handle 402, retry as stream ---
+    const firstResp = await this.fetchWithTimeout(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
+      body: JSON.stringify(body),
+    });
+
+    if (firstResp.status !== 402) {
+      if (!firstResp.ok) {
+        let errorBody: unknown;
+        try { errorBody = await firstResp.json(); } catch { errorBody = { error: "Request failed" }; }
+        throw new APIError(`API error: ${firstResp.status}`, firstResp.status, sanitizeErrorResponse(errorBody));
+      }
+      return firstResp;
+    }
+
+    // Parse 402, cache for next time, sign, and retry with stream
+    let paymentHeader = firstResp.headers.get("payment-required");
+    if (!paymentHeader) {
+      try {
+        const rb = await firstResp.json() as Record<string, unknown>;
+        if (rb.x402 || rb.accepts) paymentHeader = btoa(JSON.stringify(rb));
+      } catch { /* ignore */ }
+    }
+    if (!paymentHeader) throw new PaymentError("402 response but no payment requirements found");
+
+    // Cache for pre-auth on future requests
+    this.preAuthCache.set(cacheKey, { paymentHeader, cachedAt: now });
+
+    const { paymentPayload, costUsd } = await this.signPayment(paymentHeader);
+
+    const streamResp = await this.fetchWithTimeout(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": USER_AGENT,
+        "PAYMENT-SIGNATURE": paymentPayload,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (streamResp.status === 402) throw new PaymentError("Payment was rejected. Check your wallet balance.");
+    if (!streamResp.ok) {
+      let errorBody: unknown;
+      try { errorBody = await streamResp.json(); } catch { errorBody = { error: "Request failed" }; }
+      throw new APIError(`API error after payment: ${streamResp.status}`, streamResp.status, sanitizeErrorResponse(errorBody));
+    }
+
+    this.sessionCalls += 1;
+    this.sessionTotalUsd += costUsd;
+    return streamResp;
   }
 
   /**
@@ -988,6 +1136,62 @@ export class LLMClient {
 
     const data = await this.requestWithPaymentRaw("/v1/search", body);
     return data as unknown as SearchResult;
+  }
+
+  /**
+   * Neural web search via Exa. Returns semantically relevant URLs and metadata.
+   * Understands meaning, not just keywords. $0.01/call.
+   *
+   * @param query - Natural language search query
+   * @param options - Optional filters (numResults, category, date range, domains)
+   */
+  async exaSearch(query: string, options?: ExaSearchOptions): Promise<ExaSearchResponse> {
+    const body: Record<string, unknown> = { query };
+    if (options?.numResults !== undefined) body.numResults = options.numResults;
+    if (options?.category !== undefined) body.category = options.category;
+    if (options?.startPublishedDate !== undefined) body.startPublishedDate = options.startPublishedDate;
+    if (options?.endPublishedDate !== undefined) body.endPublishedDate = options.endPublishedDate;
+    if (options?.includeDomains !== undefined) body.includeDomains = options.includeDomains;
+    if (options?.excludeDomains !== undefined) body.excludeDomains = options.excludeDomains;
+    const data = await this.requestWithPaymentRaw("/v1/exa/search", body);
+    return (data as { data: ExaSearchResponse }).data;
+  }
+
+  /**
+   * Ask a question and get a cited, synthesized answer grounded in real web sources.
+   * No hallucinations — every claim is backed by a citation. $0.01/call.
+   *
+   * @param query - The question to answer
+   */
+  async exaAnswer(query: string): Promise<ExaAnswerResponse> {
+    const data = await this.requestWithPaymentRaw("/v1/exa/answer", { query });
+    return (data as { data: ExaAnswerResponse }).data;
+  }
+
+  /**
+   * Fetch full Markdown text content from a list of URLs. $0.002 per URL.
+   * Returns clean text ready to feed into an LLM context window.
+   *
+   * @param urls - Array of URLs to fetch (up to 100)
+   */
+  async exaContents(urls: string[]): Promise<ExaContentsResponse> {
+    const data = await this.requestWithPaymentRaw("/v1/exa/contents", { urls });
+    return (data as { data: ExaContentsResponse }).data;
+  }
+
+  /**
+   * Find pages semantically similar to a given URL. $0.01/call.
+   * Useful for discovering competitors, alternatives, and related resources.
+   *
+   * @param url - Reference URL
+   * @param options - Optional filters (numResults, excludeSourceDomain)
+   */
+  async exaFindSimilar(url: string, options?: ExaFindSimilarOptions): Promise<ExaSearchResponse> {
+    const body: Record<string, unknown> = { url };
+    if (options?.numResults !== undefined) body.numResults = options.numResults;
+    if (options?.excludeSourceDomain !== undefined) body.excludeSourceDomain = options.excludeSourceDomain;
+    const data = await this.requestWithPaymentRaw("/v1/exa/find-similar", body);
+    return (data as { data: ExaSearchResponse }).data;
   }
 
   /**
