@@ -550,6 +550,46 @@ All current endpoints are GET. The `pmQuery()` method is available for future PO
 
 Works on both `LLMClient` (Base) and `SolanaLLMClient`.
 
+## Exa Web Search (Powered by Exa)
+
+Access [Exa](https://exa.ai)'s neural web search via x402. No API keys needed — pay-per-request via Solana USDC. Available on `SolanaLLMClient` only.
+
+| Method | Description | Price |
+|---|---|---|
+| `exaSearch(query, options?)` | Neural/keyword web search | $0.01/request |
+| `exaFindSimilar(url, options?)` | Find semantically similar pages | $0.01/request |
+| `exaContents(urls, options?)` | Extract full text from URLs | $0.002/URL |
+| `exaAnswer(query, options?)` | AI answer grounded in web search | $0.01/request |
+| `exa(path, body)` | Generic proxy for any Exa endpoint | varies |
+
+```typescript
+import { SolanaLLMClient } from '@blockrun/llm';
+
+const client = new SolanaLLMClient();
+
+// Neural web search ($0.01/request)
+const results = await client.exaSearch("latest AI safety research", { numResults: 5 });
+const news = await client.exaSearch("bitcoin ETF news", { category: "news", numResults: 10 });
+
+// Find similar pages ($0.01/request)
+const similar = await client.exaFindSimilar("https://openai.com/research/gpt-4", { numResults: 5 });
+
+// Extract content from URLs ($0.002/URL)
+const content = await client.exaContents(["https://arxiv.org/abs/2303.08774"]);
+const rich = await client.exaContents(
+  ["https://example.com/page1", "https://example.com/page2"],
+  { text: true, highlights: true }
+);
+
+// AI-generated answer from live web ($0.01/request)
+const answer = await client.exaAnswer("What is the current state of AI safety research?");
+
+// Generic proxy for any Exa endpoint
+const custom = await client.exa("search", { query: "transformer architecture", numResults: 5 });
+```
+
+`SolanaLLMClient` only — Exa endpoints are on `sol.blockrun.ai`.
+
 ## Configuration
 
 ```typescript
