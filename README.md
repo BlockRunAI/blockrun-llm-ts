@@ -1,6 +1,6 @@
 # @blockrun/llm (TypeScript SDK)
 
-> **@blockrun/llm** is a TypeScript/Node.js SDK for accessing 40+ large language models (GPT-5, Claude, Gemini, Grok, DeepSeek, Kimi, and more) with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required — your wallet signature is your authentication. Supports Base and Solana chains.
+> **@blockrun/llm** is a TypeScript/Node.js SDK for accessing 41+ large language models (GPT-5, Claude, Gemini, Grok, DeepSeek, Kimi, and more) with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required — your wallet signature is your authentication. Supports **streaming**, smart routing, Base and Solana chains.
 
 [![npm](https://img.shields.io/npm/v/@blockrun/llm.svg)](https://www.npmjs.com/package/@blockrun/llm)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -462,6 +462,74 @@ const result = await client.chatCompletion('openai/gpt-4o', messages);
 console.log(result.choices[0].message.content);
 ```
 
+### Streaming
+
+Stream responses token-by-token with automatic x402 payment. Uses a **pre-auth cache** to skip the 402 round-trip on repeat calls to the same model (~200ms saved per request after the first).
+
+#### OpenAI-compatible (recommended)
+
+```typescript
+import { OpenAI } from '@blockrun/llm';
+
+const client = new OpenAI({ walletKey: process.env.BASE_CHAIN_WALLET_KEY });
+
+const stream = await client.chat.completions.create({
+  model: 'openai/gpt-5.4',
+  messages: [{ role: 'user', content: 'Write a short story about AI agents' }],
+  stream: true,
+});
+
+for await (const chunk of stream) {
+  process.stdout.write(chunk.choices[0]?.delta?.content || '');
+}
+```
+
+#### Native client
+
+```typescript
+import { LLMClient, type ChatMessage } from '@blockrun/llm';
+
+const client = new LLMClient();
+
+const messages: ChatMessage[] = [
+  { role: 'user', content: 'Explain quantum computing in simple terms' },
+];
+
+// Returns a raw fetch Response with SSE body
+const response = await client.chatCompletionStream('google/gemini-2.5-flash', messages);
+
+const reader = response.body!.getReader();
+const decoder = new TextDecoder();
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+
+  const chunk = decoder.decode(value, { stream: true });
+  for (const line of chunk.split('\n')) {
+    if (!line.startsWith('data: ') || line === 'data: [DONE]') continue;
+    const data = JSON.parse(line.slice(6));
+    process.stdout.write(data.choices?.[0]?.delta?.content || '');
+  }
+}
+```
+
+#### Payment + streaming flow
+
+```
+First call (cache miss):
+  1. Send request → 402 response (BlockRun returns price)
+  2. Sign USDC payment locally (key never leaves machine)
+  3. Retry with PAYMENT-SIGNATURE header + stream: true
+  4. Cache payment requirements for this model (1h TTL)
+  5. Stream tokens as they arrive
+
+Subsequent calls (cache hit):
+  1. Pre-sign payment from cache — skip 402 round-trip
+  2. Send request with PAYMENT-SIGNATURE upfront
+  3. Stream tokens immediately (~200ms faster)
+```
+
 ### List Available Models
 
 ```typescript
@@ -724,10 +792,12 @@ Full TypeScript support with exported types:
 ```typescript
 import {
   LLMClient,
+  OpenAI,
   testnetClient,
   type ChatMessage,
   type ChatResponse,
   type ChatOptions,
+  type ChatCompletionOptions,
   type Model,
   // Smart routing types
   type SmartChatOptions,
@@ -738,6 +808,14 @@ import {
   APIError,
   PaymentError,
 } from '@blockrun/llm';
+
+// chatCompletionStream returns a standard fetch Response with SSE body
+const streamResponse: Response = await client.chatCompletionStream(model, messages, options);
+
+// OpenAI-compat stream returns AsyncIterable
+const stream: AsyncIterable<OpenAIChatCompletionChunk> = await openaiClient.chat.completions.create({
+  model, messages, stream: true
+});
 ```
 
 ## Agent Wallet Setup
@@ -861,6 +939,9 @@ When you make an API call, the SDK automatically handles x402 payment. It signs 
 
 ### What is smart routing / ClawRouter?
 ClawRouter is a built-in smart routing engine that analyzes your request across 14 dimensions and automatically picks the cheapest model capable of handling it. Routing happens locally in under 1ms. It can save up to 78% on LLM costs compared to using premium models for every request.
+
+### Does it support streaming?
+Yes — as of v1.6.1. Use `client.chatCompletionStream()` for native streaming or `stream: true` in the OpenAI-compatible client. Payment is handled automatically: the SDK signs USDC payment before streaming begins, and caches payment requirements per model so subsequent calls skip the 402 round-trip (~200ms faster).
 
 ### How much does it cost?
 Pay only for what you use. Prices start at $0.0002 per request (GPT-5 Nano). There are no minimums, subscriptions, or monthly fees. $5 in USDC gets you thousands of requests.
