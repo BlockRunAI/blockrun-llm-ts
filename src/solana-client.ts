@@ -318,6 +318,61 @@ export class SolanaLLMClient {
     return this.requestWithPaymentRaw(`/v1/pm/${path}`, query);
   }
 
+  // ── Exa Web Search (Powered by Exa) ──────────────────────────────────────
+
+  /**
+   * Generic Exa endpoint proxy (POST, Solana payment). Powered by Exa.
+   *
+   * @param path - Exa endpoint: "search" | "find-similar" | "contents" | "answer"
+   * @param body - Request body (see Exa API docs)
+   *
+   * @example
+   * const results = await client.exa("search", { query: "latest AI research", numResults: 5 });
+   */
+  async exa(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestWithPaymentRaw(`/v1/exa/${path}`, body);
+  }
+
+  /**
+   * Neural and keyword web search via Exa (Solana payment, $0.01/request).
+   *
+   * @example
+   * const results = await client.exaSearch("latest AI papers", { numResults: 5 });
+   */
+  async exaSearch(query: string, options?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestWithPaymentRaw("/v1/exa/search", { query, ...options });
+  }
+
+  /**
+   * Find pages semantically similar to a given URL via Exa (Solana payment, $0.01/request).
+   *
+   * @example
+   * const results = await client.exaFindSimilar("https://openai.com/research/gpt-4", { numResults: 5 });
+   */
+  async exaFindSimilar(url: string, options?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestWithPaymentRaw("/v1/exa/find-similar", { url, ...options });
+  }
+
+  /**
+   * Extract full text content from URLs via Exa (Solana payment, $0.002/URL).
+   *
+   * @example
+   * const data = await client.exaContents(["https://arxiv.org/abs/2303.08774"]);
+   */
+  async exaContents(urls: string[], options?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestWithPaymentRaw("/v1/exa/contents", { urls, ...options });
+  }
+
+  /**
+   * AI-generated answer grounded in live web search via Exa (Solana payment, $0.01/request).
+   *
+   * @example
+   * const answer = await client.exaAnswer("What is the current state of AI safety research?");
+   */
+  async exaAnswer(query: string, options?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestWithPaymentRaw("/v1/exa/answer", { query, ...options });
+  }
+
   /** Get session spending. */
   getSpending(): Spending {
     return { totalUsd: this.sessionTotalUsd, calls: this.sessionCalls };
