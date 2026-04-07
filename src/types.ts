@@ -334,6 +334,52 @@ export interface ImageEditOptions {
   n?: number;
 }
 
+// Music / Audio types
+
+export interface AudioTrack {
+  url: string;
+  duration_seconds?: number;
+  lyrics?: string;
+}
+
+export interface MusicResponse {
+  created: number;
+  model: string;
+  data: AudioTrack[];
+  txHash?: string;
+}
+
+export interface AudioModel {
+  id: string;
+  name: string;
+  provider: string;
+  description: string;
+  pricePerTrack: number;
+  maxDurationSeconds: number;
+  supportsLyrics: boolean;
+  supportsInstrumental: boolean;
+  available: boolean;
+  type: "audio";
+}
+
+export interface MusicClientOptions {
+  /** EVM wallet private key (hex string starting with 0x) */
+  privateKey?: `0x${string}` | string;
+  /** API endpoint URL (default: https://blockrun.ai/api) */
+  apiUrl?: string;
+  /** Request timeout in milliseconds (default: 210000 — music gen takes 1-3 min) */
+  timeout?: number;
+}
+
+export interface MusicGenerateOptions {
+  /** Model ID (default: "minimax/music-2.5+") */
+  model?: "minimax/music-2.5+" | "minimax/music-2.5";
+  /** Generate without vocals (default: true) */
+  instrumental?: boolean;
+  /** Custom lyrics — cannot be used with instrumental: true */
+  lyrics?: string;
+}
+
 // Search options for standalone search endpoint
 export interface SearchOptions {
   /** Source types to search (e.g. ["web", "x", "news"]) */

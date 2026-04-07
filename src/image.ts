@@ -41,14 +41,16 @@ import {
 
 const DEFAULT_API_URL = "https://blockrun.ai/api";
 const DEFAULT_MODEL = "google/nano-banana";
+// Available image models: openai/dall-e-3, openai/gpt-image-1,
+//   google/nano-banana, google/nano-banana-pro, zai/cogview-4
 const DEFAULT_SIZE = "1024x1024";
 const DEFAULT_TIMEOUT = 120000; // Images take longer
 
 /**
  * BlockRun Image Generation Client.
  *
- * Generate images using Nano Banana (Google Gemini), DALL-E 3, or GPT Image
- * with automatic x402 micropayments on Base chain.
+ * Generate images using Nano Banana (Google Gemini), DALL-E 3, GPT Image,
+ * or CogView-4 (Zhipu AI) with automatic x402 micropayments on Base chain.
  */
 export class ImageClient {
   private account: Account;
