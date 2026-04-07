@@ -31,6 +31,7 @@
 // Native BlockRun API
 export { LLMClient, testnetClient, default } from "./client";
 export { ImageClient } from "./image";
+export { MusicClient } from "./music";
 export {
   type ChatMessage,
   type ChatChoice,
@@ -53,6 +54,12 @@ export {
   type ImageClientOptions,
   type ImageGenerateOptions,
   type ImageEditOptions,
+  // Music / Audio types
+  type AudioTrack,
+  type MusicResponse,
+  type AudioModel,
+  type MusicClientOptions,
+  type MusicGenerateOptions,
   // Live Search types
   type WebSearchSource,
   type XSearchSource,
