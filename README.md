@@ -264,6 +264,28 @@ All models below have been tested end-to-end via the TypeScript SDK (Feb 2026):
 | `google/nano-banana` | $0.05/image |
 | `google/nano-banana-pro` | $0.10-0.15/image |
 | `black-forest/flux-1.1-pro` | $0.04/image |
+| `xai/grok-imagine-image` | $0.02/image |
+| `xai/grok-imagine-image-pro` | $0.07/image |
+| `zai/cogview-4` | $0.015/image |
+
+### Video Generation
+| Model | Price |
+|-------|-------|
+| `xai/grok-imagine-video` | $0.05/sec (8s default → $0.42/clip) |
+
+```ts
+import { VideoClient } from '@blockrun/llm';
+
+const client = new VideoClient();
+const result = await client.generate('a red apple slowly spinning on a wooden table');
+console.log(result.data[0].url);             // permanent MP4 URL
+console.log(result.data[0].duration_seconds); // 8
+
+// Image-to-video
+const r2 = await client.generate('the subject turns and smiles', {
+  imageUrl: 'https://example.com/portrait.jpg',
+});
+```
 
 ### Testnet Models (Base Sepolia)
 | Model | Price |
