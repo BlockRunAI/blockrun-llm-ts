@@ -60,6 +60,12 @@ export {
   type AudioModel,
   type MusicClientOptions,
   type MusicGenerateOptions,
+  // Video types
+  type VideoClip,
+  type VideoResponse,
+  type VideoModel,
+  type VideoClientOptions,
+  type VideoGenerateOptions,
   // Live Search types
   type WebSearchSource,
   type XSearchSource,

@@ -80,6 +80,10 @@ export interface Model {
 // Image generation types
 export interface ImageData {
   url: string;
+  /** Original upstream URL (e.g. imgen.x.ai). Omitted for data URIs. */
+  source_url?: string;
+  /** True when the gateway mirrored the image to its GCS bucket. Omitted for data URIs. */
+  backed_up?: boolean;
   revised_prompt?: string;
   b64_json?: string;
 }
@@ -378,6 +382,59 @@ export interface MusicGenerateOptions {
   instrumental?: boolean;
   /** Custom lyrics — cannot be used with instrumental: true */
   lyrics?: string;
+}
+
+// Video types
+
+export interface VideoClip {
+  /** Permanent blockrun-hosted URL (falls back to upstream if backup fails) */
+  url: string;
+  /** Original upstream URL (e.g. vidgen.x.ai) */
+  source_url?: string;
+  /** Duration of the generated video */
+  duration_seconds?: number;
+  /** Upstream provider's request id (xAI) */
+  request_id?: string;
+  /** True when the gateway mirrored the video to its GCS bucket */
+  backed_up?: boolean;
+}
+
+export interface VideoResponse {
+  created: number;
+  model: string;
+  data: VideoClip[];
+  txHash?: string;
+}
+
+export interface VideoModel {
+  id: string;
+  name: string;
+  provider: string;
+  description: string;
+  pricePerSecond: number;
+  defaultDurationSeconds: number;
+  maxDurationSeconds: number;
+  supportsImageInput: boolean;
+  available: boolean;
+  type: "video";
+}
+
+export interface VideoClientOptions {
+  /** EVM wallet private key (hex string starting with 0x) */
+  privateKey?: `0x${string}` | string;
+  /** API endpoint URL (default: https://blockrun.ai/api) */
+  apiUrl?: string;
+  /** Request timeout in milliseconds (default: 300000 — video gen + polling up to 3 min) */
+  timeout?: number;
+}
+
+export interface VideoGenerateOptions {
+  /** Model ID (default: "xai/grok-imagine-video") */
+  model?: "xai/grok-imagine-video" | string;
+  /** Optional seed image URL for image-to-video */
+  imageUrl?: string;
+  /** Duration to bill for (defaults to model's default duration) */
+  durationSeconds?: number;
 }
 
 // Search options for standalone search endpoint
