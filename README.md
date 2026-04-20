@@ -227,6 +227,7 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 ### Moonshot Kimi
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
+| `moonshot/kimi-k2.6` | $0.95/M | $4.00/M |
 | `moonshot/kimi-k2.5` | $0.60/M | $3.00/M |
 
 ### MiniMax
@@ -254,7 +255,7 @@ All models below have been tested end-to-end via the TypeScript SDK (Feb 2026):
 | Google | `google/gemini-2.5-flash` | Passed |
 | DeepSeek | `deepseek/deepseek-chat` | Passed |
 | xAI | `xai/grok-3` | Passed |
-| Moonshot | `moonshot/kimi-k2.5` | Passed |
+| Moonshot | `moonshot/kimi-k2.6` | Passed |
 
 ### Image Generation
 | Model | Price |
