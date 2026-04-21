@@ -38,6 +38,12 @@ export interface ChatMessage {
   name?: string; // For tool messages
   tool_call_id?: string; // For tool result messages
   tool_calls?: ToolCall[]; // For assistant messages with tool calls
+  // Extended fields returned by reasoning-capable upstream providers
+  // (DeepSeek Reasoner, Grok 4 / 4.20 reasoning, xAI multi-agent).
+  // Backend strips these from inbound requests but may forward them on the
+  // response side, so they are accepted as optional here.
+  reasoning_content?: string;
+  thinking?: string;
 }
 
 export interface ChatChoice {
@@ -51,6 +57,10 @@ export interface ChatUsage {
   completion_tokens: number;
   total_tokens: number;
   num_sources_used?: number; // Live Search sources used
+  // Anthropic prompt caching — populated on anthropic/* models when cache
+  // headers are sent. Reads are cheaper; writes incur a one-time surcharge.
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
 }
 
 export interface ChatResponse {
@@ -68,13 +78,21 @@ export interface Model {
   name: string;
   provider: string;
   description: string;
+  /** Per 1M tokens. 0 when billingMode !== "paid". */
   inputPrice: number;
+  /** Per 1M tokens. 0 when billingMode !== "paid". */
   outputPrice: number;
   contextWindow: number;
   maxOutput: number;
   categories: string[];
   available: boolean;
   type?: "llm" | "image"; // For listAllModels()
+  /** One of "paid" (per-token), "flat" (flatPrice per request) or "free". */
+  billingMode?: "paid" | "flat" | "free";
+  /** Flat per-request price when billingMode === "flat". */
+  flatPrice?: number;
+  /** True for deprecated/superseded models that remain routable. */
+  hidden?: boolean;
 }
 
 // Image generation types
@@ -660,6 +678,97 @@ export interface XAuthorAnalyticsResponse {
 
 export interface XCompareAuthorsResponse {
   data: Record<string, unknown>;
+}
+
+// Pyth-backed market-data types (crypto/fx/commodity/usstock/stocks).
+
+export type PriceCategory = "crypto" | "fx" | "commodity" | "usstock" | "stocks";
+export type StockMarket =
+  | "us" | "hk" | "jp" | "kr" | "gb" | "de"
+  | "fr" | "nl" | "ie" | "lu" | "cn" | "ca";
+export type BarResolution = "1" | "5" | "15" | "60" | "240" | "D" | "W" | "M";
+export type MarketSession = "pre" | "post" | "on";
+
+export interface PricePoint {
+  symbol: string;
+  price: number;
+  publishTime?: number; // unix seconds
+  confidence?: number;
+  feedId?: string;
+  timestamp?: string;
+  assetType?: string;
+  category?: string;
+  source?: string;
+  free?: boolean;
+}
+
+export interface PriceBar {
+  t?: number; // bar open (unix seconds)
+  o?: number;
+  h?: number;
+  l?: number;
+  c?: number;
+  v?: number;
+}
+
+export interface PriceHistoryResponse {
+  symbol: string;
+  resolution?: string;
+  from?: number;
+  to?: number;
+  bars: PriceBar[];
+  source?: string;
+  category?: string;
+}
+
+export interface SymbolListResponse {
+  symbols: Array<Record<string, unknown>>;
+  count?: number;
+}
+
+export interface PriceOptions {
+  /** Required when category === "stocks". */
+  market?: StockMarket;
+  /** Optional US-equity session hint; ignored for non-equity. */
+  session?: MarketSession;
+}
+
+export interface HistoryOptions extends PriceOptions {
+  /** TradingView-style bar resolution. Defaults to "D". */
+  resolution?: BarResolution;
+  /** Window start, unix seconds (required). */
+  from: number;
+  /** Window end, unix seconds. Defaults to now on the backend. */
+  to?: number;
+}
+
+export interface ListOptions extends PriceOptions {
+  /** Free-text filter (maps to ?q=). */
+  query?: string;
+  /** Page size, capped at 2000. Defaults to 100. */
+  limit?: number;
+}
+
+// Client option bags for the new standalone clients.
+
+export interface SearchClientOptions {
+  privateKey?: `0x${string}` | string;
+  apiUrl?: string;
+  timeout?: number;
+}
+
+export interface XClientOptions {
+  privateKey?: `0x${string}` | string;
+  apiUrl?: string;
+  timeout?: number;
+}
+
+export interface PriceClientOptions {
+  privateKey?: `0x${string}` | string;
+  apiUrl?: string;
+  timeout?: number;
+  /** If false, construction succeeds without a wallet (free endpoints only). */
+  requireWallet?: boolean;
 }
 
 export class BlockrunError extends Error {
