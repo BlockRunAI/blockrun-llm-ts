@@ -288,6 +288,70 @@ const r2 = await client.generate('the subject turns and smiles', {
 });
 ```
 
+### Standalone Search
+
+`SearchClient` wraps `POST /v1/search` — standalone Grok Live Search.
+Pricing: `$0.025/source + margin` (10 sources ≈ `$0.26`).
+
+```ts
+import { SearchClient } from '@blockrun/llm';
+
+const client = new SearchClient();
+const result = await client.search('Latest news on x402 adoption', {
+  sources: ['x', 'web'],
+  maxResults: 10,
+});
+console.log(result.summary);
+for (const url of result.citations ?? []) console.log(url);
+```
+
+### X/Twitter (AttentionVC)
+
+`XClient` covers the full `/v1/x/*` endpoint family — previously the `X*`
+types were exported but there was no client to call them with.
+
+```ts
+import { XClient } from '@blockrun/llm';
+
+const x = new XClient();
+const info = await x.userInfo('elonmusk');
+const followers = await x.followers('paulg');
+const results = await x.search('x402 micropayments', { queryType: 'Latest' });
+const tweets = await x.userTweets({ username: 'vitalikbuterin', includeReplies: false });
+```
+
+Methods: `userLookup`, `userInfo`, `followers`, `following`, `followings`,
+`verifiedFollowers`, `userTweets`, `mentions`, `tweetLookup`, `tweetReplies`,
+`tweetThread`, `search`, `trending`, `articlesRising`.
+
+### Market Data (Pyth)
+
+`PriceClient` wraps the Pyth-backed market-data endpoints. Crypto, FX and
+commodity are fully free (price + history + list); 12 global stock markets
+and the `usstock` legacy alias charge `$0.001` for price + history (list is
+always free). Pass `requireWallet: false` to construct a free-only client.
+
+```ts
+import { PriceClient } from '@blockrun/llm';
+
+const p = new PriceClient({ requireWallet: false });
+const btc = await p.price('crypto', 'BTC-USD');
+const eur = await p.price('fx', 'EUR-USD');
+
+// Paid — requires a wallet
+const p2 = new PriceClient();
+const aapl = await p2.price('stocks', 'AAPL', { market: 'us' });
+const bars = await p2.history('stocks', 'AAPL', {
+  market: 'us',
+  resolution: 'D',
+  from: 1700000000,
+  to: 1710000000,
+});
+const symbols = await p.listSymbols('crypto', { query: 'sol', limit: 20 });
+```
+
+Supported `StockMarket` values: `us, hk, jp, kr, gb, de, fr, nl, ie, lu, cn, ca`.
+
 ### Testnet Models (Base Sepolia)
 | Model | Price |
 |-------|-------|
