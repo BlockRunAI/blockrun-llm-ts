@@ -32,6 +32,15 @@
 export { LLMClient, testnetClient, default } from "./client";
 export { ImageClient } from "./image";
 export { MusicClient } from "./music";
+export { SearchClient } from "./search";
+export {
+  XClient,
+  type XUserTweetsOptions,
+  type XMentionsOptions,
+  type XTweetRepliesOptions,
+  type XSearchOptions,
+} from "./x-client";
+export { PriceClient } from "./price";
 export {
   type ChatMessage,
   type ChatChoice,
@@ -107,6 +116,22 @@ export {
   type XArticlesRisingResponse,
   type XAuthorAnalyticsResponse,
   type XCompareAuthorsResponse,
+  // Pyth market-data types
+  type PriceCategory,
+  type StockMarket,
+  type BarResolution,
+  type MarketSession,
+  type PricePoint,
+  type PriceBar,
+  type PriceHistoryResponse,
+  type SymbolListResponse,
+  type PriceOptions,
+  type HistoryOptions,
+  type ListOptions,
+  // New client option bags
+  type SearchClientOptions,
+  type XClientOptions,
+  type PriceClientOptions,
   // Error classes
   BlockrunError,
   PaymentError,
