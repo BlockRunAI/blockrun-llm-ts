@@ -1025,7 +1025,10 @@ export class LLMClient {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const data = (await response.json()) as { data?: any[] };
-    // Map API response to SDK Model interface
+    // Map API response to SDK Model interface. The /v1/models route emits
+    // snake_case keys and nests pricing ({ input, output } or { flat }), so
+    // this layer normalises both shapes and preserves the newer metadata
+    // fields (billingMode, flatPrice, hidden) when the backend forwards them.
     return (data.data || []).map((m) => ({
       id: m.id,
       name: m.name || m.id,
@@ -1037,6 +1040,9 @@ export class LLMClient {
       maxOutput: m.maxOutput ?? m.max_output ?? 0,
       categories: m.categories || [],
       available: true,
+      billingMode: m.billingMode ?? m.billing_mode,
+      flatPrice: m.flatPrice ?? m.flat_price ?? m.pricing?.flat,
+      hidden: m.hidden,
     }));
   }
 
