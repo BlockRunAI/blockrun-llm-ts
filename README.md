@@ -103,7 +103,7 @@ const client = new LLMClient();
 // Auto-routes to cheapest capable model
 const result = await client.smartChat('What is 2+2?');
 console.log(result.response);     // '4'
-console.log(result.model);        // 'nvidia/kimi-k2.5' (cheap, fast)
+console.log(result.model);        // 'moonshot/kimi-k2.5' (cheap, fast)
 console.log(`Saved ${(result.routing.savings * 100).toFixed(0)}%`); // 'Saved 78%'
 
 // Complex reasoning task -> routes to reasoning model
@@ -144,7 +144,7 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 
 | Tier | Example Tasks | Auto Profile Model |
 |------|---------------|-------------------|
-| SIMPLE | "What is 2+2?", definitions | nvidia/kimi-k2.5 |
+| SIMPLE | "What is 2+2?", definitions | moonshot/kimi-k2.5 |
 | MEDIUM | Code snippets, explanations | xai/grok-code-fast-1 |
 | COMPLEX | Architecture, long documents | google/gemini-3.1-pro |
 | REASONING | Proofs, multi-step reasoning | xai/grok-4-1-fast-reasoning |
@@ -236,11 +236,23 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 | `minimax/minimax-m2.7` | $0.30/M | $1.20/M |
 | `minimax/minimax-m2.5` | $0.30/M | $1.20/M |
 
-### NVIDIA (Free & Hosted)
+### NVIDIA (Free) + Moonshot
+
+Free tier refreshed 2026-04-21: retired the Nemotron family, `mistral-large-3-675b`,
+`devstral-2-123b`, and paid `nvidia/kimi-k2.5`. The backend auto-redirects the
+old IDs; the recommended replacements are listed below.
+
 | Model | Input Price | Output Price | Notes |
 |-------|-------------|--------------|-------|
-| `nvidia/gpt-oss-120b` | **FREE** | **FREE** | OpenAI open-weight 120B (Apache 2.0) |
-| `nvidia/kimi-k2.5` | $0.60/M | $3.00/M | Moonshot 1T MoE with vision |
+| `nvidia/qwen3-next-80b-a3b-thinking` | **FREE** | **FREE** | Reasoning flagship — 116 tok/s, thinking mode |
+| `nvidia/mistral-small-4-119b` | **FREE** | **FREE** | Fastest free chat — 114 tok/s |
+| `nvidia/glm-4.7` | **FREE** | **FREE** | GLM-4.7 with thinking — 237 tok/s |
+| `nvidia/llama-4-maverick` | **FREE** | **FREE** | Llama 4 Maverick MoE |
+| `nvidia/qwen3-coder-480b` | **FREE** | **FREE** | Coding-optimised 480B MoE |
+| `nvidia/deepseek-v3.2` | **FREE** | **FREE** | DeepSeek V3.2 hosted |
+| `nvidia/gpt-oss-120b` | **FREE** | **FREE** | OpenAI open-weight 120B — 123 tok/s |
+| `nvidia/gpt-oss-20b` | **FREE** | **FREE** | OpenAI open-weight 20B — 155 tok/s |
+| `moonshot/kimi-k2.5` | $0.60/M | $3.00/M | Direct from Moonshot — replaces `nvidia/kimi-k2.5` |
 
 ### E2E Verified Models
 

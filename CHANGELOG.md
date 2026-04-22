@@ -2,6 +2,11 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## 1.8.1
+
+- **NVIDIA free-tier refresh (backend 2026-04-21).** README NVIDIA section now lists the 8 visible survivors + the two new models (`nvidia/qwen3-next-80b-a3b-thinking`, `nvidia/mistral-small-4-119b`), and points at `moonshot/kimi-k2.5` as the canonical replacement for the retired paid `nvidia/kimi-k2.5`. No SDK source changes — smart routing lives in `@blockrun/clawrouter` and will pick up the new catalogue on its next release.
+- Smart Routing example in the README renamed `nvidia/kimi-k2.5` → `moonshot/kimi-k2.5` in the sample output.
+
 ## 1.8.0
 
 - **New `SearchClient`** — wraps `POST /v1/search` (standalone Grok Live Search). $0.025 per source + margin, 1–50 sources per call.
