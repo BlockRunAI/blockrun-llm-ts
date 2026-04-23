@@ -41,8 +41,9 @@ import {
 
 const DEFAULT_API_URL = "https://blockrun.ai/api";
 const DEFAULT_MODEL = "google/nano-banana";
-// Available image models: openai/dall-e-3, openai/gpt-image-1,
-//   google/nano-banana, google/nano-banana-pro, zai/cogview-4
+// Available image models: openai/dall-e-3, openai/gpt-image-1, openai/gpt-image-2,
+//   google/nano-banana, google/nano-banana-pro, zai/cogview-4,
+//   xai/grok-imagine-image, xai/grok-imagine-image-pro, black-forest/flux-1.1-pro
 const DEFAULT_SIZE = "1024x1024";
 const DEFAULT_TIMEOUT = 120000; // Images take longer
 

@@ -2,6 +2,17 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## 1.9.0
+
+- **New image model: `openai/gpt-image-2`** (ChatGPT Images 2.0 — reasoning-driven, multilingual text rendering, character consistency, high-fidelity edits). Pricing $0.06 for 1024² / $0.12 for 1536×1024 or 1024×1536. Supports both `/v1/images/generations` and `/v1/images/image2image` edit endpoint. `gpt-image-1` remains available for legacy callers.
+- **New video models: 3 ByteDance Seedance variants** on `VideoClient` via `/v1/videos/generations` (routed through the token360 provider backend-side):
+  - `bytedance/seedance-1.5-pro` — $0.03/sec, 720p, 5s default (up to 10s), cheapest AI video on the gateway.
+  - `bytedance/seedance-2.0-fast` — $0.15/sec, ~60-80s gen time, sweet-spot price/quality.
+  - `bytedance/seedance-2.0` — $0.30/sec, 720p Pro quality.
+  All three support text-to-video and image-to-video, with server-side 85s hard cap on the polling loop. No SDK surface change — pass the new model ID to `VideoClient.generate()`.
+- `client.edit()` type narrowing widened to accept `"openai/gpt-image-1" | "openai/gpt-image-2"` per backend `EDIT_SUPPORTED_MODELS`.
+- README: new rows in Image/Video model tables, plus note on which edit models are supported.
+
 ## 1.8.1
 
 - **NVIDIA free-tier refresh (backend 2026-04-21).** README NVIDIA section now lists the 8 visible survivors + the two new models (`nvidia/qwen3-next-80b-a3b-thinking`, `nvidia/mistral-small-4-119b`), and points at `moonshot/kimi-k2.5` as the canonical replacement for the retired paid `nvidia/kimi-k2.5`. No SDK source changes — smart routing lives in `@blockrun/clawrouter` and will pick up the new catalogue on its next release.
