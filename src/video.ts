@@ -7,13 +7,21 @@
  * 2. Only the SIGNATURE is sent in the PAYMENT-SIGNATURE header
  * 3. BlockRun verifies the signature on-chain via Coinbase CDP facilitator
  *
+ * Async flow (client-polled):
+ *   POST /v1/videos/generations         -> 402 -> sign -> 202 { id, poll_url }
+ *   GET  /v1/videos/generations/{id}    -> loop until status=completed
+ *
+ * The client signs ONCE and replays the same PAYMENT-SIGNATURE on every poll.
+ * Settlement happens only on the first completed poll, so upstream failure or
+ * the caller giving up = zero charge.
+ *
  * Usage:
  *   import { VideoClient } from '@blockrun/llm';
  *
  *   const client = new VideoClient({ privateKey: '0x...' });
  *   const result = await client.generate('a red apple slowly spinning on a wooden table');
  *   console.log(result.data[0].url);            // permanent MP4 URL
- *   console.log(result.data[0].duration_seconds); // 8
+ *   console.log(result.data[0].duration_seconds);
  */
 
 import { privateKeyToAccount } from "viem/accounts";
@@ -23,6 +31,7 @@ import {
   type VideoResponse,
   type VideoGenerateOptions,
   type Spending,
+  type PaymentRequired,
   APIError,
   PaymentError,
 } from "./types";
@@ -39,21 +48,20 @@ import {
 
 const DEFAULT_API_URL = "https://blockrun.ai/api";
 const DEFAULT_MODEL = "xai/grok-imagine-video";
-// Available video models:
-//   xai/grok-imagine-video ($0.05/sec, 8s default)
-//   bytedance/seedance-1.5-pro ($0.03/sec, 720p, 5s default up to 10s)
-//   bytedance/seedance-2.0-fast ($0.15/sec, ~60-80s gen time)
-//   bytedance/seedance-2.0 ($0.30/sec, 720p Pro quality)
-const DEFAULT_TIMEOUT = 300_000; // video gen + polling up to 3 min
+// Per-HTTP-call timeout (submit or poll). Total budget for a generate() is
+// `DEFAULT_GENERATE_BUDGET_MS` below, independent of this.
+const DEFAULT_TIMEOUT = 120_000;
+const POLL_INTERVAL_MS = 5_000;
+const DEFAULT_GENERATE_BUDGET_MS = 300_000; // 5 min upstream budget
+// Advertised signed-auth window. Server default is 300s; we bump to 600s so
+// the signature stays valid across the async polling window.
+const MAX_TIMEOUT_SECONDS = 600;
 
 /**
  * BlockRun Video Generation Client.
  *
- * Generates 8-second MP4 clips using xAI's Grok Imagine Video with
- * automatic x402 micropayments on Base chain.
- *
- * Pricing: $0.05/second (default 8s -> $0.42/clip with margin).
- * Returned URLs are permanent (mirrored to BlockRun storage).
+ * Supports xAI Grok Imagine Video and ByteDance Seedance (1.5 Pro /
+ * 2.0 Fast / 2.0 Pro) with automatic x402 micropayments on Base.
  */
 export class VideoClient {
   private account: Account;
@@ -90,24 +98,16 @@ export class VideoClient {
   /**
    * Generate a short video clip from a text prompt (or text + image).
    *
-   * Blocks until the video is ready (30-120s typical).
+   * Submits an async job, then polls until the video is ready. Typical total
+   * wall-time is 60-180s. If upstream runs past the budget (default 5min),
+   * throws without charging.
    *
    * @param prompt - Text description of the video
    * @param options - Optional generation parameters
-   * @returns VideoResponse with the clip URL, duration, and upstream request_id
-   *
-   * @example Text-to-video
-   * const result = await client.generate('a hummingbird hovering near a red flower');
-   * console.log(result.data[0].url);
-   *
-   * @example Image-to-video
-   * const result = await client.generate('the subject turns and smiles', {
-   *   imageUrl: 'https://example.com/portrait.jpg',
-   * });
    */
   async generate(
     prompt: string,
-    options?: VideoGenerateOptions
+    options?: VideoGenerateOptions & { budgetMs?: number }
   ): Promise<VideoResponse> {
     const body: Record<string, unknown> = {
       model: options?.model || DEFAULT_MODEL,
@@ -116,55 +116,32 @@ export class VideoClient {
     if (options?.imageUrl) body.image_url = options.imageUrl;
     if (options?.durationSeconds !== undefined) body.duration_seconds = options.durationSeconds;
 
-    return this.requestWithPayment("/v1/videos/generations", body);
+    const budgetMs = options?.budgetMs ?? DEFAULT_GENERATE_BUDGET_MS;
+    return this.submitAndPoll(body, budgetMs);
   }
 
-  private async requestWithPayment(
-    endpoint: string,
-    body: Record<string, unknown>
-  ): Promise<VideoResponse> {
-    const url = `${this.apiUrl}${endpoint}`;
+  // --------------------------------------------------------------------
+  // Internal: async submit + poll
+  // --------------------------------------------------------------------
 
-    const response = await this.fetchWithTimeout(url, {
+  private async submitAndPoll(
+    body: Record<string, unknown>,
+    budgetMs: number
+  ): Promise<VideoResponse> {
+    const submitUrl = `${this.apiUrl}/v1/videos/generations`;
+
+    // Step 1: 402 with payment requirements
+    const resp402 = await this.fetchWithTimeout(submitUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
 
-    if (response.status === 402) {
-      return this.handlePaymentAndRetry(url, body, response);
+    if (resp402.status !== 402) {
+      await this.throwApiError(resp402, "Expected 402 on first POST");
     }
 
-    if (!response.ok) {
-      let errorBody: unknown;
-      try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
-      throw new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(errorBody));
-    }
-
-    return response.json() as Promise<VideoResponse>;
-  }
-
-  private async handlePaymentAndRetry(
-    url: string,
-    body: Record<string, unknown>,
-    response: Response
-  ): Promise<VideoResponse> {
-    let paymentHeader = response.headers.get("payment-required");
-
-    if (!paymentHeader) {
-      try {
-        const respBody = (await response.json()) as Record<string, unknown>;
-        if (respBody.x402 || respBody.accepts) {
-          paymentHeader = btoa(JSON.stringify(respBody));
-        }
-      } catch { /* ignore */ }
-    }
-
-    if (!paymentHeader) {
-      throw new PaymentError("402 response but no payment requirements found");
-    }
-
-    const paymentRequired = parsePaymentRequired(paymentHeader);
+    const paymentRequired = await this.extractPaymentRequired(resp402);
     const details = extractPaymentDetails(paymentRequired);
 
     const paymentPayload = await createPaymentPayload(
@@ -174,14 +151,16 @@ export class VideoClient {
       details.amount,
       details.network || "eip155:8453",
       {
-        resourceUrl: details.resource?.url || `${this.apiUrl}/v1/videos/generations`,
+        resourceUrl: details.resource?.url || submitUrl,
         resourceDescription: details.resource?.description || "BlockRun Video Generation",
-        maxTimeoutSeconds: details.maxTimeoutSeconds || 300,
+        // Ensure signed auth covers the entire polling window.
+        maxTimeoutSeconds: Math.max(details.maxTimeoutSeconds || 0, MAX_TIMEOUT_SECONDS),
         extra: details.extra,
       }
     );
 
-    const retryResponse = await this.fetchWithTimeout(url, {
+    // Step 2: submit with payment -> 202 { id, poll_url }
+    const submitResp = await this.fetchWithTimeout(submitUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -190,27 +169,122 @@ export class VideoClient {
       body: JSON.stringify(body),
     });
 
-    if (retryResponse.status === 402) {
+    if (submitResp.status === 402) {
       throw new PaymentError("Payment was rejected. Check your wallet balance.");
     }
-
-    if (!retryResponse.ok) {
-      let errorBody: unknown;
-      try { errorBody = await retryResponse.json(); } catch { errorBody = { error: "Request failed" }; }
-      throw new APIError(`API error after payment: ${retryResponse.status}`, retryResponse.status, sanitizeErrorResponse(errorBody));
+    if (submitResp.status !== 200 && submitResp.status !== 202) {
+      await this.throwApiError(submitResp, "Submit failed");
     }
 
-    const data = (await retryResponse.json()) as VideoResponse;
+    const submitData = (await submitResp.json()) as {
+      id?: string;
+      poll_url?: string;
+      status?: string;
+    };
+    if (!submitData.id || !submitData.poll_url) {
+      throw new APIError(
+        "Submit response missing id/poll_url",
+        submitResp.status,
+        { response: submitData }
+      );
+    }
 
-    // Track spending (best-effort estimate based on default 8s duration)
-    const billedSeconds = typeof body.duration_seconds === "number" ? body.duration_seconds : 8;
-    this.sessionCalls++;
-    this.sessionTotalUsd += 0.05 * billedSeconds * 1.05;
+    const pollUrl = this.absolute(submitData.poll_url);
 
-    const txHash = retryResponse.headers.get("x-payment-receipt") || retryResponse.headers.get("X-Payment-Receipt");
-    if (txHash) data.txHash = txHash;
+    // Step 3: poll with the same PAYMENT-SIGNATURE until completed
+    const deadline = Date.now() + budgetMs;
+    let lastStatus = submitData.status || "queued";
 
-    return data;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+
+      const pollResp = await this.fetchWithTimeout(pollUrl, {
+        method: "GET",
+        headers: { "PAYMENT-SIGNATURE": paymentPayload },
+      });
+
+      let pollData: Record<string, unknown> = {};
+      try {
+        pollData = (await pollResp.json()) as Record<string, unknown>;
+      } catch {
+        /* keep empty */
+      }
+
+      lastStatus = (pollData.status as string) || lastStatus;
+
+      if (pollResp.status === 202 && (lastStatus === "queued" || lastStatus === "in_progress")) {
+        continue;
+      }
+
+      if (lastStatus === "failed") {
+        throw new APIError(
+          `Upstream generation failed: ${(pollData.error as string) || "unknown"}`,
+          pollResp.status,
+          sanitizeErrorResponse(pollData)
+        );
+      }
+
+      if (pollResp.status === 200 && lastStatus === "completed") {
+        const data = pollData as unknown as VideoResponse;
+        const billedSeconds =
+          typeof body.duration_seconds === "number" ? body.duration_seconds : 8;
+        this.sessionCalls++;
+        this.sessionTotalUsd += 0.05 * billedSeconds * 1.05;
+        const txHash =
+          pollResp.headers.get("x-payment-receipt") ||
+          pollResp.headers.get("X-Payment-Receipt");
+        if (txHash) data.txHash = txHash;
+        return data;
+      }
+
+      if (pollResp.status !== 200 && pollResp.status !== 202 && pollResp.status !== 504) {
+        await this.throwApiError(pollResp, "Poll failed");
+      }
+      // 504 on poll = transient upstream hiccup; retry
+    }
+
+    throw new APIError(
+      `Video generation did not complete within ${Math.round(budgetMs / 1000)}s ` +
+        `(last status: ${lastStatus}). No payment was taken.`,
+      504,
+      { id: submitData.id, last_status: lastStatus }
+    );
+  }
+
+  private absolute(url: string): string {
+    if (url.startsWith("http://") || url.startsWith("https://")) return url;
+    const base = this.apiUrl.endsWith("/api")
+      ? this.apiUrl.slice(0, -"/api".length)
+      : this.apiUrl;
+    return `${base}${url}`;
+  }
+
+  private async extractPaymentRequired(resp: Response): Promise<PaymentRequired> {
+    const header = resp.headers.get("payment-required");
+    if (header) return parsePaymentRequired(header);
+    try {
+      const body = (await resp.json()) as Record<string, unknown>;
+      if (body && (body.x402Version !== undefined || body.accepts !== undefined)) {
+        return body as unknown as PaymentRequired;
+      }
+    } catch {
+      /* fall through */
+    }
+    throw new PaymentError("402 response but no payment requirements found");
+  }
+
+  private async throwApiError(resp: Response, prefix: string): Promise<never> {
+    let errorBody: unknown;
+    try {
+      errorBody = await resp.json();
+    } catch {
+      errorBody = { error: "Request failed" };
+    }
+    throw new APIError(
+      `${prefix}: HTTP ${resp.status}`,
+      resp.status,
+      sanitizeErrorResponse(errorBody)
+    );
   }
 
   private async fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {
