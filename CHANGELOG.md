@@ -2,6 +2,11 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## 1.11.0
+
+- **New flagship model: `openai/gpt-5.5`** (released 2026-04-23, first fully retrained base since GPT-4.5). 1M context, 128K output, native agent + computer use. Pricing $5.00 / $30.00 per 1M tokens. Catalog-only entry in the README; chat/completions surface unchanged — pass the model ID like any other.
+- Reconciles `VERSION` (was 1.9.0) with `package.json` (was 1.10.1); both now 1.11.0.
+
 ## 1.10.1
 
 - **`ImageClient` default timeout 120s → 200s.** The gateway's per-call OpenAI
