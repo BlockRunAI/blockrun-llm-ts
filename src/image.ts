@@ -45,7 +45,7 @@ const DEFAULT_MODEL = "google/nano-banana";
 //   google/nano-banana, google/nano-banana-pro, zai/cogview-4,
 //   xai/grok-imagine-image, xai/grok-imagine-image-pro, black-forest/flux-1.1-pro
 const DEFAULT_SIZE = "1024x1024";
-const DEFAULT_TIMEOUT = 120000; // Images take longer
+const DEFAULT_TIMEOUT = 200000; // gpt-image-2 at >=1536px can take ~180s server-side; 200s gives buffer
 
 /**
  * BlockRun Image Generation Client.
