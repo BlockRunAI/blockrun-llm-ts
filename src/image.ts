@@ -47,6 +47,12 @@ const DEFAULT_MODEL = "google/nano-banana";
 const DEFAULT_SIZE = "1024x1024";
 const DEFAULT_TIMEOUT = 200000; // gpt-image-2 at >=1536px can take ~180s server-side; 200s gives buffer
 
+// Async polling configuration. The server returns 202 + poll_url for slow
+// models (gpt-image-2 reasoning, grok-imagine-image-pro) that don't finish
+// inside the inline window. We poll the GET endpoint until status=completed.
+const POLL_INTERVAL_MS = 3_000;
+const POLL_MAX_DURATION_MS = 300_000; // 5 minutes — enough for the slowest known image model
+
 /**
  * BlockRun Image Generation Client.
  *
@@ -302,7 +308,110 @@ export class ImageClient {
       );
     }
 
-    return retryResponse.json() as Promise<ImageResponse>;
+    const responseBody = (await retryResponse.json()) as ImageResponse & {
+      status?: string;
+      id?: string;
+      poll_url?: string;
+      error?: string;
+    };
+
+    // Async path: server returned 202 (or 200 with status=queued) and a
+    // poll_url. Slow models (gpt-image-2 reasoning, grok-imagine-image-pro)
+    // need this so we don't get cut by Cloudflare's 100s edge timeout. Poll
+    // the GET endpoint with the same payment header until status=completed.
+    if (
+      retryResponse.status === 202 ||
+      responseBody.status === "queued" ||
+      responseBody.status === "in_progress"
+    ) {
+      if (!responseBody.poll_url) {
+        throw new APIError(
+          `Server returned ${retryResponse.status} but no poll_url to follow.`,
+          retryResponse.status,
+          sanitizeErrorResponse(responseBody)
+        );
+      }
+      return this.pollImageJob(responseBody.poll_url, paymentPayload);
+    }
+
+    return responseBody;
+  }
+
+  /**
+   * Poll the async image generation endpoint until the job reaches a terminal
+   * state (completed/failed). Used when the POST returns 202 + poll_url for
+   * slow models that exceeded the server's inline window.
+   *
+   * Sends the SAME payment header on every poll — the server binds the payer
+   * to the job id and re-verifies on each call. Settlement happens server-side
+   * on the first poll where status=completed.
+   */
+  private async pollImageJob(
+    pollPath: string,
+    paymentHeader: string
+  ): Promise<ImageResponse> {
+    // pollPath looks like "/api/v1/images/generations/{jobId}" — resolve it
+    // against the API base. apiUrl already includes "/api"; if the path
+    // starts with "/api/", strip the duplicate prefix.
+    const pollUrl = pollPath.startsWith("/api/")
+      ? `${this.apiUrl.replace(/\/api$/, "")}${pollPath}`
+      : `${this.apiUrl}${pollPath.startsWith("/") ? "" : "/"}${pollPath}`;
+
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < POLL_MAX_DURATION_MS) {
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+
+      const pollResp = await this.fetchWithTimeout(pollUrl, {
+        method: "GET",
+        headers: {
+          "PAYMENT-SIGNATURE": paymentHeader,
+          "X-PAYMENT": paymentHeader,
+        },
+      });
+
+      // 202 = still queued/in_progress; keep polling.
+      if (pollResp.status === 202) {
+        continue;
+      }
+
+      const pollBody = (await pollResp.json().catch(() => ({}))) as ImageResponse & {
+        status?: string;
+        error?: string;
+      };
+
+      if (!pollResp.ok) {
+        throw new APIError(
+          `API error during poll: ${pollResp.status}`,
+          pollResp.status,
+          sanitizeErrorResponse(pollBody)
+        );
+      }
+
+      if (pollBody.status === "failed") {
+        throw new APIError(
+          pollBody.error || "Upstream image generation failed",
+          200,
+          sanitizeErrorResponse(pollBody)
+        );
+      }
+
+      // Terminal success: route returns the legacy { created, data } shape
+      // when the job is completed (and settled).
+      if (pollBody.data) {
+        return pollBody as ImageResponse;
+      }
+
+      // Defensive: body wasn't terminal and wasn't 202 — keep polling.
+      if (pollBody.status === "queued" || pollBody.status === "in_progress") {
+        continue;
+      }
+    }
+
+    throw new APIError(
+      `Image generation poll timed out after ${POLL_MAX_DURATION_MS / 1000}s`,
+      504,
+      { error: "poll_timeout", poll_url: pollPath }
+    );
   }
 
   /**
