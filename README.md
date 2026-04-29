@@ -1,6 +1,8 @@
 # @blockrun/llm (TypeScript SDK)
 
 > **@blockrun/llm** is a TypeScript/Node.js SDK for accessing 41+ large language models (GPT-5, Claude, Gemini, Grok, DeepSeek, Kimi, and more) with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required — your wallet signature is your authentication. Supports **streaming**, smart routing, Base and Solana chains.
+>
+> 🆓 **Includes 8 fully-free NVIDIA-hosted models** (Qwen3, Llama 4, GLM-4.7, GPT-OSS, DeepSeek V3.2, Mistral) — zero USDC, no rate-limit gimmicks. Use `routingProfile: 'free'` or call any `nvidia/*` model directly.
 
 [![npm](https://img.shields.io/npm/v/@blockrun/llm.svg)](https://www.npmjs.com/package/@blockrun/llm)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -38,6 +40,26 @@ const response = await client.chat('openai/gpt-4o', 'Hello!');
 ```
 
 That's it. The SDK handles x402 payment automatically.
+
+### Try It Free (No USDC Required)
+
+Want to kick the tires before funding a wallet? Route to BlockRun's free NVIDIA tier:
+
+```typescript
+import { LLMClient } from '@blockrun/llm';
+
+const client = new LLMClient();  // Wallet still required for signing, but $0 charged
+
+// Option 1: call a free model directly
+const reply = await client.chat('nvidia/qwen3-next-80b-a3b-thinking', 'Explain x402 in 1 sentence');
+
+// Option 2: let the smart router pick the best free model per request
+const result = await client.smartChat('What is 2+2?', { routingProfile: 'free' });
+console.log(result.model);     // e.g. 'nvidia/gpt-oss-120b'
+console.log(result.response);  // '4'
+```
+
+Free models include `nvidia/qwen3-next-80b-a3b-thinking`, `nvidia/glm-4.7`, `nvidia/llama-4-maverick`, `nvidia/qwen3-coder-480b`, `nvidia/deepseek-v3.2`, `nvidia/gpt-oss-120b`, `nvidia/gpt-oss-20b`, `nvidia/mistral-small-4-119b`. See the [NVIDIA (Free) + Moonshot](#nvidia-free--moonshot) table for full specs.
 
 ## Quick Start (Solana)
 
@@ -115,7 +137,7 @@ console.log(complex.model);  // 'xai/grok-4-1-fast-reasoning'
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `free` | nvidia/gpt-oss-120b only (FREE) | Testing, development |
+| `free` | NVIDIA free tier — smart-routes across 8 models (Qwen3, GLM-4.7, Llama 4, GPT-OSS, DeepSeek V3.2, Mistral) | Zero-cost testing, dev, prod |
 | `eco` | Cheapest models per tier (DeepSeek, xAI) | Cost-sensitive production |
 | `auto` | Best balance of cost/quality (default) | General use |
 | `premium` | Top-tier models (OpenAI, Anthropic) | Quality-critical tasks |
@@ -544,7 +566,7 @@ const premium = await client.smartChat('Write a legal brief', { routingProfile: 
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `free` | NVIDIA free models only | Testing, simple queries |
+| `free` | NVIDIA free tier (8 models, smart-routed) | Zero-cost testing, dev, prod |
 | `eco` | Budget-optimized | Cost-sensitive workloads |
 | `auto` | Intelligent routing (default) | General use |
 | `premium` | Best quality models | Critical tasks |
