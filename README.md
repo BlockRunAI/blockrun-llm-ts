@@ -2,7 +2,7 @@
 
 > **@blockrun/llm** is a TypeScript/Node.js SDK for accessing 41+ large language models (GPT-5, Claude, Gemini, Grok, DeepSeek, Kimi, and more) with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required — your wallet signature is your authentication. Supports **streaming**, smart routing, Base and Solana chains.
 >
-> 🆓 **Includes 8 fully-free NVIDIA-hosted models** (Qwen3, Llama 4, GLM-4.7, GPT-OSS, DeepSeek V3.2, Mistral) — zero USDC, no rate-limit gimmicks. Use `routingProfile: 'free'` or call any `nvidia/*` model directly.
+> 🆓 **Includes 9 fully-free NVIDIA-hosted models** — DeepSeek V4 Pro/Flash (1M context), Nemotron Nano Omni (vision), Qwen3, Llama 4, GLM-4.7, Mistral. Zero USDC, no rate-limit gimmicks. Use `routingProfile: 'free'` or call any `nvidia/*` model directly.
 
 [![npm](https://img.shields.io/npm/v/@blockrun/llm.svg)](https://www.npmjs.com/package/@blockrun/llm)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -55,22 +55,25 @@ const reply = await client.chat('nvidia/qwen3-next-80b-a3b-thinking', 'Explain x
 
 // Option 2: let the smart router pick the best free model per request
 const result = await client.smartChat('What is 2+2?', { routingProfile: 'free' });
-console.log(result.model);     // e.g. 'nvidia/gpt-oss-120b'
+console.log(result.model);     // e.g. 'nvidia/deepseek-v4-flash' (cheapest capable for SIMPLE tier)
 console.log(result.response);  // '4'
 ```
 
-**Available free models** (input + output both $0, all NVIDIA-hosted, last refreshed 2026-04-21):
+**Available free models** (input + output both $0, all NVIDIA-hosted, last refreshed 2026-04-28):
 
-| Model ID | Context | Speed | Best For |
-|----------|---------|-------|----------|
-| `nvidia/qwen3-next-80b-a3b-thinking` | 131K | 116 tok/s | Reasoning flagship — thinking mode |
-| `nvidia/mistral-small-4-119b` | 131K | 114 tok/s | Fastest free chat |
-| `nvidia/glm-4.7` | 131K | 237 tok/s | GLM-4.7 with thinking mode |
-| `nvidia/llama-4-maverick` | 131K | — | Meta Llama 4 Maverick MoE |
-| `nvidia/qwen3-coder-480b` | 131K | — | Coding-optimised 480B MoE |
-| `nvidia/deepseek-v3.2` | 131K | — | DeepSeek V3.2 hosted |
-| `nvidia/gpt-oss-120b` | 128K | 123 tok/s | OpenAI open-weight 120B |
-| `nvidia/gpt-oss-20b` | 128K | 155 tok/s | OpenAI open-weight 20B (smallest, fastest) |
+| Model ID | Context | Best For |
+|----------|---------|----------|
+| `nvidia/deepseek-v4-pro` | 1M | Flagship reasoning — MMLU-Pro 87.5, GPQA 90.1, SWE-bench 80.6, LiveCodeBench 93.5 |
+| `nvidia/deepseek-v4-flash` | 1M | ~5× faster than V4 Pro — chat, summarization, light reasoning (weaker factual recall) |
+| `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Only vision-capable free model — text + images + video (≤2 min) + audio (≤1 hr) |
+| `nvidia/qwen3-next-80b-a3b-thinking` | 131K | 116 tok/s reasoning with thinking mode |
+| `nvidia/mistral-small-4-119b` | 131K | 114 tok/s — fastest free chat |
+| `nvidia/glm-4.7` | 131K | 237 tok/s — GLM-4.7 with thinking mode |
+| `nvidia/llama-4-maverick` | 131K | Meta Llama 4 Maverick MoE |
+| `nvidia/qwen3-coder-480b` | 131K | Coding-optimised 480B MoE |
+| `nvidia/deepseek-v3.2` | 131K | Legacy V3.2 — auto-upgrades to V4 Pro via fallback |
+
+> Note: `nvidia/gpt-oss-120b` and `nvidia/gpt-oss-20b` were retired 2026-04-28 — NVIDIA's free build.nvidia.com tier reserves the right to use prompts/outputs for service improvement, which conflicts with our data-privacy policy.
 
 ## Quick Start (Solana)
 
@@ -148,7 +151,7 @@ console.log(complex.model);  // 'xai/grok-4-1-fast-reasoning'
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `free` | NVIDIA free tier — smart-routes across 8 models (Qwen3, GLM-4.7, Llama 4, GPT-OSS, DeepSeek V3.2, Mistral) | Zero-cost testing, dev, prod |
+| `free` | NVIDIA free tier — smart-routes across 9 models (DeepSeek V4 Pro/Flash, Nemotron Nano Omni, Qwen3, GLM-4.7, Llama 4, Mistral) | Zero-cost testing, dev, prod |
 | `eco` | Cheapest models per tier (DeepSeek, xAI) | Cost-sensitive production |
 | `auto` | Best balance of cost/quality (default) | General use |
 | `premium` | Top-tier models (OpenAI, Anthropic) | Quality-critical tasks |
@@ -278,20 +281,23 @@ Released 2026-04-23 — first fully retrained base since GPT-4.5. 1M context, 12
 
 ### NVIDIA (Free) + Moonshot
 
-Free tier refreshed 2026-04-21: retired the Nemotron family, `mistral-large-3-675b`,
-`devstral-2-123b`, and paid `nvidia/kimi-k2.5`. The backend auto-redirects the
-old IDs; the recommended replacements are listed below.
+Free tier refreshed 2026-04-28: added DeepSeek V4 Pro/Flash and Nemotron Nano
+Omni (vision); retired `nvidia/gpt-oss-120b` / `nvidia/gpt-oss-20b` over data
+privacy (NVIDIA's free build.nvidia.com tier reserves the right to use prompts
+for service improvement, which conflicts with our policy). Backend
+auto-redirects retired IDs to the replacements below.
 
 | Model | Input Price | Output Price | Notes |
 |-------|-------------|--------------|-------|
-| `nvidia/qwen3-next-80b-a3b-thinking` | **FREE** | **FREE** | Reasoning flagship — 116 tok/s, thinking mode |
-| `nvidia/mistral-small-4-119b` | **FREE** | **FREE** | Fastest free chat — 114 tok/s |
-| `nvidia/glm-4.7` | **FREE** | **FREE** | GLM-4.7 with thinking — 237 tok/s |
-| `nvidia/llama-4-maverick` | **FREE** | **FREE** | Llama 4 Maverick MoE |
+| `nvidia/deepseek-v4-pro` | **FREE** | **FREE** | 1.6T MoE / 49B active, 1M context — flagship reasoning (MMLU-Pro 87.5, GPQA 90.1) |
+| `nvidia/deepseek-v4-flash` | **FREE** | **FREE** | 284B / 13B active MoE, 1M context — ~5× faster than V4 Pro |
+| `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | **FREE** | **FREE** | 31B / 3.2B active MoE, 256K — only vision-capable free model |
+| `nvidia/qwen3-next-80b-a3b-thinking` | **FREE** | **FREE** | 116 tok/s — reasoning flagship with thinking mode |
+| `nvidia/mistral-small-4-119b` | **FREE** | **FREE** | 114 tok/s — fastest free chat |
+| `nvidia/glm-4.7` | **FREE** | **FREE** | 237 tok/s — GLM-4.7 with thinking mode |
+| `nvidia/llama-4-maverick` | **FREE** | **FREE** | Meta Llama 4 Maverick MoE |
 | `nvidia/qwen3-coder-480b` | **FREE** | **FREE** | Coding-optimised 480B MoE |
-| `nvidia/deepseek-v3.2` | **FREE** | **FREE** | DeepSeek V3.2 hosted |
-| `nvidia/gpt-oss-120b` | **FREE** | **FREE** | OpenAI open-weight 120B — 123 tok/s |
-| `nvidia/gpt-oss-20b` | **FREE** | **FREE** | OpenAI open-weight 20B — 155 tok/s |
+| `nvidia/deepseek-v3.2` | **FREE** | **FREE** | Legacy V3.2 — auto-upgrades to V4 Pro via fallback |
 | `moonshot/kimi-k2.5` | $0.60/M | $3.00/M | Direct from Moonshot — replaces `nvidia/kimi-k2.5` |
 
 ### E2E Verified Models
@@ -577,7 +583,7 @@ const premium = await client.smartChat('Write a legal brief', { routingProfile: 
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `free` | NVIDIA free tier (8 models, smart-routed) | Zero-cost testing, dev, prod |
+| `free` | NVIDIA free tier (9 models, smart-routed) | Zero-cost testing, dev, prod |
 | `eco` | Budget-optimized | Cost-sensitive workloads |
 | `auto` | Intelligent routing (default) | General use |
 | `premium` | Best quality models | Critical tasks |
