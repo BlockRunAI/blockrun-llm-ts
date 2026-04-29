@@ -2,6 +2,11 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## 1.12.1
+
+- **Moonshot flagship: `moonshot/kimi-k2.6`** — 256K context, vision + text, returns `reasoning_content`. Pricing $0.95 in / $4.00 out per 1M tokens. Available in the catalog (FEATURED on the homepage); `kimi-k2.5` is now hidden as superseded but remains routable for clients pinned to its pricing. Pass the model ID like any other to `chat.completions`. No SDK source changes — smart routing lives in `@blockrun/clawrouter` and will pick up the new catalog flagship on its next release.
+- README Moonshot section already lists `moonshot/kimi-k2.6` and `moonshot/kimi-k2.5` side-by-side.
+
 ## 1.11.0
 
 - **New flagship model: `openai/gpt-5.5`** (released 2026-04-23, first fully retrained base since GPT-4.5). 1M context, 128K output, native agent + computer use. Pricing $5.00 / $30.00 per 1M tokens. Catalog-only entry in the README; chat/completions surface unchanged — pass the model ID like any other.
