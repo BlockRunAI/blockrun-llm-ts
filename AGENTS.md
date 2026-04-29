@@ -4,12 +4,12 @@ Guidance for AI coding agents working with the BlockRun TypeScript SDK.
 
 ## Project Overview
 
-**@blockrun/llm** is a TypeScript SDK for pay-per-request access to AI models (GPT, Claude, Gemini, Grok) via x402 micropayments on Base and Solana.
+**@blockrun/llm** is a TypeScript SDK for pay-per-request access to AI models (GPT, Claude, Gemini, Grok) via x402 micropayments on Base and Solana. **Includes 8 fully-free NVIDIA-hosted models** (Qwen3, Llama 4, GLM-4.7, GPT-OSS, DeepSeek V3.2, Mistral) — accessible via `routingProfile: 'free'` or any `nvidia/*` model id.
 
 **Package:** `@blockrun/llm` (npm)
 **Node:** >=20
 **Networks:** Base (EVM) and Solana
-**Payment:** USDC via x402 v2
+**Payment:** USDC via x402 v2 (or $0 for `nvidia/*` free tier)
 
 ## Repository Structure
 
