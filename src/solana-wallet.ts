@@ -17,18 +17,17 @@ export interface SolanaWalletInfo {
 
 /**
  * Create a new Solana wallet.
- * Requires @solana/web3.js (optional dep).
+ * Requires @solana/web3.js (optional dep) — loaded lazily via dynamic
+ * import so callers that never touch Solana don't pay the resolution cost
+ * and ESM consumers don't trip over esbuild's __require shim.
  */
-export function createSolanaWallet(): { address: string; privateKey: string } {
-  // Use dynamic require for optional dep
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { Keypair } = require("@solana/web3.js");
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const bs58 = require("bs58");
+export async function createSolanaWallet(): Promise<{ address: string; privateKey: string }> {
+  const { Keypair } = await import("@solana/web3.js");
+  const bs58 = await import("bs58");
   const keypair = Keypair.generate();
   return {
     address: keypair.publicKey.toBase58(),
-    privateKey: bs58.default?.encode(keypair.secretKey) ?? bs58.encode(keypair.secretKey),
+    privateKey: (bs58.default ?? bs58).encode(keypair.secretKey),
   };
 }
 
@@ -158,7 +157,7 @@ export async function getOrCreateSolanaWallet(): Promise<SolanaWalletInfo> {
   }
 
   // 4. Create new wallet
-  const { address, privateKey } = createSolanaWallet();
+  const { address, privateKey } = await createSolanaWallet();
   saveSolanaWallet(privateKey);
   return { address, privateKey, isNew: true };
 }

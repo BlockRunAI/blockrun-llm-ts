@@ -2,6 +2,11 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## 1.13.0
+
+- **fix(solana): `createSolanaWallet` now uses `await import()` instead of `require()` for `@solana/web3.js` and `bs58`.** The previous CJS-style lazy require was wrapped by esbuild's `__require` shim during the ESM build, which threw `Dynamic require of "@solana/web3.js" is not supported` whenever an ESM consumer (e.g. Franklin under Node ≥ 20) called `franklin setup solana`. Switching to `await import()` matches the pattern already used by `solanaPublicKey` and `solanaKeyToBytes` in the same file. The optional-dep posture is preserved — `@solana/web3.js` and `bs58` are still loaded lazily.
+- **Breaking-ish:** `createSolanaWallet` is now `async` (returns `Promise<{ address, privateKey }>`). The only internal caller (`getOrCreateSolanaWallet`, already async) was updated. External callers using `createSolanaWallet` directly must add `await`. Bumped as a minor since `getOrCreateSolanaWallet` — the recommended API — is unchanged.
+
 ## 1.12.1
 
 - **Moonshot flagship: `moonshot/kimi-k2.6`** — 256K context, vision + text, returns `reasoning_content`. Pricing $0.95 in / $4.00 out per 1M tokens. Available in the catalog (FEATURED on the homepage); `kimi-k2.5` is now hidden as superseded but remains routable for clients pinned to its pricing. Pass the model ID like any other to `chat.completions`. No SDK source changes — smart routing lives in `@blockrun/clawrouter` and will pick up the new catalog flagship on its next release.
