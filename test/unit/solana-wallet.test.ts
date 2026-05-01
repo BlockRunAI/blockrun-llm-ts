@@ -8,8 +8,8 @@ import {
 const TEST_BS58_KEY = "5MaiiCavjCmn9Hs1o3eznqDEhRwxo7pXiAYez7keQUviQeRjpzKCY8trDwpvBMTKTpNFbCJsBZthJ4tCs6o62rr";
 
 describe("Solana Wallet", () => {
-  it("createSolanaWallet returns address and privateKey", () => {
-    const wallet = createSolanaWallet();
+  it("createSolanaWallet returns address and privateKey", async () => {
+    const wallet = await createSolanaWallet();
     expect(wallet.address).toMatch(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/); // base58
     expect(wallet.privateKey).toMatch(/^[1-9A-HJ-NP-Za-km-z]{86,88}$/); // bs58 64-byte key
   });
