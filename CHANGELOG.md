@@ -2,6 +2,22 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## 1.15.0
+
+- **Predexon v2 endpoints exposed via typed helpers.** All v2 endpoints went live in production on 2026-05-07 (`blockrun-web-00451-cnw`). The generic `pm()` / `pmQuery()` passthrough already routed them, but agents can now discover the new shape from method names + JSDoc. Ten new convenience methods on `LLMClient` — each is a thin wrapper, no breaking changes:
+  - **Canonical cross-venue (Tier 1):** `pmMarkets(params?)`, `pmListings(params?)`, `pmOutcome(predexonId)`. Predexon's unified data layer with cross-venue IDs across Polymarket, Kalshi, Limitless, Opinion, Predict.Fun.
+  - **Polymarket keyset pagination (Tier 1):** `pmPolymarketMarketsKeyset(params?)`, `pmPolymarketEventsKeyset(params?)` — cursor-based for stable traversal of large result sets.
+  - **Sports markets (Tier 1):** `pmSportsCategories()`, `pmSportsMarkets(params?)`.
+  - **Wallet identity & clustering (Tier 2):** `pmWalletIdentity(wallet)` (GET), `pmWalletIdentities(addresses)` (POST, up to 200), `pmWalletCluster(address)` (GET on-chain relationship graph).
+- `pm()` / `pmQuery()` JSDoc updated to advertise v2 examples and surface the Tier 1 / Tier 2 split inline.
+
+## 1.14.0
+
+- **DeepSeek V4 family in paid catalog.** Backend added `deepseek/deepseek-v4-pro` (1.6T MoE / 49B active, 1M context — strongest open-weight reasoner; MMLU-Pro 87.5, GPQA 90.1, SWE-bench 80.6, LiveCodeBench 93.5; **$0.50 in / $1.00 out per 1M under the 75% promo through 2026-05-31**, list $2.00/$4.00). The legacy `deepseek/deepseek-chat` and `deepseek/deepseek-reasoner` IDs are now V4 Flash non-thinking / thinking modes — repriced to **$0.20 in / $0.40 out per 1M, 1M context** (was $0.28/$0.42, 128K). Same upstream as `nvidia/deepseek-v4-flash` but on the paid endpoint with higher reliability and 5MB request bodies. No SDK source changes — `chat()` / `chatCompletion()` / smart routing pick up the new pricing automatically.
+- README refresh: DeepSeek pricing table now shows V4 Pro / V4 Flash chat / V4 Flash reasoner with correct prices and 1M context. NVIDIA free table notes that `gpt-oss-120b/20b` are hidden from `/v1/models` but still callable by direct ID (re-enabled 2026-04-30 after a brief privacy delisting); `V4 Pro` / `V3.2` / `glm-4.7` listed as hidden + redirect targets.
+- **`XClient` deprecated.** BlockRun's `/v1/x/*` (AttentionVC-partnered) integration was removed from the backend on 2026-04-30 (commit 80dcf52). The class is kept so existing imports do not break, but `new XClient()` now logs a one-time `console.warn` — all calls return HTTP 404 until a replacement upstream is wired up. JSDoc `@deprecated` tag added so editors flag use sites.
+- **DeepSeek V4 thinking + tool-call multi-turn now works.** Backend commit `f8a2d44` (2026-05-03) preserves `reasoning_content` on assistant messages with `tool_calls` for DeepSeek V4 thinking-mode (`deepseek-reasoner` / `deepseek-v4-pro`). The SDK `ChatMessage` interface already carried `reasoning_content?` and `thinking?` fields, so the fix is purely server-side; this entry exists so users seeing past 5xx-retry-loop failures know they're resolved.
+
 ## 1.13.0
 
 - **fix(solana): `createSolanaWallet` now uses `await import()` instead of `require()` for `@solana/web3.js` and `bs58`.** The previous CJS-style lazy require was wrapped by esbuild's `__require` shim during the ESM build, which threw `Dynamic require of "@solana/web3.js" is not supported` whenever an ESM consumer (e.g. Franklin under Node ≥ 20) called `franklin setup solana`. Switching to `await import()` matches the pattern already used by `solanaPublicKey` and `solanaKeyToBytes` in the same file. The optional-dep posture is preserved — `@solana/web3.js` and `bs58` are still loaded lazily.
