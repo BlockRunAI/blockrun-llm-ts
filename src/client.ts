@@ -1503,16 +1503,80 @@ export class LLMClient {
   /**
    * Structured query for Predexon prediction market data (POST endpoints).
    *
-   * For complex queries that require a JSON body. $0.005 per request.
+   * For endpoints that require a JSON body, e.g. bulk wallet identity lookup.
+   * Tier 1 = $0.001/call, Tier 2 = $0.005/call.
    *
-   * @param path - Endpoint path, e.g. "polymarket/query", "kalshi/query"
+   * @param path - Endpoint path, e.g. "polymarket/wallet/identities"
    * @param query - JSON body for the structured query
    *
    * @example
-   * const data = await client.pmQuery("polymarket/query", { filter: "active", limit: 10 });
+   * const batch = await client.pmQuery("polymarket/wallet/identities", {
+   *   addresses: ["0xabc...", "0xdef..."],
+   * });
    */
   async pmQuery(path: string, query: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.requestWithPaymentRaw(`/v1/pm/${path}`, query);
+  }
+
+  // ── PM convenience helpers (Predexon v2) ─────────────────────────────────
+  // Thin wrappers over pm() / pmQuery() for the most common v2 endpoints.
+
+  /** List canonical cross-venue markets (Predexon v2). Tier 1 ($0.001/call).
+   * Filter with venue, status, category, league, event_id, pagination_key. */
+  async pmMarkets(params?: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.pm("markets", params);
+  }
+
+  /** List venue-native executable listings flattened across canonical markets
+   * (Predexon v2). Tier 1 ($0.001/call). */
+  async pmListings(params?: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.pm("markets/listings", params);
+  }
+
+  /** Resolve a canonical Predexon outcome ID to its market context and venue
+   * listings. Tier 1 ($0.001/call). */
+  async pmOutcome(predexonId: string): Promise<Record<string, unknown>> {
+    return this.pm(`outcomes/${predexonId}`);
+  }
+
+  /** Polymarket markets with cursor-based keyset pagination (use pagination_key).
+   * Tier 1 ($0.001/call). */
+  async pmPolymarketMarketsKeyset(params?: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.pm("polymarket/markets/keyset", params);
+  }
+
+  /** Polymarket events with cursor-based keyset pagination (use pagination_key).
+   * Tier 1 ($0.001/call). */
+  async pmPolymarketEventsKeyset(params?: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.pm("polymarket/events/keyset", params);
+  }
+
+  /** List available sports categories. Tier 1 ($0.001/call). */
+  async pmSportsCategories(): Promise<Record<string, unknown>> {
+    return this.pm("sports/categories");
+  }
+
+  /** List sports markets grouped by game. Filter with league, sport_type,
+   * status, venue. Tier 1 ($0.001/call). */
+  async pmSportsMarkets(params?: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.pm("sports/markets", params);
+  }
+
+  /** Fetch identity + profile metadata for one wallet (ENS, Twitter, portfolio,
+   * etc.). Tier 2 ($0.005/call). */
+  async pmWalletIdentity(wallet: string): Promise<Record<string, unknown>> {
+    return this.pm(`polymarket/wallet/identity/${wallet}`);
+  }
+
+  /** Bulk identity lookup for up to 200 wallet addresses (POST). Tier 2 ($0.005/call). */
+  async pmWalletIdentities(addresses: string[]): Promise<Record<string, unknown>> {
+    return this.pmQuery("polymarket/wallet/identities", { addresses });
+  }
+
+  /** Discover wallets connected to a seed address via on-chain transfers and
+   * identity proofs. Tier 2 ($0.005/call). */
+  async pmWalletCluster(address: string): Promise<Record<string, unknown>> {
+    return this.pm(`polymarket/wallet/${address}/cluster`);
   }
 
   /**
