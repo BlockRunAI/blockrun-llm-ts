@@ -114,6 +114,7 @@ export function buildModelsResponse() {
         name: "GPT-4o",
         inputPrice: 2.5,
         outputPrice: 10.0,
+        categories: ["chat"],
       },
       {
         id: "anthropic/claude-sonnet-4.5",
@@ -121,6 +122,7 @@ export function buildModelsResponse() {
         name: "Claude Sonnet 4.5",
         inputPrice: 3.0,
         outputPrice: 15.0,
+        categories: ["chat"],
       },
       {
         id: "google/gemini-2.5-flash",
@@ -128,6 +130,7 @@ export function buildModelsResponse() {
         name: "Gemini 2.5 Flash",
         inputPrice: 0.15,
         outputPrice: 0.6,
+        categories: ["chat"],
       },
     ],
   };
@@ -198,6 +201,11 @@ export function wait(ms: number): Promise<void> {
 
 /**
  * Build a mock image models list response.
+ *
+ * Mirrors the unified `/v1/models` shape used by the backend after
+ * `/v1/images/models` was deprecated — image rows live in the same
+ * catalog, identified by `categories: ["image"]`. SDK normalisers
+ * accept either top-level `pricePerImage` or nested `pricing.flat`.
  */
 export function buildImageModelsResponse() {
   return {
@@ -209,6 +217,7 @@ export function buildImageModelsResponse() {
         pricePerImage: 0.01,
         supportedSizes: ["1024x1024", "512x512"],
         available: true,
+        categories: ["image"],
       },
       {
         id: "openai/dall-e-3",
@@ -217,7 +226,22 @@ export function buildImageModelsResponse() {
         pricePerImage: 0.04,
         supportedSizes: ["1024x1024", "1792x1024", "1024x1792"],
         available: true,
+        categories: ["image"],
       },
+    ],
+  };
+}
+
+/**
+ * Build a unified `/v1/models` response that mixes chat + image rows
+ * (the post-deprecation shape — image models no longer have their own
+ * endpoint). Used by listImageModels / listAllModels tests.
+ */
+export function buildUnifiedModelsResponse() {
+  return {
+    data: [
+      ...buildModelsResponse().data,
+      ...buildImageModelsResponse().data,
     ],
   };
 }

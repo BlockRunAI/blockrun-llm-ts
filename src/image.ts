@@ -43,7 +43,7 @@ const DEFAULT_API_URL = "https://blockrun.ai/api";
 const DEFAULT_MODEL = "google/nano-banana";
 // Available image models: openai/dall-e-3, openai/gpt-image-1, openai/gpt-image-2,
 //   google/nano-banana, google/nano-banana-pro, zai/cogview-4,
-//   xai/grok-imagine-image, xai/grok-imagine-image-pro, black-forest/flux-1.1-pro
+//   xai/grok-imagine-image, xai/grok-imagine-image-pro
 const DEFAULT_SIZE = "1024x1024";
 const DEFAULT_TIMEOUT = 200000; // gpt-image-2 at >=1536px can take ~180s server-side; 200s gives buffer
 
@@ -166,10 +166,15 @@ export class ImageClient {
 
   /**
    * List available image generation models with pricing.
+   *
+   * The dedicated `/v1/images/models` endpoint was deprecated server-side;
+   * image models live in the unified `/v1/models` catalog under
+   * `categories: ["image", ...]`. This method filters that catalog so
+   * existing callers keep working.
    */
   async listImageModels(): Promise<ImageModel[]> {
     const response = await this.fetchWithTimeout(
-      `${this.apiUrl}/v1/images/models`,
+      `${this.apiUrl}/v1/models`,
       { method: "GET" }
     );
 
@@ -180,8 +185,21 @@ export class ImageClient {
       );
     }
 
-    const data = (await response.json()) as { data?: ImageModel[] };
-    return data.data || [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = (await response.json()) as { data?: any[] };
+    return (data.data || [])
+      .filter((m) => Array.isArray(m.categories) && m.categories.includes("image"))
+      .map((m) => ({
+        id: m.id,
+        name: m.name || m.id,
+        provider: m.provider || m.owned_by || "",
+        description: m.description || "",
+        pricePerImage:
+          m.pricePerImage ?? m.price_per_image ?? m.pricing?.flat ?? m.flatPrice ?? m.flat_price ?? 0,
+        supportedSizes: m.supportedSizes ?? m.supported_sizes,
+        maxPromptLength: m.maxPromptLength ?? m.max_prompt_length,
+        available: true,
+      }));
   }
 
   /**

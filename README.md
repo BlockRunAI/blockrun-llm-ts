@@ -2,7 +2,7 @@
 
 > **@blockrun/llm** is a TypeScript/Node.js SDK for accessing 41+ large language models (GPT-5, Claude, Gemini, Grok, DeepSeek, Kimi, and more) with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required — your wallet signature is your authentication. Supports **streaming**, smart routing, Base and Solana chains.
 >
-> 🆓 **Includes 9 fully-free NVIDIA-hosted models** — DeepSeek V4 Pro/Flash (1M context), Nemotron Nano Omni (vision), Qwen3, Llama 4, GLM-4.7, Mistral. Zero USDC, no rate-limit gimmicks. Use `routingProfile: 'free'` or call any `nvidia/*` model directly.
+> 🆓 **Includes 8 fully-free NVIDIA-hosted models** (6 visible in `/v1/models`, 2 hidden but directly callable) — DeepSeek V4 Flash (1M context), Nemotron Nano Omni (vision), Qwen3, Llama 4, Mistral, plus the gpt-oss pair. Zero USDC, no rate-limit gimmicks. Use `routingProfile: 'free'` or call any `nvidia/*` model directly.
 
 [![npm](https://img.shields.io/npm/v/@blockrun/llm.svg)](https://www.npmjs.com/package/@blockrun/llm)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -63,17 +63,18 @@ console.log(result.response);  // '4'
 
 | Model ID | Context | Best For |
 |----------|---------|----------|
-| `nvidia/deepseek-v4-pro` | 1M | Flagship reasoning — MMLU-Pro 87.5, GPQA 90.1, SWE-bench 80.6, LiveCodeBench 93.5 |
-| `nvidia/deepseek-v4-flash` | 1M | ~5× faster than V4 Pro — chat, summarization, light reasoning (weaker factual recall) |
+| `nvidia/deepseek-v4-flash` | 1M | DeepSeek V4 Flash — 284B / 13B active MoE, ~5× faster than V4 Pro. Best free chat / summarization / light reasoning |
 | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Only vision-capable free model — text + images + video (≤2 min) + audio (≤1 hr) |
 | `nvidia/qwen3-next-80b-a3b-thinking` | 131K | 116 tok/s reasoning with thinking mode |
 | `nvidia/mistral-small-4-119b` | 131K | 114 tok/s — fastest free chat |
-| `nvidia/glm-4.7` | 131K | 237 tok/s — GLM-4.7 with thinking mode |
 | `nvidia/llama-4-maverick` | 131K | Meta Llama 4 Maverick MoE |
 | `nvidia/qwen3-coder-480b` | 131K | Coding-optimised 480B MoE |
-| `nvidia/deepseek-v3.2` | 131K | Legacy V3.2 — auto-upgrades to V4 Pro via fallback |
+| `nvidia/gpt-oss-120b` | 128K | OpenAI open-weight 120B — 123 tok/s. Hidden from `/v1/models` for privacy but direct calls still work |
+| `nvidia/gpt-oss-20b` | 128K | OpenAI open-weight 20B — 155 tok/s. Hidden from `/v1/models` but direct calls still work |
 
-> Note: `nvidia/gpt-oss-120b` and `nvidia/gpt-oss-20b` were retired 2026-04-28 — NVIDIA's free build.nvidia.com tier reserves the right to use prompts/outputs for service improvement, which conflicts with our data-privacy policy.
+> Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro` ($0.50/$1.00 with the 75% promo through 2026-05-31) — `nvidia/deepseek-v4-pro` is currently hidden because NVIDIA's NIM deployment is hung; backend MODEL_REDIRECTS forwards calls to V4 Flash.
+
+> Privacy note: `nvidia/gpt-oss-120b` and `nvidia/gpt-oss-20b` are hidden from `/v1/models` because NVIDIA's free build.nvidia.com tier reserves the right to use prompts/outputs for service improvement. Direct calls by full model ID still work — opt in only when your data isn't sensitive.
 
 ## Quick Start (Solana)
 
@@ -145,13 +146,33 @@ console.log(`Saved ${(result.routing.savings * 100).toFixed(0)}%`); // 'Saved 78
 // Complex reasoning task -> routes to reasoning model
 const complex = await client.smartChat('Prove the Riemann hypothesis step by step');
 console.log(complex.model);  // 'xai/grok-4-1-fast-reasoning'
+
+// Inspect the fallback chain SmartChat will walk on transient errors.
+console.log(complex.routing.fallbacks);  // ['anthropic/claude-opus-4.7', ...]
+```
+
+### Automatic Fallback on Transient Errors
+
+`smartChat()` populates a tier-specific fallback chain and `chat()` /
+`chatCompletion()` walk it automatically when the primary model returns a
+transient error — timeouts, network failures, or 5xx responses (502/503/504/
+522/524). 4xx errors and `PaymentError` propagate immediately so wallet /
+auth issues surface fast.
+
+```typescript
+// Manually pass a fallback chain to chat() / chatCompletion()
+const reply = await client.chat('nvidia/deepseek-v4-flash', 'hello', {
+  fallbackModels: ['nvidia/llama-4-maverick', 'nvidia/mistral-small-4-119b'],
+});
+// If deepseek-v4-flash times out, the SDK retries against the next model
+// and logs each hop to stderr: "[@blockrun/llm] <from> -> <to> (...)".
 ```
 
 ### Routing Profiles
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `free` | NVIDIA free tier — smart-routes across 9 models (DeepSeek V4 Pro/Flash, Nemotron Nano Omni, Qwen3, GLM-4.7, Llama 4, Mistral) | Zero-cost testing, dev, prod |
+| `free` | NVIDIA free tier — smart-routes across 8 models (DeepSeek V4 Flash, Nemotron Nano Omni, Qwen3, Llama 4, Mistral, plus 2 hidden gpt-oss) | Zero-cost testing, dev, prod |
 | `eco` | Cheapest models per tier (DeepSeek, xAI) | Cost-sensitive production |
 | `auto` | Best balance of cost/quality (default) | General use |
 | `premium` | Top-tier models (OpenAI, Anthropic) | Quality-critical tasks |
@@ -162,7 +183,7 @@ const result = await client.smartChat(
   'Write production-grade async TypeScript code',
   { routingProfile: 'premium' }
 );
-console.log(result.model);  // 'anthropic/claude-opus-4.5'
+console.log(result.model);  // 'anthropic/claude-opus-4.7'
 ```
 
 ### How ClawRouter Works
@@ -229,14 +250,15 @@ Released 2026-04-23 — first fully retrained base since GPT-4.5. 1M context, 12
 | `openai/o4-mini` | $1.10/M | $4.40/M |
 
 ### Anthropic Claude
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `anthropic/claude-opus-4.6` | $5.00/M | $25.00/M |
-| `anthropic/claude-opus-4.5` | $5.00/M | $25.00/M |
-| `anthropic/claude-opus-4` | $15.00/M | $75.00/M |
-| `anthropic/claude-sonnet-4.6` | $3.00/M | $15.00/M |
-| `anthropic/claude-sonnet-4` | $3.00/M | $15.00/M |
-| `anthropic/claude-haiku-4.5` | $1.00/M | $5.00/M |
+| Model | Input Price | Output Price | Context | Notes |
+|-------|-------------|--------------|---------|-------|
+| `anthropic/claude-opus-4.7` | $5.00/M | $25.00/M | **1M** | Flagship — agentic coding + adaptive thinking, 128K output |
+| `anthropic/claude-opus-4.6` | $5.00/M | $25.00/M | 200K | Hidden but still callable — kept as in-family hot-swap fallback |
+| `anthropic/claude-opus-4.5` | $5.00/M | $25.00/M | 200K | |
+| `anthropic/claude-opus-4` | $15.00/M | $75.00/M | 200K | |
+| `anthropic/claude-sonnet-4.6` | $3.00/M | $15.00/M | 200K | Best for reasoning/instructions |
+| `anthropic/claude-sonnet-4` | $3.00/M | $15.00/M | 200K | |
+| `anthropic/claude-haiku-4.5` | $1.00/M | $5.00/M | 200K | |
 
 ### Google Gemini
 | Model | Input Price | Output Price |
@@ -249,10 +271,17 @@ Released 2026-04-23 — first fully retrained base since GPT-4.5. 1M context, 12
 | `google/gemini-2.5-flash-lite` | $0.10/M | $0.40/M |
 
 ### DeepSeek
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `deepseek/deepseek-chat` | $0.28/M | $0.42/M |
-| `deepseek/deepseek-reasoner` | $0.28/M | $0.42/M |
+
+V4 family launched 2026-04-24. DeepSeek upstream now serves the legacy
+`deepseek-chat` / `deepseek-reasoner` aliases as V4 Flash non-thinking /
+thinking modes. V4 Pro is the new flagship paid SKU — 1.6T MoE / 49B active,
+1M context, MMLU-Pro 87.5, GPQA 90.1, SWE-bench 80.6, LiveCodeBench 93.5.
+
+| Model | Input Price | Output Price | Context | Notes |
+|-------|-------------|--------------|---------|-------|
+| `deepseek/deepseek-v4-pro` | $0.50/M | $1.00/M | 1M | V4 flagship — strongest open-weight reasoner. **75% off until 2026-05-31** (list $2.00/$4.00) |
+| `deepseek/deepseek-chat` | $0.20/M | $0.40/M | 1M | V4 Flash non-thinking (paid endpoint with 5MB request bodies; same upstream as `nvidia/deepseek-v4-flash`) |
+| `deepseek/deepseek-reasoner` | $0.20/M | $0.40/M | 1M | V4 Flash thinking (same upstream as `deepseek-chat`, thinking enabled by default) |
 
 ### xAI Grok
 | Model | Input Price | Output Price | Context | Notes |
@@ -281,23 +310,26 @@ Released 2026-04-23 — first fully retrained base since GPT-4.5. 1M context, 12
 
 ### NVIDIA (Free) + Moonshot
 
-Free tier refreshed 2026-04-28: added DeepSeek V4 Pro/Flash and Nemotron Nano
-Omni (vision); retired `nvidia/gpt-oss-120b` / `nvidia/gpt-oss-20b` over data
-privacy (NVIDIA's free build.nvidia.com tier reserves the right to use prompts
-for service improvement, which conflicts with our policy). Backend
-auto-redirects retired IDs to the replacements below.
+Free tier refreshed 2026-04-28: added `nvidia/deepseek-v4-flash` (1M context)
+and Nemotron Nano Omni (vision). `nvidia/gpt-oss-120b` and
+`nvidia/gpt-oss-20b` were briefly delisted over privacy concerns then
+**re-enabled 2026-04-30** with `available: true` + `hidden: true` — they
+no longer appear in `/v1/models` (so SmartChat won't auto-pick them) but
+direct calls by full ID still return HTTP 200. `nvidia/deepseek-v4-pro`,
+`nvidia/deepseek-v3.2`, and `nvidia/glm-4.7` are hidden because NVIDIA's
+NIM deployment is hung — backend MODEL_REDIRECTS forwards calls to V4
+Flash / qwen3-coder.
 
 | Model | Input Price | Output Price | Notes |
 |-------|-------------|--------------|-------|
-| `nvidia/deepseek-v4-pro` | **FREE** | **FREE** | 1.6T MoE / 49B active, 1M context — flagship reasoning (MMLU-Pro 87.5, GPQA 90.1) |
-| `nvidia/deepseek-v4-flash` | **FREE** | **FREE** | 284B / 13B active MoE, 1M context — ~5× faster than V4 Pro |
+| `nvidia/deepseek-v4-flash` | **FREE** | **FREE** | 284B / 13B active MoE, 1M context — best free chat / summarization / light reasoning |
 | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | **FREE** | **FREE** | 31B / 3.2B active MoE, 256K — only vision-capable free model |
 | `nvidia/qwen3-next-80b-a3b-thinking` | **FREE** | **FREE** | 116 tok/s — reasoning flagship with thinking mode |
 | `nvidia/mistral-small-4-119b` | **FREE** | **FREE** | 114 tok/s — fastest free chat |
-| `nvidia/glm-4.7` | **FREE** | **FREE** | 237 tok/s — GLM-4.7 with thinking mode |
 | `nvidia/llama-4-maverick` | **FREE** | **FREE** | Meta Llama 4 Maverick MoE |
 | `nvidia/qwen3-coder-480b` | **FREE** | **FREE** | Coding-optimised 480B MoE |
-| `nvidia/deepseek-v3.2` | **FREE** | **FREE** | Legacy V3.2 — auto-upgrades to V4 Pro via fallback |
+| `nvidia/gpt-oss-120b` | **FREE** | **FREE** | Hidden from `/v1/models` for privacy but direct calls still work — 123 tok/s |
+| `nvidia/gpt-oss-20b` | **FREE** | **FREE** | Hidden from `/v1/models` but direct calls still work — 155 tok/s |
 | `moonshot/kimi-k2.5` | $0.60/M | $3.00/M | Direct from Moonshot — replaces `nvidia/kimi-k2.5` |
 
 ### E2E Verified Models
@@ -323,7 +355,6 @@ All models below have been tested end-to-end via the TypeScript SDK (Feb 2026):
 | `openai/gpt-image-2` | $0.06-0.12/image (reasoning-driven, multilingual text rendering, character consistency) |
 | `google/nano-banana` | $0.05/image |
 | `google/nano-banana-pro` | $0.10-0.15/image |
-| `black-forest/flux-1.1-pro` | $0.04/image |
 | `xai/grok-imagine-image` | $0.02/image |
 | `xai/grok-imagine-image-pro` | $0.07/image |
 | `zai/cogview-4` | $0.015/image |
@@ -771,7 +802,7 @@ Works on both `LLMClient` (Base) and `SolanaLLMClient`.
 
 ## Exa Web Search (Powered by Exa)
 
-Access [Exa](https://exa.ai)'s neural web search via x402. No API keys needed — pay-per-request via Solana USDC. Available on `SolanaLLMClient` only.
+Access [Exa](https://exa.ai)'s neural web search via x402. No API keys needed — pay-per-request. Available on **`LLMClient` (Base USDC)** and `SolanaLLMClient` (Solana USDC). Use Base as the primary path; the Solana gateway is awaiting `EXA_API_KEY` provisioning.
 
 | Method | Description | Price |
 |---|---|---|
@@ -782,9 +813,9 @@ Access [Exa](https://exa.ai)'s neural web search via x402. No API keys needed �
 | `exa(path, body)` | Generic proxy for any Exa endpoint | varies |
 
 ```typescript
-import { SolanaLLMClient } from '@blockrun/llm';
+import { LLMClient } from '@blockrun/llm';
 
-const client = new SolanaLLMClient();
+const client = new LLMClient();
 
 // Neural web search ($0.01/request)
 const results = await client.exaSearch("latest AI safety research", { numResults: 5 });
@@ -795,10 +826,6 @@ const similar = await client.exaFindSimilar("https://openai.com/research/gpt-4",
 
 // Extract content from URLs ($0.002/URL)
 const content = await client.exaContents(["https://arxiv.org/abs/2303.08774"]);
-const rich = await client.exaContents(
-  ["https://example.com/page1", "https://example.com/page2"],
-  { text: true, highlights: true }
-);
 
 // AI-generated answer from live web ($0.01/request)
 const answer = await client.exaAnswer("What is the current state of AI safety research?");
@@ -807,7 +834,7 @@ const answer = await client.exaAnswer("What is the current state of AI safety re
 const custom = await client.exa("search", { query: "transformer architecture", numResults: 5 });
 ```
 
-`SolanaLLMClient` only — Exa endpoints are on `sol.blockrun.ai`.
+Same surface on `SolanaLLMClient` once Solana-side `EXA_API_KEY` is provisioned.
 
 ## Configuration
 

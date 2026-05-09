@@ -284,6 +284,13 @@ export interface ChatOptions {
   search?: boolean;
   /** Full Live Search configuration (for search-enabled models) */
   searchParameters?: SearchParameters;
+  /**
+   * Models to try in order if the primary returns a transient error
+   * (timeout, network, 5xx). 4xx and PaymentError still propagate
+   * immediately. `smartChat` populates this from the routing tier's
+   * fallback chain automatically.
+   */
+  fallbackModels?: string[];
 }
 
 export interface ChatCompletionOptions {
@@ -301,6 +308,12 @@ export interface ChatCompletionOptions {
   tools?: Tool[];
   /** Tool selection strategy */
   toolChoice?: ToolChoice;
+  /**
+   * Models to try in order if the primary returns a transient error
+   * (timeout, network, 5xx). 4xx and PaymentError still propagate
+   * immediately.
+   */
+  fallbackModels?: string[];
 }
 
 // Smart routing types (ClawRouter integration)
@@ -317,6 +330,12 @@ export interface RoutingDecision {
   costEstimate: number;
   baselineCost: number;
   savings: number; // 0-1 percentage
+  /**
+   * Remaining tier models with known pricing, in fallback order. `chat()`
+   * walks this list when the primary model hits a transient error
+   * (timeout, network, 5xx). Excludes the primary itself.
+   */
+  fallbacks?: string[];
 }
 
 export interface SmartChatOptions extends ChatOptions {
