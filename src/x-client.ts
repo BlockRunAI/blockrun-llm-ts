@@ -70,13 +70,30 @@ export interface XSearchOptions {
   cursor?: string;
 }
 
+/**
+ * BlockRun X/Twitter client.
+ *
+ * @deprecated BlockRun's `/v1/x/*` (AttentionVC-partnered) integration was
+ * removed from the backend on 2026-04-30 (commit 80dcf52). All `XClient`
+ * calls will return HTTP 404 until a replacement upstream is wired up.
+ * The class is kept in the SDK so existing imports do not break;
+ * instantiation logs a one-time `console.warn`.
+ */
 export class XClient {
   private account: Account;
   private privateKey: `0x${string}`;
   private apiUrl: string;
   private timeout: number;
+  private static deprecationWarned = false;
 
   constructor(options: XClientOptions = {}) {
+    if (!XClient.deprecationWarned) {
+      console.warn(
+        "[@blockrun/llm] XClient: BlockRun's /v1/x/* (AttentionVC) integration was removed 2026-04-30. " +
+          "All calls will return HTTP 404 until a replacement X data upstream is reintroduced.",
+      );
+      XClient.deprecationWarned = true;
+    }
     const envKey =
       typeof process !== "undefined" && process.env
         ? process.env.BLOCKRUN_WALLET_KEY || process.env.BASE_CHAIN_WALLET_KEY

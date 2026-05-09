@@ -7,6 +7,7 @@ import {
   buildErrorResponse,
   buildModelsResponse,
   buildImageModelsResponse,
+  buildUnifiedModelsResponse,
   buildPaymentRequiredResponse,
 } from "../helpers/testHelpers";
 
@@ -174,7 +175,10 @@ describe("LLMClient", () => {
     });
 
     it("should list available image models", async () => {
-      const mockResponse = buildImageModelsResponse();
+      // listImageModels now hits the unified /v1/models catalog and
+      // filters by categories: ["image"], so the mock returns the
+      // combined catalog rather than just image rows.
+      const mockResponse = buildUnifiedModelsResponse();
       fetchSpy.mockResolvedValueOnce({
         ok: true,
         status: 200,
@@ -208,20 +212,16 @@ describe("LLMClient", () => {
     });
 
     it("should list all models (LLM and image)", async () => {
-      const llmModelsResponse = buildModelsResponse();
-      const imageModelsResponse = buildImageModelsResponse();
+      // listAllModels now reads the unified /v1/models catalog in a
+      // single request — image and chat rows live side-by-side and are
+      // separated by `categories`. Previously this was two fetches.
+      const unifiedResponse = buildUnifiedModelsResponse();
 
-      fetchSpy
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          json: async () => llmModelsResponse,
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          json: async () => imageModelsResponse,
-        });
+      fetchSpy.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => unifiedResponse,
+      });
 
       const models = await client.listAllModels();
 
@@ -236,11 +236,11 @@ describe("LLMClient", () => {
       expect(imageModels).toHaveLength(2);
 
       // LLM models should have inputPrice/outputPrice
-      expect(llmModels[0].inputPrice).toBeDefined();
-      expect(llmModels[0].outputPrice).toBeDefined();
+      expect((llmModels[0] as { inputPrice?: number }).inputPrice).toBeDefined();
+      expect((llmModels[0] as { outputPrice?: number }).outputPrice).toBeDefined();
 
       // Image models should have pricePerImage
-      expect(imageModels[0].pricePerImage).toBeDefined();
+      expect((imageModels[0] as { pricePerImage?: number }).pricePerImage).toBeDefined();
     });
   });
 });

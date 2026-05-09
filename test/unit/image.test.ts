@@ -66,6 +66,9 @@ describe("ImageClient", () => {
     });
 
     it("should list available image models", async () => {
+      // listImageModels now reads the unified /v1/models catalog and
+      // filters rows tagged categories: ["image"]. The fixture exposes
+      // image rows only — same observable shape post-deprecation.
       const mockResponse = buildImageModelsResponse();
       fetchSpy.mockResolvedValueOnce({
         ok: true,

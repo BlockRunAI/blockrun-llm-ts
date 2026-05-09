@@ -55,13 +55,91 @@ import {
   APIError,
   PaymentError,
 } from "./types";
-import { route, DEFAULT_ROUTING_CONFIG } from "@blockrun/clawrouter";
+import { route, DEFAULT_ROUTING_CONFIG, getFallbackChain } from "@blockrun/clawrouter";
 
 // Model pricing type for ClawRouter (matches @blockrun/clawrouter internal type)
 type ModelPricing = {
   inputPrice: number;  // per 1M tokens
   outputPrice: number; // per 1M tokens
 };
+
+/**
+ * Whether an error is the kind of transient failure that warrants trying
+ * the next model in a fallback chain. True for: AbortError (timeout),
+ * generic network/fetch errors, and APIError with 5xx status codes
+ * typically associated with upstream availability problems.
+ *
+ * False for: 4xx client errors (bad request, auth) and PaymentError —
+ * those aren't "swap upstream and retry" situations.
+ */
+function isTransientError(err: unknown): boolean {
+  if (err instanceof PaymentError) return false;
+  if (err instanceof APIError) {
+    return [502, 503, 504, 522, 524].includes(err.statusCode);
+  }
+  // AbortError (timeout) or generic TypeError: failed to fetch
+  if (err instanceof Error) {
+    if (err.name === "AbortError") return true;
+    if (err.name === "TypeError" && /fetch|network/i.test(err.message)) return true;
+  }
+  return false;
+}
+
+function errSummary(err: unknown): string {
+  if (err instanceof APIError) return `APIError ${err.statusCode}`;
+  if (err instanceof Error) {
+    const msg = err.message.length > 80 ? err.message.slice(0, 80) : err.message;
+    return `${err.name}: ${msg}`;
+  }
+  return String(err).slice(0, 100);
+}
+
+/**
+ * Normalise a raw `/v1/models` row into the SDK `Model` interface.
+ *
+ * The route emits snake_case keys and nests pricing under `pricing.{input,
+ * output, flat}`. This helper flattens both legacy and current shapes so the
+ * SDK surface stays stable. Unknown / missing fields fall back to safe
+ * defaults so callers don't have to handle undefined.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapRawToModel(m: any): Model {
+  return {
+    id: m.id,
+    name: m.name || m.id,
+    provider: m.provider || m.owned_by || "",
+    description: m.description || "",
+    inputPrice: m.inputPrice ?? m.input_price ?? m.pricing?.input ?? 0,
+    outputPrice: m.outputPrice ?? m.output_price ?? m.pricing?.output ?? 0,
+    contextWindow: m.contextWindow ?? m.context_window ?? 0,
+    maxOutput: m.maxOutput ?? m.max_output ?? 0,
+    categories: m.categories || [],
+    available: true,
+    billingMode: m.billingMode ?? m.billing_mode,
+    flatPrice: m.flatPrice ?? m.flat_price ?? m.pricing?.flat,
+    hidden: m.hidden,
+  };
+}
+
+/**
+ * Normalise a raw `/v1/models` row tagged with `categories: ["image"]`
+ * into the SDK `ImageModel` interface. Image rows price per-image rather
+ * than per-token, surfaced via `pricing.flat` (or legacy `price_per_image`).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapRawToImageModel(m: any): ImageModel {
+  return {
+    id: m.id,
+    name: m.name || m.id,
+    provider: m.provider || m.owned_by || "",
+    description: m.description || "",
+    pricePerImage:
+      m.pricePerImage ?? m.price_per_image ?? m.pricing?.flat ?? m.flatPrice ?? m.flat_price ?? 0,
+    supportedSizes: m.supportedSizes ?? m.supported_sizes,
+    maxPromptLength: m.maxPromptLength ?? m.max_prompt_length,
+    available: true,
+  };
+}
 import {
   createPaymentPayload,
   parsePaymentRequired,
@@ -187,6 +265,7 @@ export class LLMClient {
       topP: options?.topP,
       search: options?.search,
       searchParameters: options?.searchParameters,
+      fallbackModels: options?.fallbackModels,
     });
 
     return result.choices[0].message.content || "";
@@ -236,7 +315,19 @@ export class LLMClient {
       routingProfile: options?.routingProfile,
     });
 
-    // Make the chat request with the selected model
+    // Compute fallback chain for the chosen tier — these are the models
+    // chat() will walk to if the primary returns a transient error (timeout,
+    // network, 5xx). Excludes the primary itself, and skips models the
+    // catalog doesn't price (so we don't end up calling something we can't
+    // estimate cost for).
+    const tierConfigs = decision.tierConfigs ?? DEFAULT_ROUTING_CONFIG.tiers;
+    const fullChain = getFallbackChain(decision.tier, tierConfigs);
+    const fallbacks = fullChain.filter(
+      (id) => id !== decision.model && modelPricing.has(id),
+    );
+
+    // Make the chat request with the selected model, passing the fallback
+    // chain so transient failures fall over instead of bubbling up.
     const response = await this.chat(decision.model, prompt, {
       system: options?.system,
       maxTokens: options?.maxTokens,
@@ -244,12 +335,13 @@ export class LLMClient {
       topP: options?.topP,
       search: options?.search,
       searchParameters: options?.searchParameters,
+      fallbackModels: fallbacks,
     });
 
     return {
       response,
       model: decision.model,
-      routing: decision as RoutingDecision,
+      routing: { ...(decision as RoutingDecision), fallbacks },
     };
   }
 
@@ -280,16 +372,31 @@ export class LLMClient {
 
   /**
    * Fetch model pricing from API.
+   *
+   * For flat-billed models (e.g. ZAI GLM-5 family at $0.001/call) the
+   * router still expects per-token rates, so we synthesise an equivalent
+   * per-token price assuming ~1500 total tokens per call. Without this,
+   * flat models would resolve to inputPrice=outputPrice=0 and the router
+   * would treat them as free, biasing routing decisions and reporting
+   * inflated savings %.
    */
   private async fetchModelPricing(): Promise<Map<string, ModelPricing>> {
     const models = await this.listModels();
     const pricing = new Map<string, ModelPricing>();
 
     for (const model of models) {
-      pricing.set(model.id, {
-        inputPrice: model.inputPrice,
-        outputPrice: model.outputPrice,
-      });
+      if (model.billingMode === "flat" && model.flatPrice && model.flatPrice > 0) {
+        const perDirection = (model.flatPrice * 1e6) / 1500 / 2;
+        pricing.set(model.id, {
+          inputPrice: perDirection,
+          outputPrice: perDirection,
+        });
+      } else {
+        pricing.set(model.id, {
+          inputPrice: model.inputPrice,
+          outputPrice: model.outputPrice,
+        });
+      }
     }
 
     return pricing;
@@ -298,7 +405,13 @@ export class LLMClient {
   /**
    * Full chat completion interface (OpenAI-compatible).
    *
-   * @param model - Model ID
+   * When `fallbackModels` is set, transient failures (timeouts, network
+   * errors, 5xx) on the primary model trigger a retry against the next
+   * model in the list before raising. 4xx errors and PaymentError
+   * propagate immediately — those aren't "swap upstream and retry"
+   * situations. Each fallback hop logs one stderr line.
+   *
+   * @param model - Primary model ID
    * @param messages - Array of messages with role and content
    * @param options - Optional completion parameters
    * @returns ChatResponse object with choices and usage
@@ -308,36 +421,40 @@ export class LLMClient {
     messages: ChatMessage[],
     options?: ChatCompletionOptions
   ): Promise<ChatResponse> {
-    const body: Record<string, unknown> = {
-      model,
-      messages,
-      max_tokens: options?.maxTokens || DEFAULT_MAX_TOKENS,
+    const buildBody = (m: string): Record<string, unknown> => {
+      const body: Record<string, unknown> = {
+        model: m,
+        messages,
+        max_tokens: options?.maxTokens || DEFAULT_MAX_TOKENS,
+      };
+      if (options?.temperature !== undefined) body.temperature = options.temperature;
+      if (options?.topP !== undefined) body.top_p = options.topP;
+      if (options?.searchParameters !== undefined) {
+        body.search_parameters = options.searchParameters;
+      } else if (options?.search === true) {
+        body.search_parameters = { mode: "on" };
+      }
+      if (options?.tools !== undefined) body.tools = options.tools;
+      if (options?.toolChoice !== undefined) body.tool_choice = options.toolChoice;
+      return body;
     };
 
-    if (options?.temperature !== undefined) {
-      body.temperature = options.temperature;
+    const chain = [model, ...(options?.fallbackModels ?? [])];
+    let lastErr: unknown;
+    for (let i = 0; i < chain.length; i++) {
+      const candidate = chain[i];
+      try {
+        return await this.requestWithPayment("/v1/chat/completions", buildBody(candidate));
+      } catch (err) {
+        lastErr = err;
+        const next = chain[i + 1];
+        if (!next || !isTransientError(err)) throw err;
+        console.error(
+          `[@blockrun/llm] ${candidate} -> ${next} (${errSummary(err)})`,
+        );
+      }
     }
-    if (options?.topP !== undefined) {
-      body.top_p = options.topP;
-    }
-
-    // Handle Live Search parameters
-    if (options?.searchParameters !== undefined) {
-      body.search_parameters = options.searchParameters;
-    } else if (options?.search === true) {
-      // Simple shortcut: search=true enables live search with defaults
-      body.search_parameters = { mode: "on" };
-    }
-
-    // Handle tool calling
-    if (options?.tools !== undefined) {
-      body.tools = options.tools;
-    }
-    if (options?.toolChoice !== undefined) {
-      body.tool_choice = options.toolChoice;
-    }
-
-    return this.requestWithPayment("/v1/chat/completions", body);
+    throw lastErr;
   }
 
   /**
@@ -1002,99 +1119,78 @@ export class LLMClient {
   }
 
   /**
-   * List available LLM models with pricing.
+   * List available models with pricing.
+   *
+   * Returns the full `/v1/models` unified catalog (chat + image + music).
+   * The shape preserves backwards compatibility — image/music rows have
+   * `inputPrice = outputPrice = 0` since those fields don't apply, and
+   * their per-call price surfaces via `flatPrice`.
    */
   async listModels(): Promise<Model[]> {
+    const raw = await this.fetchRawModels();
+    return raw.map((m) => mapRawToModel(m));
+  }
+
+  /**
+   * List available image generation models with pricing.
+   *
+   * The dedicated `/v1/images/models` endpoint was deprecated server-side;
+   * image models live in the unified `/v1/models` catalog under
+   * `categories: ["image", ...]`. This method filters that catalog so
+   * existing callers keep working.
+   */
+  async listImageModels(): Promise<ImageModel[]> {
+    const raw = await this.fetchRawModels();
+    return raw
+      .filter((m) => Array.isArray(m.categories) && m.categories.includes("image"))
+      .map((m) => mapRawToImageModel(m));
+  }
+
+  /**
+   * List all available models (chat, image, music, etc.) with pricing.
+   *
+   * @returns Array of all models with `type` field set from category
+   * (`llm` for chat, `image` / `music` for media). Backwards-compat:
+   * chat models always report `type: "llm"`.
+   */
+  async listAllModels(): Promise<(Model | ImageModel)[]> {
+    const raw = await this.fetchRawModels();
+    const out: (Model | ImageModel)[] = [];
+    for (const m of raw) {
+      const cats: string[] = Array.isArray(m.categories) ? m.categories : [];
+      if (cats.includes("image")) {
+        const model = mapRawToImageModel(m);
+        model.type = "image";
+        out.push(model);
+      } else {
+        const model = mapRawToModel(m);
+        model.type = "llm";
+        out.push(model);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Internal: fetch the raw `/v1/models` catalog without normalising shape.
+   * Used by listImageModels / listAllModels so each can pick category-
+   * specific fields.
+   */
+  private async fetchRawModels(): Promise<Array<Record<string, unknown> & { categories?: string[] }>> {
     const response = await this.fetchWithTimeout(`${this.apiUrl}/v1/models`, {
       method: "GET",
     });
-
     if (!response.ok) {
       let errorBody: unknown;
-      try {
-        errorBody = await response.json();
-      } catch {
-        errorBody = { error: "Request failed" };
-      }
+      try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
       throw new APIError(
         `Failed to list models: ${response.status}`,
         response.status,
         sanitizeErrorResponse(errorBody)
       );
     }
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const data = (await response.json()) as { data?: any[] };
-    // Map API response to SDK Model interface. The /v1/models route emits
-    // snake_case keys and nests pricing ({ input, output } or { flat }), so
-    // this layer normalises both shapes and preserves the newer metadata
-    // fields (billingMode, flatPrice, hidden) when the backend forwards them.
-    return (data.data || []).map((m) => ({
-      id: m.id,
-      name: m.name || m.id,
-      provider: m.provider || m.owned_by || "",
-      description: m.description || "",
-      inputPrice: m.inputPrice ?? m.input_price ?? m.pricing?.input ?? 0,
-      outputPrice: m.outputPrice ?? m.output_price ?? m.pricing?.output ?? 0,
-      contextWindow: m.contextWindow ?? m.context_window ?? 0,
-      maxOutput: m.maxOutput ?? m.max_output ?? 0,
-      categories: m.categories || [],
-      available: true,
-      billingMode: m.billingMode ?? m.billing_mode,
-      flatPrice: m.flatPrice ?? m.flat_price ?? m.pricing?.flat,
-      hidden: m.hidden,
-    }));
-  }
-
-  /**
-   * List available image generation models with pricing.
-   */
-  async listImageModels(): Promise<ImageModel[]> {
-    const response = await this.fetchWithTimeout(
-      `${this.apiUrl}/v1/images/models`,
-      { method: "GET" }
-    );
-
-    if (!response.ok) {
-      throw new APIError(
-        `Failed to list image models: ${response.status}`,
-        response.status
-      );
-    }
-
-    const data = (await response.json()) as { data?: ImageModel[] };
-    return data.data || [];
-  }
-
-  /**
-   * List all available models (both LLM and image) with pricing.
-   *
-   * @returns Array of all models with 'type' field ('llm' or 'image')
-   *
-   * @example
-   * const models = await client.listAllModels();
-   * for (const model of models) {
-   *   if (model.type === 'llm') {
-   *     console.log(`LLM: ${model.id} - $${model.inputPrice}/M input`);
-   *   } else {
-   *     console.log(`Image: ${model.id} - $${model.pricePerImage}/image`);
-   *   }
-   * }
-   */
-  async listAllModels(): Promise<(Model | ImageModel)[]> {
-    // Get LLM models
-    const llmModels = await this.listModels();
-    for (const model of llmModels) {
-      model.type = "llm";
-    }
-
-    // Get image models
-    const imageModels = await this.listImageModels();
-    for (const model of imageModels) {
-      model.type = "image";
-    }
-
-    return [...llmModels, ...imageModels];
+    const data = (await response.json()) as { data?: Array<Record<string, unknown>> };
+    return (data.data || []) as Array<Record<string, unknown> & { categories?: string[] }>;
   }
 
   /**
@@ -1142,6 +1238,20 @@ export class LLMClient {
 
     const data = await this.requestWithPaymentRaw("/v1/search", body);
     return data as unknown as SearchResult;
+  }
+
+  /**
+   * Generic Exa endpoint proxy (POST). Useful when you need an Exa API
+   * surface that the typed wrappers below don't expose.
+   *
+   * @param path - Exa endpoint segment: "search" | "find-similar" | "contents" | "answer"
+   * @param body - Request body (see Exa API docs)
+   *
+   * @example
+   * const results = await client.exa("search", { query: "latest AI research", numResults: 5 });
+   */
+  async exa(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestWithPaymentRaw(`/v1/exa/${path}`, body);
   }
 
   /**

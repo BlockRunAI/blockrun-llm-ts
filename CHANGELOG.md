@@ -2,6 +2,56 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## 1.16.0
+
+Brings the TypeScript SDK in line with the Python SDK changes from
+2026-05-09 (commits ee0d98e, 8bae0d0, 6f1370d, 3aacbc1).
+
+### Added
+- **`LLMClient.exa(path, body)` proxy method.** The four typed Exa wrappers
+  (`exaSearch`, `exaFindSimilar`, `exaContents`, `exaAnswer`) were already on
+  Base; the generic proxy now mirrors `SolanaLLMClient.exa()` so callers can
+  reach Exa endpoints the typed wrappers don't surface. Base is the primary
+  Exa path — the Solana gateway is awaiting `EXA_API_KEY` provisioning.
+- **`fallbackModels` option on `chat()` / `chatCompletion()`.** When the
+  primary model returns a transient error (timeouts, network failures,
+  502/503/504/522/524), the SDK retries against the next model in the list
+  before raising. 4xx and `PaymentError` propagate immediately. Each hop
+  logs one stderr line.
+- **`smartChat()` auto-populates the fallback chain.** `RoutingDecision`
+  gains a `fallbacks?: string[]` field built from the chosen tier's fallback
+  list (filtered to models the catalog can price). `smartChat` passes it
+  through to `chat()` automatically — transient failures on the routed
+  primary now fall over instead of bubbling up.
+- **Synthesised per-token pricing for flat-billed models.** ZAI's GLM-5
+  family now bills `pricing.flat` ($0.001/call) instead of per-token. The
+  pricing map fed to ClawRouter previously resolved them to $0/$0, biasing
+  routing decisions and inflating reported savings %. Flat models now get
+  an equivalent per-token rate computed against an assumed ~1500-token
+  call so router math reflects real cost.
+
+### Changed
+- **`listImageModels()` / `listAllModels()` use the unified `/v1/models`
+  catalog.** The dedicated `/v1/images/models` endpoint was deprecated
+  server-side; image rows now live alongside chat rows under the same
+  endpoint, identified by `categories: ["image"]`. Both `LLMClient` and
+  `ImageClient.listImageModels()` filter the unified catalog. `listAllModels`
+  is now one fetch instead of two and tags rows by category. Existing
+  callers see the same `ImageModel[]` / `(Model | ImageModel)[]` shapes.
+- **README: Anthropic table now leads with `claude-opus-4.7`** ($5/$25 per
+  1M, 1M context, agentic coding + adaptive thinking, 128K output);
+  `claude-opus-4.6` marked hidden but still callable as in-family fallback.
+  Free-model count corrected to 8 (6 visible + 2 hidden-callable). Exa
+  documentation reworked to list Base (`LLMClient`) as the primary path.
+  The contradictory "gpt-oss retired 2026-04-28" note replaced with a
+  privacy advisory matching the re-enable on 2026-04-30.
+
+### Removed
+- **`black-forest/flux-1.1-pro` from public surface.** Backend dropped this
+  model — README image-generation table no longer lists it and `image.ts`
+  comment was trimmed. Existing callers who passed the ID directly will
+  see a 404 from the gateway.
+
 ## 1.15.0
 
 - **Predexon v2 endpoints exposed via typed helpers.** All v2 endpoints went live in production on 2026-05-07 (`blockrun-web-00451-cnw`). The generic `pm()` / `pmQuery()` passthrough already routed them, but agents can now discover the new shape from method names + JSDoc. Ten new convenience methods on `LLMClient` — each is a thin wrapper, no breaking changes:
