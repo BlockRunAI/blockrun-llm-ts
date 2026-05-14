@@ -71,6 +71,26 @@ export interface ChatResponse {
   choices: ChatChoice[];
   usage?: ChatUsage;
   citations?: string[]; // Live Search citation URLs
+
+  /**
+   * Populated when the gateway transparently substituted a different
+   * model for the one the caller asked for — typically because the
+   * requested model errored and the gateway routed to a free fallback
+   * to fulfil the request. When `used` is true:
+   *   - `model` is the model that actually answered (vs `ChatResponse.model`
+   *     which historically reflected the requested model id).
+   *   - `settlementSkipped` is `true` when the gateway also skipped the
+   *     on-chain settle — i.e. the user was not charged for this call
+   *     because a free fallback served it.
+   * Surfaced from the gateway's `X-Fallback-Used / X-Fallback-Model /
+   * X-Settlement-Skipped` response headers. Absent when the headers
+   * aren't present (most calls).
+   */
+  fallback?: {
+    used: true;
+    model?: string;
+    settlementSkipped?: boolean;
+  };
 }
 
 export interface Model {
