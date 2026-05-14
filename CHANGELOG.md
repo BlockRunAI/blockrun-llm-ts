@@ -2,6 +2,19 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- **Export `VideoClient` from the package entry point.** The class was
+  fully implemented in `src/video.ts` and documented in the README
+  (`import { VideoClient } from '@blockrun/llm'`), but the export was
+  missing from `src/index.ts`. Downstream consumers (Franklin,
+  franklin-canvas) had to hand-roll their own x402 + polling loop
+  against `/v1/videos/generations` even though a working client was
+  already shipped — they just couldn't reach it. Restores the
+  promised public surface; no source changes to `video.ts`.
+
 ## 2.1.0
 
 ### Added
