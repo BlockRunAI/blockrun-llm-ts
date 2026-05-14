@@ -151,9 +151,9 @@ import {
   sanitizeErrorResponse,
   validateResourceUrl,
 } from "./validation";
+import { logCost } from "./cost-log";
 
 const DEFAULT_API_URL = "https://blockrun.ai/api";
-const TESTNET_API_URL = "https://testnet.blockrun.ai/api";
 const DEFAULT_MAX_TOKENS = 1024;
 const DEFAULT_TIMEOUT = 60000;
 
@@ -165,29 +165,11 @@ const USER_AGENT = `blockrun-ts/${SDK_VERSION}`;
  * BlockRun LLM Gateway Client.
  *
  * Provides access to multiple LLM providers (OpenAI, Anthropic, Google, etc.)
- * with automatic x402 micropayments on Base chain.
- *
- * Networks:
- * - Mainnet: https://blockrun.ai/api (Base, Chain ID 8453)
- * - Testnet: https://testnet.blockrun.ai/api (Base Sepolia, Chain ID 84532)
- *
- * @example Testnet usage
- * ```ts
- * // Use testnet convenience function
- * import { testnetClient } from '@blockrun/llm';
- * const client = testnetClient({ privateKey: '0x...' });
- * const response = await client.chat('openai/gpt-oss-20b', 'Hello!');
- *
- * // Or configure manually
- * const client = new LLMClient({
- *   privateKey: '0x...',
- *   apiUrl: 'https://testnet.blockrun.ai/api'
- * });
- * ```
+ * with automatic x402 micropayments on Base chain (Mainnet, Chain ID 8453).
+ * API base: https://blockrun.ai/api
  */
 export class LLMClient {
   static readonly DEFAULT_API_URL = DEFAULT_API_URL;
-  static readonly TESTNET_API_URL = TESTNET_API_URL;
   private account: Account;
   private privateKey: `0x${string}`;
   private apiUrl: string;
@@ -458,6 +440,33 @@ export class LLMClient {
   }
 
   /**
+   * Write a canonical cost_log entry after a settled x402 payment.
+   * Best-effort: failures here must never break a successful API call.
+   * Mirrors what Franklin's AgentClient writes via src/agent/llm.ts so
+   * cost_log.jsonl is a single source of truth regardless of caller.
+   */
+  private recordCost(
+    url: string,
+    costUsd: number,
+    opts?: { body?: Record<string, unknown>; network?: string },
+  ): void {
+    try {
+      let endpoint = "";
+      try { endpoint = new URL(url).pathname; } catch { endpoint = ""; }
+      const model = opts?.body && typeof opts.body.model === "string" ? opts.body.model : undefined;
+      logCost({
+        ts: Date.now() / 1000,
+        endpoint,
+        cost_usd: costUsd,
+        model,
+        wallet: this.account.address,
+        network: opts?.network,
+        client_kind: "LLMClient",
+      });
+    } catch { /* never propagate */ }
+  }
+
+  /**
    * Make a request with automatic x402 payment handling.
    */
   private async requestWithPayment(
@@ -603,6 +612,7 @@ export class LLMClient {
         const costUsd = parseFloat(details.amount) / 1e6;
         this.sessionCalls += 1;
         this.sessionTotalUsd += costUsd;
+        this.recordCost(url, costUsd, { body, network: details.network });
         return retryResp2.json() as Promise<ChatResponse>;
       }
     }
@@ -630,6 +640,7 @@ export class LLMClient {
     const costUsd = parseFloat(details.amount) / 1e6; // Convert from micro USDC
     this.sessionCalls += 1;
     this.sessionTotalUsd += costUsd;
+    this.recordCost(url, costUsd, { body, network: details.network });
 
     return retryResponse.json() as Promise<ChatResponse>;
   }
@@ -906,6 +917,7 @@ export class LLMClient {
         const costUsd = parseFloat(details.amount) / 1e6;
         this.sessionCalls += 1;
         this.sessionTotalUsd += costUsd;
+        this.recordCost(url, costUsd, { body, network: details.network });
         return retryResp2.json() as Promise<Record<string, unknown>>;
       }
     }
@@ -931,6 +943,7 @@ export class LLMClient {
     const costUsd = parseFloat(details.amount) / 1e6;
     this.sessionCalls += 1;
     this.sessionTotalUsd += costUsd;
+    this.recordCost(url, costUsd, { body, network: details.network });
 
     return retryResponse.json() as Promise<Record<string, unknown>>;
   }
@@ -1068,6 +1081,7 @@ export class LLMClient {
         const costUsd = parseFloat(details.amount) / 1e6;
         this.sessionCalls += 1;
         this.sessionTotalUsd += costUsd;
+        this.recordCost(url, costUsd, { network: details.network });
         return retryResp2.json() as Promise<Record<string, unknown>>;
       }
     }
@@ -1093,6 +1107,7 @@ export class LLMClient {
     const costUsd = parseFloat(details.amount) / 1e6;
     this.sessionCalls += 1;
     this.sessionTotalUsd += costUsd;
+    this.recordCost(url, costUsd, { network: details.network });
 
     return retryResponse.json() as Promise<Record<string, unknown>>;
   }
@@ -1311,9 +1326,7 @@ export class LLMClient {
   }
 
   /**
-   * Get USDC balance on Base network.
-   *
-   * Automatically detects mainnet vs testnet based on API URL.
+   * Get USDC balance on Base mainnet.
    *
    * @returns USDC balance as a float (6 decimal places normalized)
    *
@@ -1322,13 +1335,8 @@ export class LLMClient {
    * console.log(`Balance: $${balance.toFixed(2)} USDC`);
    */
   async getBalance(): Promise<number> {
-    const isTestnet = this.isTestnet();
-    const usdcContract = isTestnet
-      ? "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
-      : "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-    const rpcs = isTestnet
-      ? ["https://sepolia.base.org", "https://base-sepolia-rpc.publicnode.com"]
-      : ["https://base.publicnode.com", "https://mainnet.base.org", "https://base.meowrpc.com"];
+    const usdcContract = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+    const rpcs = ["https://base.publicnode.com", "https://mainnet.base.org", "https://base.meowrpc.com"];
 
     const selector = "0x70a08231";
     const paddedAddress = this.account.address.slice(2).toLowerCase().padStart(64, "0");
@@ -1712,45 +1720,6 @@ export class LLMClient {
     return this.account.address;
   }
 
-  /**
-   * Check if client is configured for testnet.
-   */
-  isTestnet(): boolean {
-    return this.apiUrl.includes("testnet.blockrun.ai");
-  }
-}
-
-/**
- * Create a testnet LLM client for development and testing.
- *
- * This is a convenience function that creates an LLMClient configured
- * for the BlockRun testnet (Base Sepolia).
- *
- * @param options - Client options (privateKey required unless BASE_CHAIN_WALLET_KEY env var is set)
- * @returns LLMClient configured for testnet
- *
- * @example
- * ```ts
- * import { testnetClient } from '@blockrun/llm';
- *
- * const client = testnetClient({ privateKey: '0x...' });
- * const response = await client.chat('openai/gpt-oss-20b', 'Hello!');
- * ```
- *
- * Testnet Setup:
- * 1. Get testnet ETH from https://www.alchemy.com/faucets/base-sepolia
- * 2. Get testnet USDC from https://faucet.circle.com/
- * 3. Use your wallet with testnet funds
- *
- * Available Testnet Models:
- * - openai/gpt-oss-20b
- * - openai/gpt-oss-120b
- */
-export function testnetClient(options: Omit<LLMClientOptions, 'apiUrl'> = {}): LLMClient {
-  return new LLMClient({
-    ...options,
-    apiUrl: TESTNET_API_URL,
-  });
 }
 
 export default LLMClient;

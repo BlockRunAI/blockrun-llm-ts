@@ -2,6 +2,40 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## 2.0.0
+
+### Breaking
+
+- **Removed testnet support.** `testnetClient`, `LLMClient.isTestnet()`,
+  and the `TESTNET_API_URL` constant are gone. Base Sepolia traffic
+  has tailed off; the BlockRun gateway is mainnet-only. If you were
+  using testnet, pin to `1.16.x` until you migrate.
+- **`CostEntry` schema rewritten.** Old shape `{timestamp, model,
+  inputTokens, outputTokens, costUsd}` → new shape `{ts, endpoint,
+  cost_usd, model?, wallet?, network?, client_kind?}`. The new
+  schema matches what Franklin's AgentClient already writes, so
+  `cost_log.jsonl` is now a single unified stream. `getCostSummary()`
+  tolerates the legacy `costUsd` field on older lines for one release.
+- **Cost log path moved** from `~/.blockrun/data/costs.jsonl` to the
+  canonical `~/.blockrun/cost_log.jsonl`. If you have analytics over
+  the old path, point them at the new one.
+
+### Fixed
+
+- **`logCost()` is no longer dead code.** Every successful x402
+  settlement on `LLMClient.chatCompletion`, `chatCompletionStream`,
+  and the raw payment paths now writes a canonical cost_log entry.
+  Previously the helper was defined but never invoked, so third-party
+  SDK consumers had zero automatic cost visibility — only Franklin's
+  Anthropic-compatible path was logging, via its own wrapper. After
+  this release the SDK and Franklin share one ledger.
+
+### Added
+
+- **`getCostSummary()` now returns `byEndpoint`** alongside `byModel`,
+  so you can see spend split across `/v1/chat/completions`,
+  `/v1/images/generations`, `/v1/x/...`, etc.
+
 ## 1.16.0
 
 Brings the TypeScript SDK in line with the Python SDK changes from
