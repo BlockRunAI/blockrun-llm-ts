@@ -467,6 +467,29 @@ export class LLMClient {
   }
 
   /**
+   * Parse the chat response JSON and attach `fallback` metadata when the
+   * gateway signalled a transparent free-fallback substitution. The
+   * gateway sets X-Fallback-Used / X-Fallback-Model / X-Settlement-Skipped
+   * on the response when it served a paid request from a free model
+   * (route.ts createPaymentResponseHeader path). Without surfacing these
+   * to the caller, the user gets a different model than requested with
+   * no visibility — silent quality drop and no clue why the on-chain
+   * balance didn't change.
+   */
+  private async parseChatResponse(response: Response): Promise<ChatResponse> {
+    const body = (await response.json()) as ChatResponse;
+    const used = response.headers.get("X-Fallback-Used") === "true";
+    if (used) {
+      body.fallback = {
+        used: true,
+        model: response.headers.get("X-Fallback-Model") || undefined,
+        settlementSkipped: response.headers.get("X-Settlement-Skipped") === "free-fallback",
+      };
+    }
+    return body;
+  }
+
+  /**
    * Make a request with automatic x402 payment handling.
    */
   private async requestWithPayment(
@@ -497,7 +520,7 @@ export class LLMClient {
           try { errorBody = await retryResp.json(); } catch { errorBody = { error: "Request failed" }; }
           throw new APIError(`API error: ${retryResp.status}`, retryResp.status, sanitizeErrorResponse(errorBody));
         }
-        return retryResp.json() as Promise<ChatResponse>;
+        return this.parseChatResponse(retryResp);
       }
     }
 
@@ -521,7 +544,7 @@ export class LLMClient {
       );
     }
 
-    return response.json() as Promise<ChatResponse>;
+    return this.parseChatResponse(response);
   }
 
   /**
@@ -613,7 +636,7 @@ export class LLMClient {
         this.sessionCalls += 1;
         this.sessionTotalUsd += costUsd;
         this.recordCost(url, costUsd, { body, network: details.network });
-        return retryResp2.json() as Promise<ChatResponse>;
+        return this.parseChatResponse(retryResp2);
       }
     }
 
@@ -642,7 +665,7 @@ export class LLMClient {
     this.sessionTotalUsd += costUsd;
     this.recordCost(url, costUsd, { body, network: details.network });
 
-    return retryResponse.json() as Promise<ChatResponse>;
+    return this.parseChatResponse(retryResponse);
   }
 
   /**

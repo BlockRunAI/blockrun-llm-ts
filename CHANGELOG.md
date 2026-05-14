@@ -2,6 +2,27 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## 2.1.0
+
+### Added
+
+- **`ChatResponse.fallback` surfaces transparent gateway substitutions.**
+  When the BlockRun gateway can't serve the requested model and routes
+  to a free fallback, it sets `X-Fallback-Used`, `X-Fallback-Model`, and
+  `X-Settlement-Skipped` on the HTTP response. The SDK now reads those
+  headers and attaches a `fallback: { used: true, model, settlementSkipped }`
+  field to the parsed `ChatResponse`. Without this, callers got a
+  different model than they asked for with no signal — silent quality
+  drop, and the on-chain balance didn't change even though the SDK's
+  session counter incremented. Now:
+  ```ts
+  const r = await client.chatCompletion("openai/gpt-5.5", messages);
+  if (r.fallback?.used) {
+    console.warn(`got ${r.fallback.model} instead of gpt-5.5 (free)`);
+  }
+  ```
+  Backwards-compatible: `fallback` is absent on normal responses.
+
 ## 2.0.0
 
 ### Breaking
