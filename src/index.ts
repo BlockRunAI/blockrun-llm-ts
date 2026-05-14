@@ -32,6 +32,7 @@
 export { LLMClient, default } from "./client";
 export { ImageClient } from "./image";
 export { MusicClient } from "./music";
+export { VideoClient } from "./video";
 export { SearchClient } from "./search";
 export {
   XClient,
