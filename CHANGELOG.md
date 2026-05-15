@@ -2,7 +2,7 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
-## Unreleased
+## [2.1.1] - 2026-05-14
 
 ### Fixed
 
@@ -14,6 +14,29 @@ All notable changes to @blockrun/llm will be documented in this file.
   against `/v1/videos/generations` even though a working client was
   already shipped — they just couldn't reach it. Restores the
   promised public surface; no source changes to `video.ts`.
+
+### Changed
+
+- **`RoutingProfile` removes `"free"` — breaking for TypeScript callers.**
+  `@blockrun/clawrouter` 0.12.190 no longer accepts `"free"` as a
+  routing profile in `route()`. The `"free"` literal is removed from the
+  exported `RoutingProfile` union. TypeScript callers passing
+  `routingProfile: 'free'` will get a compile error; JavaScript callers
+  will fall through to auto-routing silently. Upgrade path: remove
+  `routingProfile: 'free'` from your call sites (the gateway already
+  routes to the most cost-effective model by default).
+
+- **`RoutingDecision` adds `profile` and `agenticScore` fields.**
+  Synced with `@blockrun/clawrouter` 0.12.190. `RoutingDecision.profile`
+  now reflects the routing profile applied (`"eco" | "auto" | "premium" |
+  "agentic"`). `RoutingDecision.agenticScore` surfaces the agentic
+  routing score when the gateway activates agentic mode. Both fields are
+  optional and absent when not applicable.
+
+### Dependencies
+
+- Bumped `@blockrun/clawrouter` `0.12.75` → `0.12.190`.
+- Bumped `viem` `2.44.4` → `2.49.0`.
 
 ## 2.1.0
 
