@@ -350,6 +350,10 @@ export interface RoutingDecision {
   costEstimate: number;
   baselineCost: number;
   savings: number; // 0-1 percentage
+  /** Routing profile applied by clawrouter (may include "agentic" on gateway responses). */
+  profile?: RoutingProfile | "agentic";
+  /** Score used when agentic routing is active. */
+  agenticScore?: number;
   /**
    * Remaining tier models with known pricing, in fallback order. `chat()`
    * walks this list when the primary model hits a transient error
