@@ -337,7 +337,7 @@ export interface ChatCompletionOptions {
 }
 
 // Smart routing types (ClawRouter integration)
-export type RoutingProfile = "free" | "eco" | "auto" | "premium";
+export type RoutingProfile = "eco" | "auto" | "premium";
 
 export type RoutingTier = "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
 
@@ -350,6 +350,10 @@ export interface RoutingDecision {
   costEstimate: number;
   baselineCost: number;
   savings: number; // 0-1 percentage
+  /** Routing profile applied by clawrouter (may include "agentic" on gateway responses). */
+  profile?: RoutingProfile | "agentic";
+  /** Score used when agentic routing is active. */
+  agenticScore?: number;
   /**
    * Remaining tier models with known pricing, in fallback order. `chat()`
    * walks this list when the primary model hits a transient error
@@ -359,7 +363,7 @@ export interface RoutingDecision {
 }
 
 export interface SmartChatOptions extends ChatOptions {
-  /** Routing profile: free (zero cost), eco (budget), auto (balanced), premium (best quality) */
+  /** Routing profile: eco (budget), auto (balanced), premium (best quality) */
   routingProfile?: RoutingProfile;
   /** Maximum output tokens (used for cost estimation) */
   maxOutputTokens?: number;
