@@ -337,7 +337,7 @@ export interface ChatCompletionOptions {
 }
 
 // Smart routing types (ClawRouter integration)
-export type RoutingProfile = "free" | "eco" | "auto" | "premium";
+export type RoutingProfile = "eco" | "auto" | "premium";
 
 export type RoutingTier = "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
 
@@ -359,7 +359,7 @@ export interface RoutingDecision {
 }
 
 export interface SmartChatOptions extends ChatOptions {
-  /** Routing profile: free (zero cost), eco (budget), auto (balanced), premium (best quality) */
+  /** Routing profile: eco (budget), auto (balanced), premium (best quality) */
   routingProfile?: RoutingProfile;
   /** Maximum output tokens (used for cost estimation) */
   maxOutputTokens?: number;

@@ -273,9 +273,6 @@ export class LLMClient {
    *
    * @example With routing profile
    * ```ts
-   * // Free tier only (zero cost)
-   * const result = await client.smartChat('Hello!', { routingProfile: 'free' });
-   *
    * // Eco mode (budget optimized)
    * const result = await client.smartChat('Explain quantum computing', { routingProfile: 'eco' });
    *
