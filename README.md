@@ -383,6 +383,35 @@ const r2 = await client.generate('the subject turns and smiles', {
 });
 ```
 
+### Voice Calls
+
+`VoiceClient` wraps `POST /v1/voice/call` (paid, $0.54/call) and
+`GET /v1/voice/call/{callId}` (free polling) — AI-powered outbound phone
+calls powered by Bland.ai. The agent dials the recipient and runs a real-time
+conversation based on your `task` instructions. US + Canada destinations.
+
+```ts
+import { VoiceClient } from '@blockrun/llm';
+
+const client = new VoiceClient();
+
+// Initiate (paid $0.54)
+const result = await client.call({
+  to: '+14155552671',
+  task: 'You are a friendly assistant calling to confirm a 3pm dentist appointment.',
+  voice: 'maya',     // 'nat' | 'josh' | 'maya' | 'june' | 'paige' | 'derek' | 'florian'
+  max_duration: 5,   // minutes (1–30)
+});
+console.log(result.call_id);
+
+// Poll for transcript + recording (free)
+const status = await client.getStatus(result.call_id);
+console.log(status.status, status.recording_url);
+```
+
+Bring your own caller-ID: pass `from: '+14155552671'` (must be a BlockRun
+phone number you own; buy via `/v1/phone/numbers/buy`).
+
 ### Standalone Search
 
 `SearchClient` wraps `POST /v1/search` — standalone Grok Live Search.

@@ -33,6 +33,7 @@ export { LLMClient, default } from "./client";
 export { ImageClient } from "./image";
 export { MusicClient } from "./music";
 export { VideoClient } from "./video";
+export { VoiceClient } from "./voice";
 export { SearchClient } from "./search";
 export {
   XClient,
@@ -76,6 +77,13 @@ export {
   type VideoModel,
   type VideoClientOptions,
   type VideoGenerateOptions,
+  // Voice call types
+  type VoicePreset,
+  type CallModel,
+  type VoiceClientOptions,
+  type CallOptions,
+  type CallInitiatedResponse,
+  type CallStatusResponse,
   // Live Search types
   type WebSearchSource,
   type XSearchSource,

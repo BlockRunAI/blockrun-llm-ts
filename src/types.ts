@@ -445,6 +445,89 @@ export interface MusicGenerateOptions {
   lyrics?: string;
 }
 
+// Voice Call types
+
+/** Built-in Bland.ai voice presets. Any string is accepted (custom voice IDs work too). */
+export type VoicePreset =
+  | "nat"
+  | "josh"
+  | "maya"
+  | "june"
+  | "paige"
+  | "derek"
+  | "florian";
+
+/** Bland.ai conversation model tier. */
+export type CallModel = "base" | "enhanced" | "turbo";
+
+export interface VoiceClientOptions {
+  /** EVM wallet private key (hex string starting with 0x) */
+  privateKey?: `0x${string}` | string;
+  /** API endpoint URL (default: https://blockrun.ai/api) */
+  apiUrl?: string;
+  /** Request timeout in milliseconds (default: 60000 — initiation only) */
+  timeout?: number;
+}
+
+export interface CallOptions {
+  /** Destination phone number in E.164 format (e.g. "+14155552671"). US + Canada. */
+  to: string;
+  /** What the AI agent should do on the call. 10–4000 chars. */
+  task: string;
+  /** Your provisioned BlockRun caller-ID number (E.164). Must be wallet-owned. */
+  from?: string;
+  /** Voice preset or any Bland.ai voice ID. */
+  voice?: VoicePreset | string;
+  /** Maximum call length in minutes (1–30, default 5). */
+  max_duration?: number;
+  /** BCP-47 language code for STT/TTS (default "en-US"). */
+  language?: string;
+  /** Optional opening line spoken by the agent. */
+  first_sentence?: string;
+  /** If true, wait for the recipient to speak first. */
+  wait_for_greeting?: boolean;
+  /** Sensitivity for detecting recipient interruption (50–500 ms). */
+  interruption_threshold?: number;
+  /** Conversation model. */
+  model?: CallModel;
+}
+
+export interface CallInitiatedResponse {
+  call_id: string;
+  status: string;
+  poll_url: string;
+  message?: string;
+  /** On-chain payment receipt (Base tx hash). */
+  txHash?: string;
+}
+
+/**
+ * Bland.ai call status payload. Returned from getStatus.
+ * Most fields are populated only after the call ends.
+ */
+export interface CallStatusResponse {
+  call_id?: string;
+  status?: string;
+  to?: string;
+  from?: string;
+  /** ISO timestamp call started, or null while queued. */
+  started_at?: string | null;
+  /** ISO timestamp call ended, or null while in progress. */
+  ended_at?: string | null;
+  /** Total call length in seconds, once completed. */
+  call_length?: number;
+  /** URL to the call recording (mp3/wav). */
+  recording_url?: string | null;
+  /** Full text transcript of the call. */
+  concatenated_transcript?: string | null;
+  /** Per-turn transcript array. Shape comes from Bland.ai. */
+  transcripts?: Array<Record<string, unknown>>;
+  /** Why the call ended ("user_hangup", "agent_hangup", "timeout", …). */
+  ended_reason?: string | null;
+  /** Pass-through for anything Bland.ai adds. */
+  [key: string]: unknown;
+}
+
 // Video types
 
 export interface VideoClip {

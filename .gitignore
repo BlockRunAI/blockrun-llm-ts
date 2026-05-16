@@ -32,3 +32,4 @@ yarn-error.log*
 
 # Test files with credentials
 test-*.mjs
+.gstack/
