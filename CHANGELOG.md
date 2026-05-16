@@ -2,6 +2,24 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [2.2.0] - 2026-05-16
+
+### Added
+
+- **`VoiceClient` — AI-powered outbound phone calls via x402.** New module
+  `src/voice.ts` wraps the backend's `POST /v1/voice/call` (paid, $0.54/call)
+  and `GET /v1/voice/call/{callId}` (free polling). The AI agent dials a
+  US/Canada E.164 number and conducts a real-time conversation following your
+  `task` instructions; STT + LLM + TTS are handled upstream by Bland.ai. Full
+  pass-through for `from`, `voice` (7 presets + custom Bland IDs),
+  `max_duration` (1–30 min), `language`, `first_sentence`,
+  `wait_for_greeting`, `interruption_threshold`, and `model` tier (`base` |
+  `enhanced` | `turbo`). Status polling returns the full Bland call record
+  (status, transcript, recording URL, ended_reason). Exported as `VoiceClient`
+  from `@blockrun/llm` with public types `VoicePreset`, `CallModel`,
+  `VoiceClientOptions`, `CallOptions`, `CallInitiatedResponse`,
+  `CallStatusResponse`. See README "Voice Calls" section for usage.
+
 ## [2.1.1] - 2026-05-14
 
 ### Fixed
