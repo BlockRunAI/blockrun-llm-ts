@@ -41,6 +41,53 @@ const response = await client.chat('openai/gpt-4o', 'Hello!');
 
 That's it. The SDK handles x402 payment automatically.
 
+## `BlockrunClient` — the universal primitive (recommended for new code)
+
+Starting in `2.5.0`, the SDK ships a single `BlockrunClient` that speaks to
+**every** BlockRun endpoint over x402. New API surfaces are intended to be
+distributed as [Claude Code skills](https://github.com/anthropics/skills)
+that drive this primitive — no SDK release required to add an endpoint.
+
+```typescript
+import { BlockrunClient } from '@blockrun/llm';
+
+const br = new BlockrunClient();
+
+// Sync GET — Surf market price (Tier 1, $0.001)
+const btc = await br.get('/v1/surf/market/price', { symbol: 'BTC' });
+
+// Sync POST — raw on-chain SQL (Tier 3, $0.020)
+const rows = await br.post('/v1/surf/onchain/sql', {
+  query: 'SELECT block_number FROM ethereum.blocks ORDER BY block_number DESC LIMIT 1',
+});
+
+// Submit + poll — long-running video gen (settled only on completion)
+const video = await br.poll('/v1/videos/generations', {
+  model: 'xai/grok-imagine-video',
+  prompt: 'a red apple spinning',
+});
+
+// Streaming SSE — chat completions
+for await (const chunk of br.stream('/v1/chat/completions', {
+  model: 'anthropic/claude-sonnet-4-6',
+  messages: [{ role: 'user', content: 'Hi' }],
+  stream: true,
+})) {
+  process.stdout.write(chunk?.choices?.[0]?.delta?.content ?? '');
+}
+```
+
+Four call shapes cover every endpoint type:
+- `get<T>(path, params?)` — synchronous GET (price, ranking, list, news)
+- `post<T>(path, body?)` — synchronous POST (on-chain SQL, search)
+- `poll<T>(path, body?, { budgetMs, intervalMs })` — submit + poll (image, video, music, voice)
+- `stream<T>(path, body?)` — async iterator over SSE chunks (chat)
+
+The per-API client classes (`LLMClient`, `ImageClient`, `VideoClient`,
+`VoiceClient`, `MusicClient`, `SearchClient`, `XClient`, `PriceClient`,
+`SurfClient`) all remain — they will be soft-deprecated in 2.6 (rewritten as
+shims over `BlockrunClient`) and removed in 3.0.
+
 ### Try It Free (No USDC Required)
 
 Want to kick the tires before funding a wallet? Route to BlockRun's free NVIDIA tier:
