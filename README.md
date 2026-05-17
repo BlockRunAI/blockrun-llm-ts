@@ -381,6 +381,17 @@ console.log(result.data[0].duration_seconds); // 8
 const r2 = await client.generate('the subject turns and smiles', {
   imageUrl: 'https://example.com/portrait.jpg',
 });
+
+// Token360 / Seedance options (silently ignored by xAI Grok video)
+const r3 = await client.generate('aerial drone shot over a snowy mountain', {
+  model: 'bytedance/seedance-2.0-fast',
+  aspectRatio: '21:9',
+  resolution: '1080p',
+  generateAudio: true,    // omit to use the model's default
+  seed: 42,
+  watermark: false,
+  returnLastFrame: true,  // useful for clip chaining
+});
 ```
 
 ### Voice Calls
