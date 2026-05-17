@@ -2,6 +2,24 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [2.3.0] - 2026-05-16
+
+### Added
+
+- **Token360 / Seedance video passthrough options.** `VideoGenerateOptions`
+  now accepts six new optional fields that forward directly to the gateway's
+  Token360 video backends (xAI Grok video silently ignores them):
+  - `aspectRatio` — `"adaptive" | "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9" | "9:21"`
+  - `resolution` — `"360p" | "480p" | "540p" | "720p" | "1080p" | "1K" | "2K" | "4K"`
+  - `generateAudio` — explicit on/off; when omitted, no `generate_audio`
+    field is sent and the upstream model applies its own default. Audio
+    generation is usually a paid surcharge, so surface this as a user toggle.
+  - `seed` — reproducibility seed when supported by the model
+  - `watermark` — embed the upstream watermark on the output (gateway default: off)
+  - `returnLastFrame` — return the last frame as an image for clip chaining
+- All fields are optional and non-breaking. Existing callers passing only
+  `model` / `imageUrl` / `durationSeconds` are unaffected.
+
 ## [2.2.0] - 2026-05-16
 
 ### Added
