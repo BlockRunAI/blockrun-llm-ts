@@ -43,6 +43,7 @@ export {
   type XSearchOptions,
 } from "./x-client";
 export { PriceClient } from "./price";
+export { SurfClient } from "./surf";
 export {
   type ChatMessage,
   type ChatChoice,
@@ -141,6 +142,7 @@ export {
   type SearchClientOptions,
   type XClientOptions,
   type PriceClientOptions,
+  type SurfClientOptions,
   // Error classes
   BlockrunError,
   PaymentError,

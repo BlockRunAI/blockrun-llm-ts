@@ -455,6 +455,50 @@ const results = await x.search('x402 micropayments', { queryType: 'Latest' });
 const tweets = await x.userTweets({ username: 'vitalikbuterin', includeReplies: false });
 ```
 
+### Surf Crypto Data
+
+`SurfClient` exposes the full `/v1/surf/*` catalog — 84+ pay-per-call
+endpoints across CEX/DEX market data, on-chain SQL, wallet intelligence,
+prediction markets (Polymarket + Kalshi), social analytics, news, VC fund
+data, and an OpenAI-compatible chat surface. Flat pricing per call:
+
+| Tier | Price/call | Examples |
+|------|-----------|----------|
+| 1 | $0.001 | `/market/price`, `/market/ranking`, `/news/feed`, prediction-market reads, social tweets |
+| 2 | $0.005 | `/exchange/depth`, `/exchange/klines`, `/wallet/detail`, `/search/*`, `/social/ranking` |
+| 3 | $0.020 | `/onchain/sql`, `/onchain/query`, `/onchain/schema`, `/chat/completions` |
+
+Because the catalog is broad and evolving, the client deliberately ships a
+generic `get` / `post` pair instead of 84 typed wrappers. Pass the path
+(with or without the `/v1/surf` prefix), query params, or a JSON body —
+type the response via a generic if you want.
+
+```ts
+import { SurfClient } from '@blockrun/llm';
+
+const surf = new SurfClient();
+
+// Tier 1 — token price ($0.001)
+const btc = await surf.get('/market/price', { symbol: 'BTC' });
+
+// Tier 2 — order book depth ($0.005)
+const book = await surf.get('/exchange/depth', {
+  exchange: 'binance',
+  symbol: 'BTC-USDT',
+});
+
+// Tier 3 — raw on-chain SQL against 80+ ClickHouse tables ($0.020)
+const rows = await surf.post('/onchain/sql', {
+  query: 'SELECT block_number FROM ethereum.blocks ORDER BY block_number DESC LIMIT 5',
+});
+
+// Typed response via generic
+type Price = { symbol: string; price: number; timestamp: string };
+const eth = await surf.get<Price>('/market/price', { symbol: 'ETH' });
+```
+
+Full endpoint inventory: <https://blockrun.ai/marketplace/surf>.
+
 Methods: `userLookup`, `userInfo`, `followers`, `following`, `followings`,
 `verifiedFollowers`, `userTweets`, `mentions`, `tweetLookup`, `tweetReplies`,
 `tweetThread`, `search`, `trending`, `articlesRising`.

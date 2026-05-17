@@ -915,6 +915,12 @@ export interface PriceClientOptions {
   requireWallet?: boolean;
 }
 
+export interface SurfClientOptions {
+  privateKey?: `0x${string}` | string;
+  apiUrl?: string;
+  timeout?: number;
+}
+
 export class BlockrunError extends Error {
   constructor(message: string) {
     super(message);
