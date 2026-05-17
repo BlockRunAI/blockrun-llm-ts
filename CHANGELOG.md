@@ -2,6 +2,48 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [2.5.0] - 2026-05-17
+
+### Added
+
+- **`BlockrunClient` — the universal x402-paying HTTP primitive.** One class
+  that speaks to *every* BlockRun endpoint, with four call shapes:
+  - `get<T>(path, params?)` — synchronous GET (price, ranking, news, lists)
+  - `post<T>(path, body?)` — synchronous POST (on-chain SQL, search, chat-non-stream)
+  - `poll<T>(path, body?, { budgetMs, intervalMs })` — submit + poll (image,
+    video, music, voice); settles payment only on `status: "completed"`,
+    handles 504 transient hiccups, surfaces upstream failure cleanly
+  - `stream<T>(path, body?)` — async iterator over Server-Sent Events
+    (chat-stream); parses `data: …` lines, stops on `[DONE]`, skips malformed
+    JSON, releases the reader lock on exit
+- Strips a leading `/api` from paths (so both `/v1/x` and `/api/v1/x` work),
+  serializes array query params as repeated keys, drops `undefined`/`null`
+  params. Exposes `getWalletAddress()` and `getSpending()` mirroring the
+  existing per-API clients.
+- Exported as `BlockrunClient` from `@blockrun/llm` with public types
+  `BlockrunClientOptions` and `PollOptions`. 15 new unit tests cover URL
+  composition, 402 retry, payment-rejection failure, polling timeout, SSE
+  chunk parsing, and SSE robustness against malformed JSON.
+
+### Rationale
+
+New BlockRun API surfaces (84-endpoint Surf catalog, Predexon prediction
+markets, future additions) should ship as [Claude Code
+skills](https://github.com/anthropics/skills) that drive `BlockrunClient`
+directly — no new TypeScript class per surface, no SDK release per API.
+
+### Deprecation timeline
+
+- **2.5** (this release): `BlockrunClient` lands alongside the existing 9
+  per-API client classes. No breaking changes; both paths coexist.
+- **2.6**: The 9 per-API classes (`LLMClient`, `ImageClient`, `VideoClient`,
+  `VoiceClient`, `MusicClient`, `SearchClient`, `XClient`, `PriceClient`,
+  `SurfClient`) will be rewritten as thin shims over `BlockrunClient` and
+  marked `@deprecated`. Surface-compatible — no caller changes required.
+- **3.0**: Per-API classes removed. Only `BlockrunClient` plus the
+  OpenAI/Anthropic compatibility layers remain in the SDK; per-API knowledge
+  lives in Claude Code skills.
+
 ## [2.4.0] - 2026-05-17
 
 ### Added

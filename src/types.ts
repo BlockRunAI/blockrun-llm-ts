@@ -921,6 +921,21 @@ export interface SurfClientOptions {
   timeout?: number;
 }
 
+export interface BlockrunClientOptions {
+  privateKey?: `0x${string}` | string;
+  apiUrl?: string;
+  /** Per-HTTP-call timeout in ms (default 60000). For long-running poll() jobs,
+   *  set budgetMs in PollOptions instead — this only bounds individual fetches. */
+  timeout?: number;
+}
+
+export interface PollOptions {
+  /** Total wall-clock budget for the entire submit + poll loop (default 300000 = 5 min). */
+  budgetMs?: number;
+  /** Sleep between poll attempts (default 5000 = 5 s). */
+  intervalMs?: number;
+}
+
 export class BlockrunError extends Error {
   constructor(message: string) {
     super(message);
