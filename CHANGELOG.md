@@ -2,6 +2,25 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [2.4.0] - 2026-05-17
+
+### Added
+
+- **`SurfClient` — pay-per-call crypto data via x402.** Thin wrapper around
+  the 84+ endpoint Surf catalog mounted at `/api/v1/surf/*`: CEX/DEX market
+  data, on-chain SQL against 80+ ClickHouse tables, wallet intelligence
+  (100M+ labeled wallets across 13 chains), Polymarket + Kalshi prediction
+  markets, Twitter/CT mindshare, news, VC fund profiles, and an
+  OpenAI-compatible chat completion endpoint backed by `surf-1.5`.
+  Three flat pricing tiers ($0.001 / $0.005 / $0.020 per call).
+  Because the catalog is broad and evolving, the client ships a generic
+  `get<T>(path, params?)` / `post<T>(path, body?)` pair instead of 84 typed
+  wrappers — leading `/v1/surf` is auto-prepended, query arrays serialize as
+  repeated keys, and undefined/null params are dropped. Exported as
+  `SurfClient` with public type `SurfClientOptions`. See README
+  "Surf Crypto Data" and the full catalog at
+  <https://blockrun.ai/marketplace/surf>.
+
 ## [2.3.0] - 2026-05-16
 
 ### Added
