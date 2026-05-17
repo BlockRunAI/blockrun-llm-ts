@@ -115,6 +115,13 @@ export class VideoClient {
     };
     if (options?.imageUrl) body.image_url = options.imageUrl;
     if (options?.durationSeconds !== undefined) body.duration_seconds = options.durationSeconds;
+    // ── Token360 / Seedance passthroughs (gateway silently ignores for xAI) ─
+    if (options?.aspectRatio) body.aspect_ratio = options.aspectRatio;
+    if (options?.resolution) body.resolution = options.resolution;
+    if (options?.generateAudio !== undefined) body.generate_audio = options.generateAudio;
+    if (options?.seed !== undefined) body.seed = options.seed;
+    if (options?.watermark !== undefined) body.watermark = options.watermark;
+    if (options?.returnLastFrame) body.return_last_frame = true;
 
     const budgetMs = options?.budgetMs ?? DEFAULT_GENERATE_BUDGET_MS;
     return this.submitAndPoll(body, budgetMs);

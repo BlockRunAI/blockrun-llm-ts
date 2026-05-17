@@ -579,6 +579,24 @@ export interface VideoGenerateOptions {
   imageUrl?: string;
   /** Duration to bill for (defaults to model's default duration) */
   durationSeconds?: number;
+  /** Output aspect ratio. Token360 / Seedance only — silently ignored by xAI Grok. */
+  aspectRatio?: "adaptive" | "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9" | "9:21";
+  /** Output resolution. Token360 / Seedance only. */
+  resolution?: "360p" | "480p" | "540p" | "720p" | "1080p" | "1K" | "2K" | "4K";
+  /**
+   * Whether the model should produce an audio track. Token360 / Seedance only.
+   * When omitted, the gateway does not send the flag — Token360 then applies
+   * its own upstream default (typically off, occasionally on depending on
+   * model variant / prompt). Audio generation is usually a paid surcharge,
+   * so callers should expose this as a visible toggle to their users.
+   */
+  generateAudio?: boolean;
+  /** Reproducibility seed when supported by the model. */
+  seed?: number;
+  /** Embed the upstream watermark on the output. Defaults to false at the gateway. */
+  watermark?: boolean;
+  /** Return the last frame as an image alongside the clip — useful for chaining. */
+  returnLastFrame?: boolean;
 }
 
 // Search options for standalone search endpoint
