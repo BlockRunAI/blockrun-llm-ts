@@ -55,15 +55,74 @@ const DEFAULT_TIMEOUT = 60000;
 const SDK_VERSION = "0.3.0";
 const USER_AGENT = `blockrun-ts/${SDK_VERSION}`;
 
+/**
+ * Default Solana RPC URL — BlockRun's multi-region Tatum-backed JSON-RPC
+ * proxy. Free for SDK users (bundled into LLM inference fees you already
+ * pay) with method-aware server-side caching (`getLatestBlockhash` at 30s
+ * TTL) that collapses bursty signing traffic to a handful of upstream RPC
+ * calls. Public `api.mainnet-beta.solana.com` remains reachable via
+ * explicit config, but its ~10–40 RPS limit is too aggressive for any
+ * real concurrency. Override with `rpcUrl` / `SOLANA_RPC_URL` to bypass.
+ */
+const DEFAULT_SOLANA_RPC_URL = "https://sol.blockrun.ai/api/v1/solana/rpc";
+
 export interface SolanaLLMClientOptions {
   /** bs58-encoded Solana secret key (64 bytes). Optional if SOLANA_WALLET_KEY env var is set. */
   privateKey?: string;
   /** API endpoint URL (default: https://sol.blockrun.ai/api) */
   apiUrl?: string;
-  /** Solana RPC URL (default: https://api.mainnet-beta.solana.com) */
+  /**
+   * Solana JSON-RPC URL. Defaults to BlockRun's own Tatum-backed proxy
+   * (`https://sol.blockrun.ai/api/v1/solana/rpc`), free for SDK users.
+   * Override to point at your own Helius / Tatum / QuickNode account, or
+   * fall back to the env vars `SOLANA_RPC_URL` /
+   * `SOLANA_RPC_API_KEY` / `SOLANA_RPC_HEADERS`.
+   */
   rpcUrl?: string;
+  /**
+   * Optional headers forwarded to the Solana RPC endpoint. Use this for
+   * header-auth gateways (Tatum's `x-api-key`, some Triton tiers). Falls
+   * back to `SOLANA_RPC_HEADERS` (JSON dict) or `SOLANA_RPC_API_KEY`
+   * (shortcut for `{ "x-api-key": "..." }`) env vars when omitted.
+   */
+  rpcHeaders?: Record<string, string>;
   /** Request timeout in milliseconds (default: 60000) */
   timeout?: number;
+}
+
+/**
+ * Resolve the effective Solana RPC URL + headers from explicit args, env
+ * vars, or defaults — in that priority order. Mirrors the Python SDK's
+ * `_resolve_rpc_config` (see blockrun-llm 0.23.0 / 0.24.0).
+ */
+function resolveRpcConfig(
+  rpcUrl: string | undefined,
+  rpcHeaders: Record<string, string> | undefined
+): { url: string; headers?: Record<string, string> } {
+  const env =
+    typeof process !== "undefined" && process.env ? process.env : ({} as NodeJS.ProcessEnv);
+
+  const url = rpcUrl || env.SOLANA_RPC_URL || DEFAULT_SOLANA_RPC_URL;
+
+  let headers: Record<string, string> | undefined;
+  if (rpcHeaders) {
+    headers = { ...rpcHeaders };
+  } else if (env.SOLANA_RPC_HEADERS) {
+    try {
+      const parsed = JSON.parse(env.SOLANA_RPC_HEADERS);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        headers = Object.fromEntries(
+          Object.entries(parsed as Record<string, unknown>).map(([k, v]) => [String(k), String(v)])
+        );
+      }
+    } catch {
+      /* ignore malformed env var */
+    }
+  } else if (env.SOLANA_RPC_API_KEY) {
+    headers = { "x-api-key": env.SOLANA_RPC_API_KEY };
+  }
+
+  return headers ? { url, headers } : { url };
 }
 
 export class SolanaLLMClient {
@@ -72,6 +131,7 @@ export class SolanaLLMClient {
   private privateKey: string;
   private apiUrl: string;
   private rpcUrl: string;
+  private rpcHeaders?: Record<string, string>;
   private timeout: number;
   private sessionTotalUsd = 0;
   private sessionCalls = 0;
@@ -95,7 +155,9 @@ export class SolanaLLMClient {
     validateApiUrl(apiUrl);
     this.apiUrl = apiUrl.replace(/\/$/, "");
 
-    this.rpcUrl = options.rpcUrl || "https://api.mainnet-beta.solana.com";
+    const rpc = resolveRpcConfig(options.rpcUrl, options.rpcHeaders);
+    this.rpcUrl = rpc.url;
+    this.rpcHeaders = rpc.headers;
     this.timeout = options.timeout || DEFAULT_TIMEOUT;
   }
 
@@ -164,7 +226,7 @@ export class SolanaLLMClient {
     try {
       const response = await fetch(this.rpcUrl, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(this.rpcHeaders ?? {}) },
         body: JSON.stringify({
           jsonrpc: "2.0",
           id: 1,
@@ -459,6 +521,7 @@ export class SolanaLLMClient {
         extra: details.extra as Record<string, unknown>,
         extensions,
         rpcUrl: this.rpcUrl,
+        rpcHeaders: this.rpcHeaders,
       }
     );
 
@@ -565,6 +628,7 @@ export class SolanaLLMClient {
         extra: details.extra as Record<string, unknown>,
         extensions,
         rpcUrl: this.rpcUrl,
+        rpcHeaders: this.rpcHeaders,
       }
     );
 
@@ -673,6 +737,7 @@ export class SolanaLLMClient {
         extra: details.extra as Record<string, unknown>,
         extensions,
         rpcUrl: this.rpcUrl,
+        rpcHeaders: this.rpcHeaders,
       }
     );
 

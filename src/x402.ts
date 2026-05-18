@@ -144,6 +144,11 @@ export interface CreateSolanaPaymentOptions {
   extra?: Record<string, unknown>;
   extensions?: Record<string, unknown>;
   rpcUrl?: string;
+  /**
+   * Optional HTTP headers forwarded to the Solana RPC endpoint
+   * (e.g. `{ "x-api-key": "..." }` for Tatum / header-auth gateways).
+   */
+  rpcHeaders?: Record<string, string>;
 }
 
 /**
@@ -175,8 +180,10 @@ export async function createSolanaPaymentPayload(
   const { getAssociatedTokenAddress, createTransferCheckedInstruction, getMint } = await import("@solana/spl-token");
   const { Keypair } = await import("@solana/web3.js");
 
-  const rpcUrl = options.rpcUrl || "https://api.mainnet-beta.solana.com";
-  const connection = new Connection(rpcUrl);
+  const rpcUrl = options.rpcUrl || "https://sol.blockrun.ai/api/v1/solana/rpc";
+  const connection = options.rpcHeaders
+    ? new Connection(rpcUrl, { httpHeaders: options.rpcHeaders })
+    : new Connection(rpcUrl);
 
   // Create keypair from secret key
   const keypair = Keypair.fromSecretKey(secretKey);

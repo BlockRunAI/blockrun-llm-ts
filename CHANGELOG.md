@@ -2,6 +2,54 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [2.6.0] - 2026-05-18
+
+### Added
+
+- **`PhoneClient` — Twilio-backed phone lookup + number provisioning via x402.**
+  New module `src/phone.ts` wraps the backend's `/v1/phone/*` partner endpoints.
+  Methods:
+  - `lookup(phoneNumber)` — carrier + line-type ($0.01)
+  - `lookupFraud(phoneNumber)` — adds SIM-swap / call-forwarding signals ($0.05)
+  - `buyNumber({ country?, areaCode? })` — provision a US/CA number with a
+    30-day lease bound to your wallet ($5.00). Settlement is held until Twilio
+    confirms the purchase, so failed buys never charge your wallet.
+  - `renewNumber(phoneNumber)` — extend by 30 days ($5.00)
+  - `listNumbers()` — list your active numbers ($0.001)
+  - `releaseNumber(phoneNumber)` — return a number to the pool (free, still
+    flows through x402 for wallet-identity verification)
+  Use the provisioned number as the `from` caller ID in `VoiceClient.call()`.
+  Exported as `PhoneClient` with public types `PhoneClientOptions`,
+  `PhoneLookupResponse`, `PhoneBuyOptions`, `PhoneBuyResponse`,
+  `PhoneRenewResponse`, `PhoneNumberRecord`, `PhoneListResponse`,
+  `PhoneReleaseResponse`. Per-endpoint USD prices exposed as the
+  `PHONE_PRICES` constant.
+
+### Changed
+
+- **Default Solana RPC is now BlockRun's proxy.** `SolanaLLMClient` resolves
+  its RPC endpoint to `https://sol.blockrun.ai/api/v1/solana/rpc` when no
+  `SOLANA_RPC_URL` env var or explicit `rpcUrl` option is set. BlockRun's
+  multi-region, Tatum-backed Solana JSON-RPC proxy is free for SDK users
+  (bundled into LLM inference fees) and applies method-aware caching on the
+  server side (`getLatestBlockhash` at 30s TTL), collapsing bursty signing
+  traffic to a handful of upstream RPC calls. The previous default
+  `https://api.mainnet-beta.solana.com` is still reachable via explicit
+  `rpcUrl` / `SOLANA_RPC_URL` but is no longer the default — its public
+  rate limit (~10–40 RPS) is too aggressive for any real concurrency.
+  No code change required to opt in; upgrade and you're on it.
+
+- **Custom Solana RPC config via env vars.** `SolanaLLMClient` now reads, in
+  priority order: explicit `rpcUrl` / `rpcHeaders` args, then the env vars
+  `SOLANA_RPC_URL` (full RPC URL), `SOLANA_RPC_API_KEY` (shortcut for
+  `x-api-key: <value>`, Tatum-style), and `SOLANA_RPC_HEADERS` (JSON dict
+  for arbitrary header schemes), then the BlockRun default. Helius-style
+  in-URL auth keeps working with `SOLANA_RPC_URL` alone; Tatum-style
+  header-auth gateways now work end-to-end because the underlying
+  `@solana/web3.js` `Connection` is constructed with `httpHeaders` when
+  custom headers are supplied. New `rpcHeaders?: Record<string, string>`
+  option on `SolanaLLMClientOptions` and `CreateSolanaPaymentOptions`.
+
 ## [2.5.0] - 2026-05-17
 
 ### Added
