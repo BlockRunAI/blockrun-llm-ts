@@ -921,6 +921,85 @@ export interface SurfClientOptions {
   timeout?: number;
 }
 
+// ─── Phone (Twilio-backed lookup + number provisioning via x402) ───────
+
+export interface PhoneClientOptions {
+  /** EVM wallet private key (hex string starting with 0x) */
+  privateKey?: `0x${string}` | string;
+  /** API endpoint URL (default: https://blockrun.ai/api) */
+  apiUrl?: string;
+  /** Request timeout in milliseconds (default: 60000) */
+  timeout?: number;
+}
+
+/**
+ * Twilio Lookup passthrough — shape comes from upstream and varies by feature
+ * (basic vs `line_type_intelligence`, `sim_swap`, `call_forwarding`).
+ * Typed as a permissive record so future Twilio fields don't require an SDK release.
+ */
+export interface PhoneLookupResponse {
+  phone_number?: string;
+  country_code?: string;
+  national_format?: string;
+  caller_name?: Record<string, unknown> | null;
+  carrier?: Record<string, unknown> | null;
+  line_type_intelligence?: Record<string, unknown> | null;
+  sim_swap?: Record<string, unknown> | null;
+  call_forwarding?: Record<string, unknown> | null;
+  /** Pass-through for anything Twilio adds. */
+  [key: string]: unknown;
+}
+
+export interface PhoneBuyOptions {
+  /** ISO country code, "US" or "CA" (default "US"). */
+  country?: "US" | "CA";
+  /**
+   * Optional 3-digit area-code hint. Availability is not guaranteed — the
+   * backend falls back to any number in the country if the area code
+   * can't be matched.
+   */
+  areaCode?: string;
+}
+
+export interface PhoneBuyResponse {
+  /** The E.164 number now bound to your wallet. */
+  phone_number: string;
+  /** ISO-8601 expiry (30 days out from purchase). */
+  expires_at: string;
+  /** "base" | "solana" — settlement chain. */
+  chain: string;
+  /** Human-readable note. */
+  message?: string;
+  /** On-chain payment receipt (tx hash). */
+  txHash?: string;
+}
+
+export interface PhoneRenewResponse {
+  phone_number: string;
+  /** Extended expiry (30 days from previous expiry). */
+  expires_at: string;
+  txHash?: string;
+}
+
+export interface PhoneNumberRecord {
+  phone_number: string;
+  chain: string;
+  expires_at: string;
+  active: boolean;
+}
+
+export interface PhoneListResponse {
+  numbers: PhoneNumberRecord[];
+  count: number;
+  txHash?: string;
+}
+
+export interface PhoneReleaseResponse {
+  released: true;
+  phone_number: string;
+  txHash?: string;
+}
+
 export interface BlockrunClientOptions {
   privateKey?: `0x${string}` | string;
   apiUrl?: string;

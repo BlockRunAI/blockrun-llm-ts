@@ -34,6 +34,7 @@ export { ImageClient } from "./image";
 export { MusicClient } from "./music";
 export { VideoClient } from "./video";
 export { VoiceClient } from "./voice";
+export { PhoneClient, PHONE_PRICES } from "./phone";
 export { SearchClient } from "./search";
 export {
   XClient,
@@ -86,6 +87,15 @@ export {
   type CallOptions,
   type CallInitiatedResponse,
   type CallStatusResponse,
+  // Phone (lookup + provisioning) types
+  type PhoneClientOptions,
+  type PhoneLookupResponse,
+  type PhoneBuyOptions,
+  type PhoneBuyResponse,
+  type PhoneRenewResponse,
+  type PhoneNumberRecord,
+  type PhoneListResponse,
+  type PhoneReleaseResponse,
   // Live Search types
   type WebSearchSource,
   type XSearchSource,
