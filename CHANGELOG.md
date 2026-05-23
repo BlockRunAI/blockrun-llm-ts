@@ -2,6 +2,29 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [2.7.0] - 2026-05-23
+
+### Added
+
+- **`VideoGenerateOptions.realFaceAssetId` — condition Seedance 2.0 fast/pro
+  on a pre-enrolled Virtual Portrait for character consistency across clips.**
+  Pass the `ta_xxxxxx` asset id returned by `POST /v1/portrait/enroll` (no KYC,
+  $0.50 USDC per enrollment) and the same AI character will appear as the
+  first frame's face reference. Mutually exclusive with `imageUrl` — both
+  fields seed the first frame, so the SDK throws synchronously if you pass
+  both. The asset id is validated against `^ta_[A-Za-z0-9]+$` (the same
+  regex the gateway enforces) so malformed ids fail in-client instead of
+  costing a round-trip. Real-person likeness is not supported on BlockRun.
+
+### Changed
+
+- **`VideoGenerateOptions.generateAudio` JSDoc now reflects actual server
+  defaults.** Previously the doc claimed the gateway "did not send the flag"
+  when omitted; the gateway in fact defaults Seedance audio to `true` for
+  text-to-video and `false` for image- or face-conditioned generation
+  (matching Token360's quality profile). Behavior unchanged — pass an
+  explicit boolean to override.
+
 ## [2.6.0] - 2026-05-18
 
 ### Added

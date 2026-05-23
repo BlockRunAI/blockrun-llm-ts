@@ -577,6 +577,13 @@ export interface VideoGenerateOptions {
   model?: "xai/grok-imagine-video" | string;
   /** Optional seed image URL for image-to-video */
   imageUrl?: string;
+  /**
+   * Virtual Portrait asset ID (`ta_xxxxxx`) — keeps the same AI character
+   * across multiple Seedance videos. Enroll via `POST /v1/portrait/enroll`
+   * ($0.50 USDC, no KYC). **Seedance 2.0 fast/pro only.** Mutually exclusive
+   * with `imageUrl`. Real-person likeness is not supported on BlockRun.
+   */
+  realFaceAssetId?: string;
   /** Duration to bill for (defaults to model's default duration) */
   durationSeconds?: number;
   /** Output aspect ratio. Token360 / Seedance only — silently ignored by xAI Grok. */
@@ -584,11 +591,12 @@ export interface VideoGenerateOptions {
   /** Output resolution. Token360 / Seedance only. */
   resolution?: "360p" | "480p" | "540p" | "720p" | "1080p" | "1K" | "2K" | "4K";
   /**
-   * Whether the model should produce an audio track. Token360 / Seedance only.
-   * When omitted, the gateway does not send the flag — Token360 then applies
-   * its own upstream default (typically off, occasionally on depending on
-   * model variant / prompt). Audio generation is usually a paid surcharge,
-   * so callers should expose this as a visible toggle to their users.
+   * Whether the model should produce a synced audio track. Token360 / Seedance
+   * only — silently ignored by xAI Grok. When omitted, the gateway defaults to
+   * `true` for text-to-video and `false` for image- or face-conditioned
+   * generation (the t2v / i2v split that matches Token360's quality profile).
+   * Pass an explicit boolean to override. Audio generation may be a paid
+   * surcharge upstream, so callers should expose this as a visible toggle.
    */
   generateAudio?: boolean;
   /** Reproducibility seed when supported by the model. */

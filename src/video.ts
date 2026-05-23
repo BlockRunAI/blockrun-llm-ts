@@ -109,11 +109,23 @@ export class VideoClient {
     prompt: string,
     options?: VideoGenerateOptions & { budgetMs?: number }
   ): Promise<VideoResponse> {
+    if (options?.imageUrl && options?.realFaceAssetId) {
+      throw new Error(
+        "imageUrl and realFaceAssetId are mutually exclusive; pass at most one."
+      );
+    }
+    if (options?.realFaceAssetId && !/^ta_[A-Za-z0-9]+$/.test(options.realFaceAssetId)) {
+      throw new Error(
+        "realFaceAssetId must be a Token360 asset id matching 'ta_[A-Za-z0-9]+' (e.g. 'ta_abc123xyz')"
+      );
+    }
+
     const body: Record<string, unknown> = {
       model: options?.model || DEFAULT_MODEL,
       prompt,
     };
     if (options?.imageUrl) body.image_url = options.imageUrl;
+    if (options?.realFaceAssetId) body.real_face_asset_id = options.realFaceAssetId;
     if (options?.durationSeconds !== undefined) body.duration_seconds = options.durationSeconds;
     // ── Token360 / Seedance passthroughs (gateway silently ignores for xAI) ─
     if (options?.aspectRatio) body.aspect_ratio = options.aspectRatio;
