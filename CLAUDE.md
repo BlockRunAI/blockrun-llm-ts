@@ -20,6 +20,17 @@ src/
 ├── index.ts             # Package exports
 ├── client.ts            # LLMClient (Base chain)
 ├── solana-client.ts     # SolanaLLMClient
+├── blockrun.ts          # BlockrunClient — universal x402 primitive (get/post/poll/stream)
+├── image.ts             # ImageClient — image generation + editing
+├── video.ts             # VideoClient — video generation (incl. realFaceAssetId)
+├── portrait.ts          # PortraitClient — Virtual Portrait enrollment (ta_xxxxxx)
+├── music.ts             # MusicClient — music/audio generation
+├── voice.ts             # VoiceClient — AI outbound phone calls
+├── phone.ts             # PhoneClient — phone lookup + number provisioning
+├── search.ts            # SearchClient — Grok Live Search
+├── x-client.ts          # XClient — X/Twitter data (AttentionVC)
+├── price.ts             # PriceClient — Pyth market data
+├── surf.ts              # SurfClient — /v1/surf/* crypto data catalog
 ├── wallet.ts            # EVM wallet management
 ├── solana-wallet.ts     # Solana wallet management
 ├── x402.ts              # x402 payment protocol
@@ -27,7 +38,6 @@ src/
 ├── validation.ts        # Input validation
 ├── cache.ts             # Response caching
 ├── cost-log.ts          # Cost logging
-├── image.ts             # Image generation
 ├── setup.ts             # First-run setup
 ├── anthropic-compat.ts  # Anthropic SDK compatibility layer
 └── openai-compat.ts     # OpenAI SDK compatibility layer
