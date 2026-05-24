@@ -84,8 +84,8 @@ Four call shapes cover every endpoint type:
 - `stream<T>(path, body?)` — async iterator over SSE chunks (chat)
 
 The per-API client classes (`LLMClient`, `ImageClient`, `VideoClient`,
-`VoiceClient`, `MusicClient`, `SearchClient`, `XClient`, `PriceClient`,
-`SurfClient`) all remain — they will be soft-deprecated in 2.6 (rewritten as
+`PortraitClient`, `VoiceClient`, `MusicClient`, `SearchClient`, `XClient`,
+`PriceClient`, `SurfClient`) all remain — they will be soft-deprecated in 2.6 (rewritten as
 shims over `BlockrunClient`) and removed in 3.0.
 
 ### Try It Free (No USDC Required)
@@ -439,6 +439,33 @@ const r3 = await client.generate('aerial drone shot over a snowy mountain', {
   watermark: false,
   returnLastFrame: true,  // useful for clip chaining
 });
+```
+
+### Virtual Portraits
+
+`PortraitClient` wraps `POST /v1/portrait/enroll` (paid, flat **$0.50**, no KYC).
+Enroll a face image by URL and get back a Token360 asset id (`ta_xxxxxx`). Pass
+that id as `realFaceAssetId` on a Seedance 2.0 video generation to keep the same
+AI character across clips. Payment settles only after enrollment succeeds, so a
+failed enrollment never charges your wallet. (Real-person likeness is not
+supported on BlockRun — enrolled portraits are AI characters.)
+
+```ts
+import { PortraitClient, VideoClient } from '@blockrun/llm';
+
+const portraits = new PortraitClient();
+const { asset_id } = await portraits.enroll({
+  name: 'Spokesperson',
+  imageUrl: 'https://example.com/face.jpg',  // public https JPG/PNG/WEBP, ≤10 MB
+});
+
+// Reuse the same character across Seedance 2.0 clips
+const video = new VideoClient();
+const clip = await video.generate('she waves and smiles', {
+  model: 'bytedance/seedance-2.0-fast',
+  realFaceAssetId: asset_id,
+});
+console.log(clip.data[0].url);
 ```
 
 ### Voice Calls

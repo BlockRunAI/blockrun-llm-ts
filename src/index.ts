@@ -35,6 +35,7 @@ export { MusicClient } from "./music";
 export { VideoClient } from "./video";
 export { VoiceClient } from "./voice";
 export { PhoneClient, PHONE_PRICES } from "./phone";
+export { PortraitClient, PORTRAIT_ENROLLMENT_PRICE_USD } from "./portrait";
 export { SearchClient } from "./search";
 export {
   XClient,
@@ -96,6 +97,10 @@ export {
   type PhoneNumberRecord,
   type PhoneListResponse,
   type PhoneReleaseResponse,
+  // Virtual Portrait enrollment types
+  type PortraitClientOptions,
+  type PortraitEnrollOptions,
+  type PortraitEnrollResponse,
   // Live Search types
   type WebSearchSource,
   type XSearchSource,
