@@ -1008,6 +1008,59 @@ export interface PhoneReleaseResponse {
   txHash?: string;
 }
 
+// ─── Virtual Portrait enrollment (Token360-backed, via x402) ───────────
+
+export interface PortraitClientOptions {
+  /** EVM wallet private key (hex string starting with 0x) */
+  privateKey?: `0x${string}` | string;
+  /** API endpoint URL (default: https://blockrun.ai/api) */
+  apiUrl?: string;
+  /** Request timeout in milliseconds (default: 60000) */
+  timeout?: number;
+}
+
+export interface PortraitEnrollOptions {
+  /** Display name for the portrait (1–64 chars). */
+  name: string;
+  /**
+   * Public HTTPS URL to a JPG/PNG/WEBP face image (≤10 MB). The gateway fetches
+   * it server-side and forwards it to Token360 as multipart — only the URL is sent.
+   */
+  imageUrl: string;
+}
+
+/**
+ * Response from `POST /v1/portrait/enroll`. The `asset_id` (`ta_xxxxxx`) is what
+ * you pass as `realFaceAssetId` on a Seedance 2.0 video generation to keep the
+ * same AI character across clips.
+ */
+export interface PortraitEnrollResponse {
+  object: "virtual_portrait";
+  /** Token360 asset id (`ta_xxxxxx`) — pass as `realFaceAssetId` in VideoGenerateOptions. */
+  asset_id: string;
+  /** Token360 asset-group id (internal/debugging). */
+  group_id: string;
+  name: string;
+  image_url: string;
+  /** ISO-8601 creation timestamp. */
+  created_at: string;
+  usage: {
+    compatible_models: string[];
+    how_to_use: string;
+  };
+  price: {
+    amount: string;
+    currency: string;
+  };
+  settlement: {
+    success: boolean;
+    tx_hash: string | null;
+    network: string;
+  };
+  /** On-chain payment receipt (tx hash), surfaced from the response header. */
+  txHash?: string;
+}
+
 export interface BlockrunClientOptions {
   privateKey?: `0x${string}` | string;
   apiUrl?: string;
