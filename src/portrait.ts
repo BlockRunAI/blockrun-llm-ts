@@ -1,7 +1,7 @@
 /**
  * BlockRun Portrait Client — enroll a Virtual Portrait via x402.
  *
- * Wraps `POST /v1/portrait/enroll` ($0.50 USDC, no KYC). You upload a face image
+ * Wraps `POST /v1/portrait/enroll` ($0.01 USDC promo, no KYC). You upload a face image
  * by URL and get back a Token360 asset id (`ta_xxxxxx`). Pass that id as
  * `realFaceAssetId` on a Seedance 2.0 video generation (VideoClient.generate)
  * to keep the same AI character across clips.
@@ -49,8 +49,12 @@ import {
 const DEFAULT_API_URL = "https://blockrun.ai/api";
 const DEFAULT_TIMEOUT = 60_000;
 
-/** Flat enrollment price in USD — mirrors the backend's `ENROLLMENT_PRICE_USD`. */
-export const PORTRAIT_ENROLLMENT_PRICE_USD = 0.5;
+/**
+ * Flat enrollment price in USD — mirrors the backend's `ENROLLMENT_PRICE_USD`.
+ * Currently $0.01 (promotional, parity with RealFace). The authoritative price
+ * is whatever the gateway quotes in the 402; this constant is informational.
+ */
+export const PORTRAIT_ENROLLMENT_PRICE_USD = 0.01;
 
 /**
  * BlockRun Portrait Client.
@@ -99,7 +103,7 @@ export class PortraitClient {
   }
 
   /**
-   * Enroll a Virtual Portrait from a face image URL. $0.50.
+   * Enroll a Virtual Portrait from a face image URL. $0.01 (promo).
    *
    * Payment is settled only after Token360 confirms the enrollment, so failed
    * enrollments never charge your wallet.
@@ -198,11 +202,16 @@ export class PortraitClient {
     this.sessionCalls += 1;
     this.sessionTotalUsd += costUsd;
 
-    const txHash =
-      retry.headers.get("x-payment-receipt") ||
-      retry.headers.get("X-Payment-Receipt");
-    if (txHash && data && typeof data === "object" && !("txHash" in data)) {
-      (data as Record<string, unknown>).txHash = txHash;
+    // The enroll route returns the on-chain settlement hash in the body
+    // (`settlement.tx_hash`), not a receipt header. Surface it as a flat
+    // `txHash` for parity with other client responses.
+    if (data && typeof data === "object" && !("txHash" in data)) {
+      const settlement = (data as Record<string, unknown>).settlement as
+        | { tx_hash?: string | null }
+        | undefined;
+      if (settlement?.tx_hash) {
+        (data as Record<string, unknown>).txHash = settlement.tx_hash;
+      }
     }
     return data as unknown as T;
   }

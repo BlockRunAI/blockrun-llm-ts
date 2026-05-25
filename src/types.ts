@@ -580,7 +580,7 @@ export interface VideoGenerateOptions {
   /**
    * Virtual Portrait asset ID (`ta_xxxxxx`) — keeps the same AI character
    * across multiple Seedance videos. Enroll via `POST /v1/portrait/enroll`
-   * ($0.50 USDC, no KYC). **Seedance 2.0 fast/pro only.** Mutually exclusive
+   * ($0.01 USDC promo, no KYC). **Seedance 2.0 fast/pro only.** Mutually exclusive
    * with `imageUrl`. Real-person likeness is not supported on BlockRun.
    */
   realFaceAssetId?: string;
@@ -1041,7 +1041,16 @@ export interface PortraitEnrollResponse {
   /** Token360 asset-group id (internal/debugging). */
   group_id: string;
   name: string;
+  /**
+   * Persisted thumbnail URL. The gateway mirrors your source image to its own
+   * storage when possible (so the listing thumbnail survives a dead source
+   * host); falls back to the original URL if mirroring fails. See `mirrored`.
+   */
   image_url: string;
+  /** The original URL you supplied (before any mirroring). */
+  source_image_url?: string;
+  /** Whether `image_url` is the gateway-mirrored copy (true) or your original (false). */
+  mirrored?: boolean;
   /** ISO-8601 creation timestamp. */
   created_at: string;
   usage: {

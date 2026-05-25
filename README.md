@@ -443,12 +443,14 @@ const r3 = await client.generate('aerial drone shot over a snowy mountain', {
 
 ### Virtual Portraits
 
-`PortraitClient` wraps `POST /v1/portrait/enroll` (paid, flat **$0.50**, no KYC).
-Enroll a face image by URL and get back a Token360 asset id (`ta_xxxxxx`). Pass
-that id as `realFaceAssetId` on a Seedance 2.0 video generation to keep the same
-AI character across clips. Payment settles only after enrollment succeeds, so a
-failed enrollment never charges your wallet. (Real-person likeness is not
-supported on BlockRun — enrolled portraits are AI characters.)
+`PortraitClient` wraps `POST /v1/portrait/enroll` (paid, flat **$0.01** promo,
+no KYC). Enroll a face image by URL and get back a Token360 asset id (`ta_xxxxxx`).
+Pass that id as `realFaceAssetId` on a Seedance 2.0 video generation to keep the
+same AI character across clips. Payment settles only after Token360 confirms the
+enrollment, so a failed enrollment never charges your wallet. The returned
+`image_url` is a gateway-mirrored copy of your source image (see `mirrored` /
+`source_image_url`). (Real-person likeness is not supported on BlockRun —
+enrolled portraits are AI characters.)
 
 ```ts
 import { PortraitClient, VideoClient } from '@blockrun/llm';
