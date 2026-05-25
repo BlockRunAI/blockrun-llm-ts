@@ -33,7 +33,7 @@ describe("PortraitClient", () => {
 
   describe("PORTRAIT_ENROLLMENT_PRICE_USD", () => {
     it("matches the backend's flat enrollment price", () => {
-      expect(PORTRAIT_ENROLLMENT_PRICE_USD).toBe(0.5);
+      expect(PORTRAIT_ENROLLMENT_PRICE_USD).toBe(0.01);
     });
   });
 

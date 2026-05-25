@@ -7,17 +7,23 @@ All notable changes to @blockrun/llm will be documented in this file.
 ### Added
 
 - **`PortraitClient` — enroll a Virtual Portrait via x402.** Wraps
-  `POST /v1/portrait/enroll` (flat $0.50 USDC, no KYC). `enroll({ name, imageUrl })`
-  uploads a face image by URL and returns a Token360 asset id (`ta_xxxxxx`),
-  which you then pass as `realFaceAssetId` on a Seedance 2.0 video generation
-  for character consistency across clips — the producer side of the consumer
-  field added in 2.7.0. Client-side validation rejects names outside 1–64 chars
-  and non-`http(s)` image URLs before spending a round-trip; the gateway settles
-  payment only after Token360 confirms enrollment, so failed enrollments never
-  charge. Exports `PORTRAIT_ENROLLMENT_PRICE_USD` and the
+  `POST /v1/portrait/enroll` (flat **$0.01 USDC** promo, no KYC).
+  `enroll({ name, imageUrl })` uploads a face image by URL and returns a Token360
+  asset id (`ta_xxxxxx`), which you then pass as `realFaceAssetId` on a Seedance
+  2.0 video generation for character consistency across clips — the producer side
+  of the consumer field added in 2.7.0. Client-side validation rejects names
+  outside 1–64 chars and non-`http(s)` image URLs before spending a round-trip;
+  the gateway settles payment only after Token360 confirms enrollment, so failed
+  enrollments never charge. The response surfaces the gateway-mirrored
+  `image_url` plus `source_image_url` / `mirrored`, and a flat `txHash` derived
+  from `settlement.tx_hash`. Exports `PORTRAIT_ENROLLMENT_PRICE_USD` and the
   `PortraitClientOptions` / `PortraitEnrollOptions` / `PortraitEnrollResponse`
   types. Real-person likeness is not supported on BlockRun — enrolled portraits
   are AI characters.
+
+  > Note: the 2.7.0 entry below quoted **$0.50** for `/v1/portrait/enroll` —
+  > that was never the live price. The gateway charges **$0.01** (promotional);
+  > the `realFaceAssetId` docstring has been corrected to match.
 
 ## [2.7.0] - 2026-05-23
 
