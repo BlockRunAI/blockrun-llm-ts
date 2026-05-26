@@ -133,24 +133,41 @@ export class ImageClient {
   }
 
   /**
-   * Edit an image using img2img.
+   * Edit an image using img2img, optionally fusing multiple source images.
+   *
+   * Pass a single `data:image/...` base64 data URI to edit one image, or an
+   * array of 2–4 data URIs to fuse them (image fusion) — e.g. a reference photo
+   * plus a brand logo. The server caps fusion per provider: `openai/*` accepts
+   * up to 4 source images, `google/*` (Nano Banana) up to 3. A `mask` cannot be
+   * combined with multiple source images.
+   *
+   * Edit-capable models: `openai/gpt-image-1`, `openai/gpt-image-2`,
+   * `google/nano-banana`, `google/nano-banana-pro`.
    *
    * @param prompt - Text description of the desired edit
-   * @param image - Base64-encoded image or URL of the source image
+   * @param image - A base64 `data:image/...` URI, or an array of 2–4 such URIs to fuse
    * @param options - Optional edit parameters
    * @returns ImageResponse with edited image URLs
    *
    * @example
-   * const result = await client.edit('Make it a painting', imageBase64);
-   * console.log(result.data[0].url);
+   * // Single-image edit
+   * const result = await client.edit('Make it a painting', imageDataUri);
+   *
+   * @example
+   * // Multi-image fusion (Nano Banana): blend a subject with a brand logo
+   * const fused = await client.edit(
+   *   'Place the logo on the t-shirt',
+   *   [subjectDataUri, logoDataUri],
+   *   { model: 'google/nano-banana' }
+   * );
    */
   async edit(
     prompt: string,
-    image: string,
+    image: string | string[],
     options?: ImageEditOptions
   ): Promise<ImageResponse> {
     const body: Record<string, unknown> = {
-      model: options?.model || "openai/gpt-image-1",
+      model: options?.model || "openai/gpt-image-2",
       prompt,
       image,
       size: options?.size || "1024x1024",

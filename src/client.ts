@@ -1229,20 +1229,22 @@ export class LLMClient {
   }
 
   /**
-   * Edit an image using img2img.
+   * Edit an image using img2img, optionally fusing multiple source images.
    *
    * @param prompt - Text description of the desired edit
-   * @param image - Base64-encoded image or URL of the source image
+   * @param image - A base64 `data:image/...` URI, or an array of 2–4 such URIs
+   *   to fuse (image fusion). Caps: `openai/*` up to 4, `google/*` up to 3.
+   *   A `mask` cannot be combined with multiple source images.
    * @param options - Optional edit parameters
    * @returns ImageResponse with edited image URLs
    */
   async imageEdit(
     prompt: string,
-    image: string,
+    image: string | string[],
     options?: ImageEditOptions
   ): Promise<ImageResponse> {
     const body: Record<string, unknown> = {
-      model: options?.model || "openai/gpt-image-1",
+      model: options?.model || "openai/gpt-image-2",
       prompt,
       image,
       size: options?.size || "1024x1024",

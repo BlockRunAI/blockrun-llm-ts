@@ -248,9 +248,13 @@ export class SolanaLLMClient {
   }
 
   /** Edit an image using img2img (Solana payment). */
-  async imageEdit(prompt: string, image: string, options?: ImageEditOptions): Promise<ImageResponse> {
+  async imageEdit(
+    prompt: string,
+    image: string | string[],
+    options?: ImageEditOptions
+  ): Promise<ImageResponse> {
     const body: Record<string, unknown> = {
-      model: options?.model || "openai/gpt-image-1",
+      model: options?.model || "openai/gpt-image-2",
       prompt,
       image,
       size: options?.size || "1024x1024",

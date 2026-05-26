@@ -21,7 +21,7 @@ src/
 ├── client.ts            # LLMClient (Base chain)
 ├── solana-client.ts     # SolanaLLMClient
 ├── blockrun.ts          # BlockrunClient — universal x402 primitive (get/post/poll/stream)
-├── image.ts             # ImageClient — image generation + editing
+├── image.ts             # ImageClient — image generation + editing (multi-image fusion)
 ├── video.ts             # VideoClient — video generation (incl. realFaceAssetId)
 ├── portrait.ts          # PortraitClient — Virtual Portrait enrollment (ta_xxxxxx)
 ├── music.ts             # MusicClient — music/audio generation
