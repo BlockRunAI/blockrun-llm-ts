@@ -389,7 +389,7 @@ export interface SearchResult {
 
 // Image editing options
 export interface ImageEditOptions {
-  /** Model ID (default: "openai/gpt-image-1") */
+  /** Model ID (default: "openai/gpt-image-2") */
   model?: string;
   /** Optional base64-encoded mask image */
   mask?: string;

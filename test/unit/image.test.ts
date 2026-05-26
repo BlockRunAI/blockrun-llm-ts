@@ -93,4 +93,65 @@ describe("ImageClient", () => {
       await expect(client.listImageModels()).rejects.toThrow(APIError);
     });
   });
+
+  describe("edit", () => {
+    let client: ImageClient;
+    let fetchSpy: any;
+    const DATA_URI =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+    beforeEach(() => {
+      client = new ImageClient({ privateKey: TEST_PRIVATE_KEY });
+      fetchSpy = vi.spyOn(global, "fetch");
+    });
+
+    it("sends a single image string unchanged in the request body", async () => {
+      fetchSpy.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => buildImageResponse(),
+      });
+
+      await client.edit("Make it a painting", DATA_URI, {
+        model: "openai/gpt-image-1",
+      });
+
+      const sentBody = JSON.parse(fetchSpy.mock.calls[0][1].body);
+      expect(sentBody.image).toBe(DATA_URI);
+      expect(sentBody.model).toBe("openai/gpt-image-1");
+    });
+
+    it("defaults to gpt-image-2 when no model is given", async () => {
+      fetchSpy.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => buildImageResponse(),
+      });
+
+      await client.edit("Make it a painting", DATA_URI);
+
+      const sentBody = JSON.parse(fetchSpy.mock.calls[0][1].body);
+      expect(sentBody.model).toBe("openai/gpt-image-2");
+    });
+
+    it("passes a multi-image array through for fusion", async () => {
+      fetchSpy.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => buildImageResponse(),
+      });
+
+      await client.edit("Place the logo on the shirt", [DATA_URI, DATA_URI], {
+        model: "google/nano-banana",
+      });
+
+      const sentBody = JSON.parse(fetchSpy.mock.calls[0][1].body);
+      expect(Array.isArray(sentBody.image)).toBe(true);
+      expect(sentBody.image).toHaveLength(2);
+      expect(sentBody.model).toBe("google/nano-banana");
+    });
+  });
 });

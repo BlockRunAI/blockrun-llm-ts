@@ -406,7 +406,17 @@ All models below have been tested end-to-end via the TypeScript SDK (Feb 2026):
 | `xai/grok-imagine-image-pro` | $0.07/image |
 | `zai/cogview-4` | $0.015/image |
 
-Image editing (`client.edit`): `openai/gpt-image-1` and `openai/gpt-image-2` both support the `/v1/images/image2image` endpoint.
+Image editing (`client.edit`) via `/v1/images/image2image`: `openai/gpt-image-1`, `openai/gpt-image-2`, `google/nano-banana`, and `google/nano-banana-pro`. Pass a single base64 `data:image/...` URI to edit one image, or an array of 2–4 URIs to **fuse** them (e.g. a subject + a brand logo). Fusion caps: `openai/*` up to 4 source images, `google/*` up to 3. A `mask` cannot be combined with multiple source images.
+
+```ts
+// Multi-image fusion with Nano Banana
+const fused = await client.edit(
+  "Place the logo on the t-shirt",
+  [subjectDataUri, logoDataUri],
+  { model: "google/nano-banana" }
+);
+console.log(fused.data[0].url);
+```
 
 ### Video Generation
 | Model | Price |
