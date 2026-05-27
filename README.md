@@ -311,6 +311,7 @@ Released 2026-04-23 — first fully retrained base since GPT-4.5. 1M context, 12
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
 | `google/gemini-3.1-pro` | $2.00/M | $12.00/M |
+| `google/gemini-3.5-flash` | $0.50/M | $3.00/M |
 | `google/gemini-3.1-flash-lite` | $0.25/M | $1.50/M |
 | `google/gemini-3-flash-preview` | $0.50/M | $3.00/M |
 | `google/gemini-2.5-pro` | $1.25/M | $10.00/M |
