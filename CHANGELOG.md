@@ -2,6 +2,15 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [2.10.0] - 2026-05-29
+
+### Added
+
+- **`anthropic/claude-opus-4.8`** ($5/$25 per M, 1M context, 128K output,
+  agentic coding + adaptive thinking) — Anthropic's most capable Claude.
+  Promoted as the flagship Anthropic entry in the README pricing table;
+  `opus-4.7` retained for direct calls. Mirrors blockrun-llm 0.33.0.
+
 ## [2.9.1] - 2026-05-26
 
 ### Changed

@@ -299,7 +299,8 @@ Released 2026-04-23 — first fully retrained base since GPT-4.5. 1M context, 12
 ### Anthropic Claude
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
-| `anthropic/claude-opus-4.7` | $5.00/M | $25.00/M | **1M** | Flagship — agentic coding + adaptive thinking, 128K output |
+| `anthropic/claude-opus-4.8` | $5.00/M | $25.00/M | **1M** | Flagship — agentic coding + adaptive thinking, 128K output |
+| `anthropic/claude-opus-4.7` | $5.00/M | $25.00/M | **1M** | Agentic coding + adaptive thinking, 128K output |
 | `anthropic/claude-opus-4.6` | $5.00/M | $25.00/M | 200K | Hidden but still callable — kept as in-family hot-swap fallback |
 | `anthropic/claude-opus-4.5` | $5.00/M | $25.00/M | 200K | |
 | `anthropic/claude-opus-4` | $15.00/M | $75.00/M | 200K | |
