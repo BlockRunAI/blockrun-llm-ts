@@ -291,6 +291,16 @@ export interface LLMClientOptions {
   timeout?: number;
 }
 
+/**
+ * OpenAI-compatible response format. `{ type: "json_object" }` enables JSON
+ * mode — honored across all providers by the gateway (native for OpenAI/Azure,
+ * emulated via a raw-JSON system instruction for Anthropic/Bedrock).
+ */
+export type ResponseFormat =
+  | { type: "text" }
+  | { type: "json_object" }
+  | { type: "json_schema"; json_schema: Record<string, unknown> };
+
 export interface ChatOptions {
   /** System prompt */
   system?: string;
@@ -304,6 +314,10 @@ export interface ChatOptions {
   search?: boolean;
   /** Full Live Search configuration (for search-enabled models) */
   searchParameters?: SearchParameters;
+  /** Response format, e.g. { type: "json_object" } for JSON mode */
+  responseFormat?: ResponseFormat;
+  /** Up to 4 stop sequences (forwarded natively / mapped to stop_sequences) */
+  stop?: string | string[];
   /**
    * Models to try in order if the primary returns a transient error
    * (timeout, network, 5xx). 4xx and PaymentError still propagate
@@ -328,6 +342,10 @@ export interface ChatCompletionOptions {
   tools?: Tool[];
   /** Tool selection strategy */
   toolChoice?: ToolChoice;
+  /** Response format, e.g. { type: "json_object" } for JSON mode */
+  responseFormat?: ResponseFormat;
+  /** Up to 4 stop sequences (forwarded natively / mapped to stop_sequences) */
+  stop?: string | string[];
   /**
    * Models to try in order if the primary returns a transient error
    * (timeout, network, 5xx). 4xx and PaymentError still propagate

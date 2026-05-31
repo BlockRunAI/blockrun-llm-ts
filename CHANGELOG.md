@@ -2,6 +2,25 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [2.11.0] - 2026-05-31
+
+### Added
+
+- **`responseFormat` (JSON mode) and `stop` sequences on chat.** The gateway
+  now honors both OpenAI params on `/v1/chat/completions` — natively for
+  OpenAI/Azure, and emulated for Anthropic/Bedrock (a raw-JSON system
+  instruction with code-fence stripping for `{ type: "json_object" }`; `stop`
+  mapped to `stop_sequences`). Added a `ResponseFormat` type and threaded
+  `responseFormat` / `stop` through `chat`, `chatCompletion`,
+  `chatCompletionStream`, and `smartChat`. Mirrors blockrun-llm 0.35.0.
+
+### Fixed
+
+- **OpenAI-compat layer now forwards `stop` and `response_format`.** The
+  `OpenAIChatCompletionParams.stop` field was declared but never sent upstream,
+  and `response_format` was missing entirely — both are now passed through on
+  the streaming and non-streaming paths.
+
 ## [2.10.0] - 2026-05-29
 
 ### Added

@@ -20,7 +20,7 @@
  */
 
 import { LLMClient } from "./client";
-import type { ChatMessage, ChatResponse, Tool, ToolCall, ToolChoice } from "./types";
+import type { ChatMessage, ChatResponse, ResponseFormat, Tool, ToolCall, ToolChoice } from "./types";
 
 // OpenAI-compatible types
 export interface OpenAIClientOptions {
@@ -45,6 +45,7 @@ export interface OpenAIChatCompletionParams {
   }>;
   max_tokens?: number;
   temperature?: number;
+  response_format?: ResponseFormat;
   top_p?: number;
   stream?: boolean;
   n?: number;
@@ -191,6 +192,8 @@ class ChatCompletions {
         topP: params.top_p,
         tools: params.tools,
         toolChoice: params.tool_choice,
+        responseFormat: params.response_format,
+        stop: params.stop,
       }
     );
 
@@ -207,6 +210,8 @@ class ChatCompletions {
         topP: params.top_p,
         tools: params.tools,
         toolChoice: params.tool_choice,
+        responseFormat: params.response_format,
+        stop: params.stop,
       }
     );
     return new StreamingResponse(response, params.model);
