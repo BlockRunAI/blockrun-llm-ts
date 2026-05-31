@@ -56,6 +56,7 @@ export {
   type LLMClientOptions,
   type ChatOptions,
   type ChatCompletionOptions,
+  type ResponseFormat,
   // Tool calling types
   type FunctionDefinition,
   type Tool,

@@ -247,6 +247,8 @@ export class LLMClient {
       topP: options?.topP,
       search: options?.search,
       searchParameters: options?.searchParameters,
+      responseFormat: options?.responseFormat,
+      stop: options?.stop,
       fallbackModels: options?.fallbackModels,
     });
 
@@ -314,6 +316,8 @@ export class LLMClient {
       topP: options?.topP,
       search: options?.search,
       searchParameters: options?.searchParameters,
+      responseFormat: options?.responseFormat,
+      stop: options?.stop,
       fallbackModels: fallbacks,
     });
 
@@ -415,6 +419,8 @@ export class LLMClient {
       }
       if (options?.tools !== undefined) body.tools = options.tools;
       if (options?.toolChoice !== undefined) body.tool_choice = options.toolChoice;
+      if (options?.responseFormat !== undefined) body.response_format = options.responseFormat;
+      if (options?.stop !== undefined) body.stop = options.stop;
       return body;
     };
 
@@ -719,6 +725,8 @@ export class LLMClient {
     if (options?.topP !== undefined) body.top_p = options.topP;
     if (options?.tools !== undefined) body.tools = options.tools;
     if (options?.toolChoice !== undefined) body.tool_choice = options.toolChoice;
+    if (options?.responseFormat !== undefined) body.response_format = options.responseFormat;
+    if (options?.stop !== undefined) body.stop = options.stop;
 
     const cacheKey = `/v1/chat/completions:${model}`;
     const cached = this.preAuthCache.get(cacheKey);
