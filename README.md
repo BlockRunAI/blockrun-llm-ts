@@ -354,6 +354,7 @@ thinking modes. V4 Pro is the new flagship paid SKU — 1.6T MoE / 49B active,
 ### MiniMax
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
+| `minimax/minimax-m3` | $0.30/M | $1.20/M |
 | `minimax/minimax-m2.7` | $0.30/M | $1.20/M |
 | `minimax/minimax-m2.5` | $0.30/M | $1.20/M |
 
