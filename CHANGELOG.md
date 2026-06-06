@@ -2,6 +2,38 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [2.12.0] - 2026-06-05
+
+### Added
+
+- **`SpeechClient` — BlockRun Voice (ElevenLabs TTS + sound effects).**
+  - `generate()` (alias `speak()`) → `POST /v1/audio/speech` — OpenAI-compatible
+    text-to-speech. Models: `elevenlabs/flash-v2.5` (default, $0.05/1k chars),
+    `elevenlabs/turbo-v2.5` ($0.05/1k), `elevenlabs/multilingual-v2` ($0.10/1k),
+    `elevenlabs/v3` ($0.10/1k). Voice aliases (sarah, george, laura, charlie,
+    river, roger, callum, harry) or raw ElevenLabs voice_ids; `responseFormat`
+    mp3/opus/pcm/wav; optional `speed` 0.7–1.2. Price scales with character
+    count, minimum $0.001/request.
+  - `soundEffect()` → `POST /v1/audio/sound-effects` — cinematic sound effects
+    up to 22s, flat $0.05/generation (`elevenlabs/sound-effects`).
+  - `listVoices()` → `GET /v1/audio/voices` — free voice discovery
+    (rate-limited 60 req/min/IP).
+  - New types: `SpeechResponse`, `SpeechAudio`, `SpeechClientOptions`,
+    `SpeechModel`, `SpeechVoice`, `SpeechGenerateOptions`,
+    `SoundEffectOptions`, `VoiceInfo`.
+- **xAI catalog additions (resold via OpenRouter credit pool, 2026-06-04):**
+  `xai/grok-4.3` ($1.50/$4.00, 1M context, reasoning + vision) and
+  `xai/grok-build-0.1` ($1.50/$3.00, 256K, fast agentic coding).
+
+### Changed
+
+- **README model catalog refresh:** older Grok chat SKUs (grok-3/3-mini,
+  grok-4-fast / 4-1-fast families, grok-code-fast-1, grok-4-0709,
+  grok-2-vision) are now hidden from `/v1/models` (direct calls still work);
+  `deepseek/deepseek-v4-pro` pricing corrected to $0.435/$0.87 (the 75% launch
+  promo became the permanent list price after 2026-05-31); removed the retired
+  `minimax/minimax-m2.5` row.
+
 ## [2.11.0] - 2026-05-31
 
 ### Added

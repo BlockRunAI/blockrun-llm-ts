@@ -463,6 +463,85 @@ export interface MusicGenerateOptions {
   lyrics?: string;
 }
 
+// Speech (TTS / sound effects) types — BlockRun Voice (ElevenLabs)
+
+/** A single synthesized audio clip. */
+export interface SpeechAudio {
+  url: string;
+  format?: string;
+  characters?: number;
+  credits?: number;
+}
+
+/** Response from speech synthesis or sound-effect generation. */
+export interface SpeechResponse {
+  created: number;
+  model: string;
+  data: SpeechAudio[];
+  txHash?: string;
+}
+
+export interface SpeechClientOptions {
+  /** EVM wallet private key (hex string starting with 0x) */
+  privateKey?: `0x${string}` | string;
+  /** API endpoint URL (default: https://blockrun.ai/api) */
+  apiUrl?: string;
+  /** Request timeout in milliseconds (default: 120000 — synthesis is synchronous) */
+  timeout?: number;
+}
+
+/** TTS model IDs (price per 1k chars: flash/turbo $0.05, multilingual-v2/v3 $0.10). */
+export type SpeechModel =
+  | "elevenlabs/flash-v2.5"
+  | "elevenlabs/turbo-v2.5"
+  | "elevenlabs/multilingual-v2"
+  | "elevenlabs/v3";
+
+/** Friendly voice aliases (raw ElevenLabs voice_ids also accepted). */
+export type SpeechVoice =
+  | "sarah"
+  | "george"
+  | "laura"
+  | "charlie"
+  | "river"
+  | "roger"
+  | "callum"
+  | "harry"
+  | (string & {});
+
+export interface SpeechGenerateOptions {
+  /** Speech model ID (default: "elevenlabs/flash-v2.5") */
+  model?: SpeechModel | (string & {});
+  /** Voice alias or raw ElevenLabs voice_id (default: "sarah") */
+  voice?: SpeechVoice;
+  /** Audio format (default: "mp3") */
+  responseFormat?: "mp3" | "opus" | "pcm" | "wav";
+  /** Playback speed 0.7-1.2 */
+  speed?: number;
+}
+
+export interface SoundEffectOptions {
+  /** Model ID (default: "elevenlabs/sound-effects") */
+  model?: string;
+  /** Target duration 0.5-22s (auto if unset) */
+  durationSeconds?: number;
+  /** 0-1, higher follows the prompt more literally */
+  promptInfluence?: number;
+  /** Audio format (default: "mp3") */
+  responseFormat?: "mp3" | "opus" | "pcm" | "wav";
+}
+
+/** A voice entry returned by GET /v1/audio/voices. */
+export interface VoiceInfo {
+  voice_id: string;
+  name?: string;
+  alias?: string;
+  category?: string;
+  labels?: Record<string, string>;
+  preview_url?: string;
+  [key: string]: unknown;
+}
+
 // Voice Call types
 
 /** Built-in Bland.ai voice presets. Any string is accepted (custom voice IDs work too). */

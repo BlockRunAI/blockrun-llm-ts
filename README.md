@@ -119,7 +119,7 @@ console.log(result.response);  // '4'
 | `nvidia/gpt-oss-120b` | 128K | OpenAI open-weight 120B — 123 tok/s. Hidden from `/v1/models` for privacy but direct calls still work |
 | `nvidia/gpt-oss-20b` | 128K | OpenAI open-weight 20B — 155 tok/s. Hidden from `/v1/models` but direct calls still work |
 
-> Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro` ($0.50/$1.00 with the 75% promo through 2026-05-31) — `nvidia/deepseek-v4-pro` is currently hidden because NVIDIA's NIM deployment is hung; backend MODEL_REDIRECTS forwards calls to V4 Flash.
+> Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro` ($0.435/$0.87 — the 75% launch promo became the permanent list price after 2026-05-31) — `nvidia/deepseek-v4-pro` is currently hidden because NVIDIA's NIM deployment is hung; backend MODEL_REDIRECTS forwards calls to V4 Flash.
 
 > Privacy note: `nvidia/gpt-oss-120b` and `nvidia/gpt-oss-20b` are hidden from `/v1/models` because NVIDIA's free build.nvidia.com tier reserves the right to use prompts/outputs for service improvement. Direct calls by full model ID still work — opt in only when your data isn't sensitive.
 
@@ -328,22 +328,23 @@ thinking modes. V4 Pro is the new flagship paid SKU — 1.6T MoE / 49B active,
 
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
-| `deepseek/deepseek-v4-pro` | $0.50/M | $1.00/M | 1M | V4 flagship — strongest open-weight reasoner. **75% off until 2026-05-31** (list $2.00/$4.00) |
+| `deepseek/deepseek-v4-pro` | $0.435/M | $0.87/M | 1M | V4 flagship — strongest open-weight reasoner. The 75% launch promo became the permanent list price after 2026-05-31 |
 | `deepseek/deepseek-chat` | $0.20/M | $0.40/M | 1M | V4 Flash non-thinking (paid endpoint with 5MB request bodies; same upstream as `nvidia/deepseek-v4-flash`) |
 | `deepseek/deepseek-reasoner` | $0.20/M | $0.40/M | 1M | V4 Flash thinking (same upstream as `deepseek-chat`, thinking enabled by default) |
 
 ### xAI Grok
+
+Grok 4.3 and Grok Build are resold through BlockRun's OpenRouter credit pool
+(same pattern as `deepseek/deepseek-v4-pro` and `minimax/minimax-m3`). The
+older Grok chat SKUs (grok-3/3-mini, grok-4-fast / 4-1-fast families,
+grok-code-fast-1, grok-4-0709, grok-2-vision) are now **hidden from
+`/v1/models`** — direct calls by full ID still work, but SmartChat won't
+auto-pick them.
+
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
-| `xai/grok-3` | $3.00/M | $15.00/M | 131K | Flagship |
-| `xai/grok-3-mini` | $0.30/M | $0.50/M | 131K | Fast & affordable |
-| `xai/grok-4-1-fast-reasoning` | $0.20/M | $0.50/M | **2M** | Latest, chain-of-thought |
-| `xai/grok-4-1-fast-non-reasoning` | $0.20/M | $0.50/M | **2M** | Latest, direct response |
-| `xai/grok-4-fast-reasoning` | $0.20/M | $0.50/M | **2M** | Step-by-step reasoning |
-| `xai/grok-4-fast-non-reasoning` | $0.20/M | $0.50/M | **2M** | Quick responses |
-| `xai/grok-code-fast-1` | $0.20/M | $1.50/M | 256K | Code generation |
-| `xai/grok-4-0709` | $0.20/M | $1.50/M | 256K | Premium quality |
-| `xai/grok-2-vision` | $2.00/M | $10.00/M | 32K | Vision capabilities |
+| `xai/grok-4.3` | $1.50/M | $4.00/M | 1M | Reasoning model, vision-capable, tuned for agentic workflows |
+| `xai/grok-build-0.1` | $1.50/M | $3.00/M | 256K | Fast agentic coding model — interactive software-engineering workflows |
 
 ### Moonshot Kimi
 | Model | Input Price | Output Price |
@@ -356,7 +357,6 @@ thinking modes. V4 Pro is the new flagship paid SKU — 1.6T MoE / 49B active,
 |-------|-------------|--------------|
 | `minimax/minimax-m3` | $0.30/M | $1.20/M |
 | `minimax/minimax-m2.7` | $0.30/M | $1.20/M |
-| `minimax/minimax-m2.5` | $0.30/M | $1.20/M |
 
 ### NVIDIA (Free) + Moonshot
 
@@ -452,6 +452,46 @@ const r3 = await client.generate('aerial drone shot over a snowy mountain', {
   watermark: false,
   returnLastFrame: true,  // useful for clip chaining
 });
+```
+
+### Text-to-Speech & Sound Effects
+
+`SpeechClient` wraps BlockRun Voice (ElevenLabs): `POST /v1/audio/speech`
+(OpenAI-compatible TTS), `POST /v1/audio/sound-effects`, and the free
+`GET /v1/audio/voices`. TTS price scales with character count:
+`(chars / 1000) × model rate`, minimum $0.001/request. Synthesis is
+synchronous (<1s for Flash).
+
+| Model | Price | Max Input | Notes |
+|-------|-------|-----------|-------|
+| `elevenlabs/flash-v2.5` | $0.05/1k chars | 40k chars | ~75ms latency, 32 languages (default) |
+| `elevenlabs/turbo-v2.5` | $0.05/1k chars | 40k chars | ~250ms latency, balanced quality |
+| `elevenlabs/multilingual-v2` | $0.10/1k chars | 10k chars | Long-form narration, audiobooks |
+| `elevenlabs/v3` | $0.10/1k chars | 5k chars | Max expressiveness, 70+ languages |
+| `elevenlabs/sound-effects` | $0.05/generation | 1k chars | Sound effects up to 22s |
+
+```ts
+import { SpeechClient } from '@blockrun/llm';
+
+const client = new SpeechClient();
+
+// Text-to-speech (voice aliases: sarah, george, laura, charlie,
+// river, roger, callum, harry — or any raw ElevenLabs voice_id)
+const result = await client.generate('Welcome to BlockRun.', { voice: 'george' });
+console.log(result.data[0].url);  // audio URL (mp3 by default)
+
+// Other formats / speed
+const wav = await client.generate('Breaking news from the world of micropayments.', {
+  model: 'elevenlabs/v3',
+  responseFormat: 'wav',
+  speed: 1.1,
+});
+
+// Sound effects (flat $0.05/generation)
+const fx = await client.soundEffect('rain on a tin roof, distant thunder');
+
+// List voices (free, rate-limited)
+const voices = await client.listVoices();
 ```
 
 ### Virtual Portraits

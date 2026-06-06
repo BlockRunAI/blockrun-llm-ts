@@ -32,6 +32,7 @@
 export { LLMClient, default } from "./client";
 export { ImageClient } from "./image";
 export { MusicClient } from "./music";
+export { SpeechClient } from "./speech";
 export { VideoClient } from "./video";
 export { VoiceClient } from "./voice";
 export { PhoneClient, PHONE_PRICES } from "./phone";
@@ -76,6 +77,15 @@ export {
   type AudioModel,
   type MusicClientOptions,
   type MusicGenerateOptions,
+  // Speech (TTS / sound effects) types
+  type SpeechAudio,
+  type SpeechResponse,
+  type SpeechClientOptions,
+  type SpeechModel,
+  type SpeechVoice,
+  type SpeechGenerateOptions,
+  type SoundEffectOptions,
+  type VoiceInfo,
   // Video types
   type VideoClip,
   type VideoResponse,
