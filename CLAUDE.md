@@ -25,6 +25,7 @@ src/
 ├── video.ts             # VideoClient — video generation (incl. realFaceAssetId)
 ├── portrait.ts          # PortraitClient — Virtual Portrait enrollment (ta_xxxxxx)
 ├── music.ts             # MusicClient — music/audio generation
+├── speech.ts            # SpeechClient — TTS + sound effects (BlockRun Voice / ElevenLabs)
 ├── voice.ts             # VoiceClient — AI outbound phone calls
 ├── phone.ts             # PhoneClient — phone lookup + number provisioning
 ├── search.ts            # SearchClient — Grok Live Search
