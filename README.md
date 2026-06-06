@@ -290,7 +290,6 @@ Released 2026-04-23 — first fully retrained base since GPT-4.5. 1M context, 12
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
 | `openai/o1` | $15.00/M | $60.00/M |
-| `openai/o1-mini` | $1.10/M | $4.40/M (delisted by OpenAI 2026-06-06 — gateway redirects to `o4-mini`) |
 | `openai/o3` | $2.00/M | $8.00/M |
 | `openai/o3-mini` | $1.10/M | $4.40/M |
 | `openai/o4-mini` | $1.10/M | $4.40/M |
