@@ -15,7 +15,6 @@
 | **Base Testnet** | Base Sepolia (Chain ID: 84532) | Testnet USDC | Development |
 | **Solana** | Solana Mainnet | USDC (SPL) | New |
 
-> **XRPL (RLUSD):** Use [@blockrun/llm-xrpl](https://www.npmjs.com/package/@blockrun/llm-xrpl) for XRPL payments
 
 **Protocol:** x402 v2 (CDP Facilitator)
 
