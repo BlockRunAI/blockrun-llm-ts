@@ -23,21 +23,6 @@ import type {
   Spending,
   SearchResult,
   SearchOptions,
-  XUserLookupResponse,
-  XFollowersResponse,
-  XFollowingsResponse,
-  XUserInfoResponse,
-  XVerifiedFollowersResponse,
-  XTweetsResponse,
-  XMentionsResponse,
-  XTweetLookupResponse,
-  XTweetRepliesResponse,
-  XTweetThreadResponse,
-  XSearchResponse,
-  XTrendingResponse,
-  XArticlesRisingResponse,
-  XAuthorAnalyticsResponse,
-  XCompareAuthorsResponse,
 } from "./types";
 import { APIError, PaymentError } from "./types";
 import {
@@ -273,105 +258,6 @@ export class SolanaLLMClient {
     if (options?.toDate !== undefined) body.to_date = options.toDate;
     const data = await this.requestWithPaymentRaw("/v1/search", body);
     return data as unknown as SearchResult;
-  }
-
-  // ============================================================
-  // X/Twitter endpoints (powered by AttentionVC)
-  // ============================================================
-
-  async xUserLookup(usernames: string | string[]): Promise<XUserLookupResponse> {
-    const names = Array.isArray(usernames) ? usernames : [usernames];
-    const data = await this.requestWithPaymentRaw("/v1/x/users/lookup", { usernames: names });
-    return data as unknown as XUserLookupResponse;
-  }
-
-  async xFollowers(username: string, cursor?: string): Promise<XFollowersResponse> {
-    const body: Record<string, unknown> = { username };
-    if (cursor !== undefined) body.cursor = cursor;
-    const data = await this.requestWithPaymentRaw("/v1/x/users/followers", body);
-    return data as unknown as XFollowersResponse;
-  }
-
-  async xFollowings(username: string, cursor?: string): Promise<XFollowingsResponse> {
-    const body: Record<string, unknown> = { username };
-    if (cursor !== undefined) body.cursor = cursor;
-    const data = await this.requestWithPaymentRaw("/v1/x/users/followings", body);
-    return data as unknown as XFollowingsResponse;
-  }
-
-  async xUserInfo(username: string): Promise<XUserInfoResponse> {
-    const data = await this.requestWithPaymentRaw("/v1/x/users/info", { username });
-    return data as unknown as XUserInfoResponse;
-  }
-
-  async xVerifiedFollowers(userId: string, cursor?: string): Promise<XVerifiedFollowersResponse> {
-    const body: Record<string, unknown> = { userId };
-    if (cursor !== undefined) body.cursor = cursor;
-    const data = await this.requestWithPaymentRaw("/v1/x/users/verified-followers", body);
-    return data as unknown as XVerifiedFollowersResponse;
-  }
-
-  async xUserTweets(username: string, includeReplies = false, cursor?: string): Promise<XTweetsResponse> {
-    const body: Record<string, unknown> = { username, includeReplies };
-    if (cursor !== undefined) body.cursor = cursor;
-    const data = await this.requestWithPaymentRaw("/v1/x/users/tweets", body);
-    return data as unknown as XTweetsResponse;
-  }
-
-  async xUserMentions(username: string, sinceTime?: string, untilTime?: string, cursor?: string): Promise<XMentionsResponse> {
-    const body: Record<string, unknown> = { username };
-    if (sinceTime !== undefined) body.sinceTime = sinceTime;
-    if (untilTime !== undefined) body.untilTime = untilTime;
-    if (cursor !== undefined) body.cursor = cursor;
-    const data = await this.requestWithPaymentRaw("/v1/x/users/mentions", body);
-    return data as unknown as XMentionsResponse;
-  }
-
-  async xTweetLookup(tweetIds: string | string[]): Promise<XTweetLookupResponse> {
-    const ids = Array.isArray(tweetIds) ? tweetIds : [tweetIds];
-    const data = await this.requestWithPaymentRaw("/v1/x/tweets/lookup", { tweet_ids: ids });
-    return data as unknown as XTweetLookupResponse;
-  }
-
-  async xTweetReplies(tweetId: string, queryType = "Latest", cursor?: string): Promise<XTweetRepliesResponse> {
-    const body: Record<string, unknown> = { tweetId, queryType };
-    if (cursor !== undefined) body.cursor = cursor;
-    const data = await this.requestWithPaymentRaw("/v1/x/tweets/replies", body);
-    return data as unknown as XTweetRepliesResponse;
-  }
-
-  async xTweetThread(tweetId: string, cursor?: string): Promise<XTweetThreadResponse> {
-    const body: Record<string, unknown> = { tweetId };
-    if (cursor !== undefined) body.cursor = cursor;
-    const data = await this.requestWithPaymentRaw("/v1/x/tweets/thread", body);
-    return data as unknown as XTweetThreadResponse;
-  }
-
-  async xSearch(query: string, queryType = "Latest", cursor?: string): Promise<XSearchResponse> {
-    const body: Record<string, unknown> = { query, queryType };
-    if (cursor !== undefined) body.cursor = cursor;
-    const data = await this.requestWithPaymentRaw("/v1/x/search", body);
-    return data as unknown as XSearchResponse;
-  }
-
-  async xTrending(): Promise<XTrendingResponse> {
-    const data = await this.requestWithPaymentRaw("/v1/x/trending", {});
-    return data as unknown as XTrendingResponse;
-  }
-
-  async xArticlesRising(): Promise<XArticlesRisingResponse> {
-    const data = await this.requestWithPaymentRaw("/v1/x/articles/rising", {});
-    return data as unknown as XArticlesRisingResponse;
-  }
-
-  async xAuthorAnalytics(handle: string): Promise<XAuthorAnalyticsResponse> {
-    const data = await this.requestWithPaymentRaw("/v1/x/authors", { handle });
-    return data as unknown as XAuthorAnalyticsResponse;
-  }
-
-  async xCompareAuthors(handle1: string, handle2: string): Promise<XCompareAuthorsResponse> {
-    const data = await this.requestWithPaymentRaw("/v1/x/compare", { handle1, handle2 });
-    return data as unknown as XCompareAuthorsResponse;
   }
 
   // ── Prediction Markets (Powered by Predexon) ────────────────────────────

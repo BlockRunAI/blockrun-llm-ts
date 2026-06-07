@@ -83,7 +83,7 @@ Four call shapes cover every endpoint type:
 - `stream<T>(path, body?)` — async iterator over SSE chunks (chat)
 
 The per-API client classes (`LLMClient`, `ImageClient`, `VideoClient`,
-`PortraitClient`, `VoiceClient`, `MusicClient`, `SearchClient`, `XClient`,
+`PortraitClient`, `VoiceClient`, `MusicClient`, `SearchClient`, `RpcClient`,
 `PriceClient`, `SurfClient`) all remain — they will be soft-deprecated in 2.6 (rewritten as
 shims over `BlockrunClient`) and removed in 3.0.
 
@@ -593,21 +593,6 @@ console.log(result.summary);
 for (const url of result.citations ?? []) console.log(url);
 ```
 
-### X/Twitter (AttentionVC)
-
-`XClient` covers the full `/v1/x/*` endpoint family — previously the `X*`
-types were exported but there was no client to call them with.
-
-```ts
-import { XClient } from '@blockrun/llm';
-
-const x = new XClient();
-const info = await x.userInfo('elonmusk');
-const followers = await x.followers('paulg');
-const results = await x.search('x402 micropayments', { queryType: 'Latest' });
-const tweets = await x.userTweets({ username: 'vitalikbuterin', includeReplies: false });
-```
-
 ### Surf Crypto Data
 
 `SurfClient` exposes the full `/v1/surf/*` catalog — 84+ pay-per-call
@@ -736,38 +721,6 @@ gateway cache — same price, lower latency.
 | `openai/gpt-oss-120b` | $0.002/request |
 
 *Testnet models use flat pricing (no token counting) for simplicity.*
-
-## X/Twitter Data (Powered by AttentionVC)
-
-Access X/Twitter user profiles, followers, and followings via [AttentionVC](https://attentionvc.ai) partner API. No API keys needed — pay-per-request via x402.
-
-```typescript
-import { LLMClient } from '@blockrun/llm';
-
-const client = new LLMClient();
-
-// Look up user profiles ($0.002/user, min $0.02)
-const users = await client.xUserLookup(['elonmusk', 'blockaborr']);
-for (const user of users.users) {
-  console.log(`@${user.userName}: ${user.followers} followers`);
-}
-
-// Get followers ($0.05/page, ~200 accounts)
-let result = await client.xFollowers('blockaborr');
-for (const f of result.followers) {
-  console.log(`  @${f.screen_name}`);
-}
-
-// Paginate through all followers
-while (result.has_next_page) {
-  result = await client.xFollowers('blockaborr', result.next_cursor);
-}
-
-// Get followings ($0.05/page)
-const followings = await client.xFollowings('blockaborr');
-```
-
-Works on both `LLMClient` (Base) and `SolanaLLMClient`.
 
 ## Standalone Search
 
@@ -1290,7 +1243,6 @@ The SDK caches responses to avoid duplicate payments:
 import { getCachedByRequest, saveToCache, clearCache } from '@blockrun/llm';
 
 // Automatic TTLs by endpoint:
-// - X/Twitter: 1 hour
 // - Search: 15 minutes
 // - Models: 24 hours
 // - Chat/Image: no cache (every call is unique)
