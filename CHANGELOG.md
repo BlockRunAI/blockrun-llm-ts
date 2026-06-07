@@ -2,6 +2,42 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [2.13.0] - 2026-06-07
+
+### Added
+
+- **`RpcClient` — Multi-chain JSON-RPC (40+ chains).** Mirrors the new backend
+  `POST /v1/rpc/{network}` (Tatum gateway passthrough, launched 2026-06-07).
+  Flat $0.002 per call; a JSON-RPC batch charges per element.
+  - `call(network, method, params?)` — single JSON-RPC 2.0 call. EVM chains
+    speak `eth_*`; non-EVM (Solana / Bitcoin-family / NEAR / Sui / XRP Ledger /
+    Polkadot) speak their native JSON-RPC.
+  - `batch(network, requests)` — JSON-RPC batch, priced per element.
+  - `SUPPORTED_NETWORKS` (40 curated chains), `NETWORK_ALIASES` (eth, arb, op,
+    matic, bnb, avax, sol, btc, xrp, dot, ...), `RPC_PRICE_USD`. Unknown
+    well-formed slugs fall through server-side to `{slug}-mainnet`, so new
+    Tatum chains work without an SDK update.
+  - New types: `RpcClientOptions`, `RpcResponse<T>` (JSON-RPC envelope +
+    `network` / `cacheHit` / `txHash` gateway metadata), `RpcError`,
+    `RpcBatchRequest`, `RpcNetwork`.
+- **`VideoClient.generate()` new Seedance parameters** (backend 2026-06-02):
+  - `lastFrameUrl` — first-and-last-frame interpolation: the model tweens from
+    `imageUrl` (first frame) to `lastFrameUrl` (final frame). Requires
+    `imageUrl` + a Seedance model. Priced as image-to-video.
+  - `referenceImageUrls` — omni / multi-reference: up to 9 reference images for
+    character/style consistency (Seedance 2.0 only); cite them as "image 1",
+    "image 2" in the prompt. Mutually exclusive with `imageUrl` /
+    `lastFrameUrl` / `realFaceAssetId`.
+  - Client-side validation mirrors the backend mutual-exclusion rules.
+
+### Changed
+
+- **README free-model tables refreshed from a 2026-06-07 live sweep:**
+  `nvidia/qwen3-next-80b-a3b-thinking` retired (NVIDIA end-of-life 2026-05-21,
+  HTTP 410 — gateway auto-redirects to `nvidia/llama-4-maverick`);
+  `nvidia/mistral-small-4-119b` flagged as timing out upstream (3/3 probes
+  >60s). Free-tier example now uses `nvidia/deepseek-v4-flash`.
+
 ## [2.12.0] - 2026-06-05
 
 ### Added

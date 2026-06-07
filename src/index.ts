@@ -47,6 +47,13 @@ export {
 } from "./x-client";
 export { PriceClient } from "./price";
 export { SurfClient } from "./surf";
+export {
+  RpcClient,
+  SUPPORTED_NETWORKS,
+  NETWORK_ALIASES,
+  RPC_PRICE_USD,
+  type RpcNetwork,
+} from "./rpc";
 export { BlockrunClient } from "./blockrun";
 export {
   type ChatMessage,
@@ -165,6 +172,11 @@ export {
   type PriceOptions,
   type HistoryOptions,
   type ListOptions,
+  // Multi-chain RPC types
+  type RpcClientOptions,
+  type RpcResponse,
+  type RpcError,
+  type RpcBatchRequest,
   // New client option bags
   type SearchClientOptions,
   type XClientOptions,
