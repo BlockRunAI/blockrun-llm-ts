@@ -669,6 +669,37 @@ const symbols = await p.listSymbols('crypto', { query: 'sol', limit: 20 });
 
 Supported `StockMarket` values: `us, hk, jp, kr, gb, de, fr, nl, ie, lu, cn, ca`.
 
+### DeFi Data, DEX Swaps & Cloud Compute
+
+Three passthrough families live directly on `LLMClient` / `SolanaLLMClient`:
+
+```ts
+const client = new LLMClient();
+
+// DefiLlama — protocols / TVL / yields / prices ($0.005/call, prices $0.001)
+const protocols = await client.defiProtocols();
+const aave = await client.defiProtocol('aave');
+const prices = await client.defiPrices(['coingecko:bitcoin', 'base:0x833589...']);
+
+// 0x DEX — swap + gasless quotes (FREE; BlockRun takes an on-chain affiliate
+// fee on executed swaps instead of x402)
+const quote = await client.dexQuote({
+  chainId: '8453', sellToken: '0x...', buyToken: '0x...',
+  sellAmount: '1000000', taker: '0xYourWallet',
+});
+const gq = await client.dexGaslessQuote({ /* ... */ });
+const res = await client.dexGaslessSubmit({ trade: { /* signed eip712 */ } });
+const status = await client.dexGaslessStatus(res.tradeHash as string);
+
+// Modal — sandboxed compute ($0.01 create CPU / $0.05 GPU, $0.001 exec)
+const sb = await client.modalSandboxCreate({ image: 'python:3.11' });
+const out = await client.modalSandboxExec(sb.sandbox_id as string, ['python', '-c', 'print(42)']);
+await client.modalSandboxTerminate(sb.sandbox_id as string);
+```
+
+Generic escape hatches: `client.defi(path, params)`, `client.dex(path, params, body?)`,
+`client.modal(path, body)`.
+
 ### Multi-chain RPC
 
 `RpcClient` wraps `POST /v1/rpc/{network}` — standard JSON-RPC 2.0 access to
