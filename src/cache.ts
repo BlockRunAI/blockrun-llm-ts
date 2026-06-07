@@ -26,7 +26,6 @@ interface CacheEntry {
 }
 
 const DEFAULT_TTL: Record<string, number> = {
-  '/v1/x/': 3600 * 1000,
   '/v1/partner/': 3600 * 1000,
   '/v1/pm/': 1800 * 1000,
   '/v1/chat/': 0,
@@ -117,8 +116,6 @@ function readableFilename(endpoint: string, body: Record<string, unknown>): stri
   let ep = endpoint.replace(/\/+$/, '').split('/').pop() || '';
   if (endpoint.includes('/v1/chat/')) {
     ep = 'chat';
-  } else if (endpoint.includes('/v1/x/')) {
-    ep = 'x_' + ep;
   } else if (endpoint.includes('/v1/search')) {
     ep = 'search';
   } else if (endpoint.includes('/v1/image')) {

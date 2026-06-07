@@ -33,7 +33,7 @@ describe('Cache Module', () => {
 
   describe('saveToCache + getCachedByRequest', () => {
     it('should cache X/Twitter requests', () => {
-      const endpoint = '/v1/x/trending';
+      const endpoint = '/v1/surf/trending';
       const body = { query: 'test' };
       const response = { trends: ['ai'] };
 

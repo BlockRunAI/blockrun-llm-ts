@@ -29,9 +29,9 @@ src/
 ├── voice.ts             # VoiceClient — AI outbound phone calls
 ├── phone.ts             # PhoneClient — phone lookup + number provisioning
 ├── search.ts            # SearchClient — Grok Live Search
-├── x-client.ts          # XClient — X/Twitter data (AttentionVC)
 ├── price.ts             # PriceClient — Pyth market data
 ├── surf.ts              # SurfClient — /v1/surf/* crypto data catalog
+├── rpc.ts               # RpcClient — multi-chain JSON-RPC (Tatum, 40+ chains)
 ├── wallet.ts            # EVM wallet management
 ├── solana-wallet.ts     # Solana wallet management
 ├── x402.ts              # x402 payment protocol

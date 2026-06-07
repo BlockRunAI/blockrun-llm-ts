@@ -38,13 +38,6 @@ export { VoiceClient } from "./voice";
 export { PhoneClient, PHONE_PRICES } from "./phone";
 export { PortraitClient, PORTRAIT_ENROLLMENT_PRICE_USD } from "./portrait";
 export { SearchClient } from "./search";
-export {
-  XClient,
-  type XUserTweetsOptions,
-  type XMentionsOptions,
-  type XTweetRepliesOptions,
-  type XSearchOptions,
-} from "./x-client";
 export { PriceClient } from "./price";
 export { SurfClient } from "./surf";
 export {
@@ -141,25 +134,6 @@ export {
   type RoutingDecision,
   type SmartChatOptions,
   type SmartChatResponse,
-  // X/Twitter types (powered by AttentionVC)
-  type XUser,
-  type XUserLookupResponse,
-  type XFollower,
-  type XFollowersResponse,
-  type XFollowingsResponse,
-  type XUserInfoResponse,
-  type XVerifiedFollowersResponse,
-  type XTweet,
-  type XTweetsResponse,
-  type XMentionsResponse,
-  type XTweetLookupResponse,
-  type XTweetRepliesResponse,
-  type XTweetThreadResponse,
-  type XSearchResponse,
-  type XTrendingResponse,
-  type XArticlesRisingResponse,
-  type XAuthorAnalyticsResponse,
-  type XCompareAuthorsResponse,
   // Pyth market-data types
   type PriceCategory,
   type StockMarket,
@@ -179,7 +153,6 @@ export {
   type RpcBatchRequest,
   // New client option bags
   type SearchClientOptions,
-  type XClientOptions,
   type PriceClientOptions,
   type SurfClientOptions,
   type BlockrunClientOptions,
