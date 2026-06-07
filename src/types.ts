@@ -542,6 +542,51 @@ export interface VoiceInfo {
   [key: string]: unknown;
 }
 
+// Multi-chain RPC types (/v1/rpc/{network})
+
+export interface RpcClientOptions {
+  /** EVM wallet private key (hex string starting with 0x) */
+  privateKey?: `0x${string}` | string;
+  /** API endpoint URL (default: https://blockrun.ai/api) */
+  apiUrl?: string;
+  /** Request timeout in milliseconds (default: 60000 — upstream gateway timeout is 20s) */
+  timeout?: number;
+}
+
+/** A JSON-RPC 2.0 error object. */
+export interface RpcError {
+  code?: number;
+  message?: string;
+  data?: unknown;
+}
+
+/**
+ * Response from a multi-chain JSON-RPC call.
+ *
+ * Standard JSON-RPC 2.0 envelope plus BlockRun gateway metadata pulled
+ * from response headers (X-Network / X-Cache / X-Payment-Receipt).
+ */
+export interface RpcResponse<T = unknown> {
+  jsonrpc?: string;
+  id?: string | number | null;
+  result?: T;
+  error?: RpcError;
+  /** Canonical network key, e.g. "ethereum" (from X-Network) */
+  network?: string;
+  /** Served from the gateway's method-aware cache (from X-Cache) */
+  cacheHit?: boolean;
+  /** x402 settlement tx hash (single calls) */
+  txHash?: string;
+}
+
+/** A single request in a JSON-RPC batch (jsonrpc/id auto-filled if omitted). */
+export interface RpcBatchRequest {
+  method: string;
+  params?: unknown[];
+  id?: string | number;
+  jsonrpc?: string;
+}
+
 // Voice Call types
 
 /** Built-in Bland.ai voice presets. Any string is accepted (custom voice IDs work too). */
@@ -681,6 +726,22 @@ export interface VideoGenerateOptions {
    * with `imageUrl`. Real-person likeness is not supported on BlockRun.
    */
   realFaceAssetId?: string;
+  /**
+   * First-and-last-frame interpolation: a second image that seeds the FINAL
+   * frame so the model tweens from `imageUrl` → `lastFrameUrl`. Requires
+   * `imageUrl` (the first frame) and a Seedance model
+   * (bytedance/seedance-1.5-pro, seedance-2.0, or seedance-2.0-fast).
+   * Priced identically to image-to-video. Mutually exclusive with
+   * `realFaceAssetId`.
+   */
+  lastFrameUrl?: string;
+  /**
+   * Omni / multi-reference: up to 9 reference image URLs for character/style
+   * consistency (**Seedance 2.0 only**). Cite them as "image 1", "image 2"
+   * in the prompt. Mutually exclusive with `imageUrl` / `lastFrameUrl` /
+   * `realFaceAssetId`.
+   */
+  referenceImageUrls?: string[];
   /** Duration to bill for (defaults to model's default duration) */
   durationSeconds?: number;
   /** Output aspect ratio. Token360 / Seedance only — silently ignored by xAI Grok. */

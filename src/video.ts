@@ -119,12 +119,34 @@ export class VideoClient {
         "realFaceAssetId must be a Token360 asset id matching 'ta_[A-Za-z0-9]+' (e.g. 'ta_abc123xyz')"
       );
     }
+    if (options?.lastFrameUrl && !options?.imageUrl) {
+      throw new Error(
+        "lastFrameUrl requires imageUrl: imageUrl seeds the FIRST frame and lastFrameUrl the FINAL frame — send both."
+      );
+    }
+    if (options?.lastFrameUrl && options?.realFaceAssetId) {
+      throw new Error(
+        "lastFrameUrl and realFaceAssetId are mutually exclusive; first-and-last-frame uses imageUrl + lastFrameUrl."
+      );
+    }
+    if (options?.referenceImageUrls?.length) {
+      if (options.imageUrl || options.lastFrameUrl || options.realFaceAssetId) {
+        throw new Error(
+          "referenceImageUrls is mutually exclusive with imageUrl, lastFrameUrl, and realFaceAssetId."
+        );
+      }
+      if (options.referenceImageUrls.length > 9) {
+        throw new Error("referenceImageUrls accepts at most 9 images.");
+      }
+    }
 
     const body: Record<string, unknown> = {
       model: options?.model || DEFAULT_MODEL,
       prompt,
     };
     if (options?.imageUrl) body.image_url = options.imageUrl;
+    if (options?.lastFrameUrl) body.last_frame_url = options.lastFrameUrl;
+    if (options?.referenceImageUrls?.length) body.reference_image_urls = options.referenceImageUrls;
     if (options?.realFaceAssetId) body.real_face_asset_id = options.realFaceAssetId;
     if (options?.durationSeconds !== undefined) body.duration_seconds = options.durationSeconds;
     // ── Token360 / Seedance passthroughs (gateway silently ignores for xAI) ─
