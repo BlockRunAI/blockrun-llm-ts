@@ -1479,6 +1479,151 @@ export class LLMClient {
     return this.pm(`polymarket/wallet/${address}/cluster`);
   }
 
+  // ============================================================
+  // DefiLlama (DeFi protocols / TVL / yields / prices)
+  // ============================================================
+
+  /**
+   * Query DefiLlama DeFi data (GET passthrough). Powered by DefiLlama.
+   * $0.005/call for protocols / protocol/{slug} / chains / yields;
+   * $0.001/call for prices/{coins}.
+   *
+   * @param path - e.g. "protocols", "protocol/aave", "chains", "yields",
+   *               "prices/coingecko:bitcoin,base:0x..."
+   * @param params - Query parameters passed through to DefiLlama
+   */
+  async defi(path: string, params?: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.getWithPaymentRaw(`/v1/defillama/${path}`, params);
+  }
+
+  /** All DeFi protocols with TVL ($0.005/call). */
+  async defiProtocols(): Promise<Record<string, unknown>> {
+    return this.defi("protocols");
+  }
+
+  /** Single protocol details + historical TVL ($0.005/call). */
+  async defiProtocol(slug: string): Promise<Record<string, unknown>> {
+    return this.defi(`protocol/${slug}`);
+  }
+
+  /** Current TVL of every chain ($0.005/call). */
+  async defiChains(): Promise<Record<string, unknown>> {
+    return this.defi("chains");
+  }
+
+  /** Yield pools with APY/TVL ($0.005/call). */
+  async defiYields(params?: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.defi("yields", params);
+  }
+
+  /** Token price lookup ($0.001/call). Coins like "coingecko:bitcoin" or "{chain}:{address}". */
+  async defiPrices(coins: string | string[]): Promise<Record<string, unknown>> {
+    const joined = Array.isArray(coins) ? coins.join(",") : coins;
+    return this.defi(`prices/${joined}`);
+  }
+
+  // ============================================================
+  // 0x DEX (swap quotes + gasless) — free passthrough
+  // ============================================================
+
+  /**
+   * Query the 0x Swap / Gasless APIs (free — no x402 payment; BlockRun
+   * takes an on-chain affiliate fee on executed swaps instead).
+   *
+   * @param path - "price", "quote", "gasless/price", "gasless/quote",
+   *               "gasless/submit" (POST), "gasless/status/{hash}",
+   *               "gasless/approval-tokens", "gasless/chains", "swap/chains"
+   * @param params - Query params (chainId, sellToken, buyToken, sellAmount, taker, ...)
+   * @param body - JSON body — pass to switch to POST (gasless/submit only)
+   */
+  async dex(
+    path: string,
+    params?: Record<string, string>,
+    body?: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    if (body) return this.requestWithPaymentRaw(`/v1/zerox/${path}`, body);
+    return this.getWithPaymentRaw(`/v1/zerox/${path}`, params);
+  }
+
+  /** Indicative Permit2 swap price — no commitment (free). */
+  async dexPrice(params: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.dex("price", params);
+  }
+
+  /** Firm Permit2 swap quote with permit2.eip712 + tx data (free). */
+  async dexQuote(params: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.dex("quote", params);
+  }
+
+  /** Gasless indicative price quote (free). */
+  async dexGaslessPrice(params: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.dex("gasless/price", params);
+  }
+
+  /** Gasless firm quote — returns trade.eip712 to sign (free). */
+  async dexGaslessQuote(params: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.dex("gasless/quote", params);
+  }
+
+  /** Submit a signed gasless trade; the 0x relayer pays gas (free). */
+  async dexGaslessSubmit(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.dex("gasless/submit", undefined, body);
+  }
+
+  /** Poll a gasless trade's status by tradeHash (free). */
+  async dexGaslessStatus(tradeHash: string): Promise<Record<string, unknown>> {
+    return this.dex(`gasless/status/${tradeHash}`);
+  }
+
+  /** Chains where the Swap API is supported (free). */
+  async dexChains(): Promise<Record<string, unknown>> {
+    return this.dex("swap/chains");
+  }
+
+  /** Chains where the Gasless API is supported (free). */
+  async dexGaslessChains(): Promise<Record<string, unknown>> {
+    return this.dex("gasless/chains");
+  }
+
+  // ============================================================
+  // Modal Sandbox (pay-per-call cloud compute)
+  // ============================================================
+
+  /**
+   * Call the Modal sandbox compute API (POST passthrough).
+   *
+   * @param path - "sandbox/create" ($0.01 CPU / $0.05 GPU), "sandbox/exec",
+   *               "sandbox/status", "sandbox/terminate" ($0.001 each)
+   * @param body - JSON body for the endpoint
+   */
+  async modal(path: string, body?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestWithPaymentRaw(`/v1/modal/${path}`, body ?? {});
+  }
+
+  /** Create a sandboxed compute environment ($0.01 CPU / $0.05 GPU). */
+  async modalSandboxCreate(body?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.modal("sandbox/create", body);
+  }
+
+  /** Execute a command in a sandbox; returns stdout/stderr ($0.001). */
+  async modalSandboxExec(
+    sandboxId: string,
+    command: string[],
+    extra?: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    return this.modal("sandbox/exec", { sandbox_id: sandboxId, command, ...extra });
+  }
+
+  /** Check a sandbox's status ($0.001). */
+  async modalSandboxStatus(sandboxId: string): Promise<Record<string, unknown>> {
+    return this.modal("sandbox/status", { sandbox_id: sandboxId });
+  }
+
+  /** Terminate a sandbox ($0.001). */
+  async modalSandboxTerminate(sandboxId: string): Promise<Record<string, unknown>> {
+    return this.modal("sandbox/terminate", { sandbox_id: sandboxId });
+  }
+
   /**
    * Get current session spending.
    *
