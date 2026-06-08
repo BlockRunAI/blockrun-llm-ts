@@ -161,15 +161,52 @@ export class VideoClient {
     return this.submitAndPoll(body, budgetMs);
   }
 
+  /**
+   * Generate a video from a standard Seedance `content[]` body.
+   *
+   * Targets the gateway's `POST /v1/videos` endpoint, which accepts the
+   * mainstream multimodal `content` array (text + a single reference image)
+   * used by other Seedance APIs — so callers already holding a
+   * `content[]`-shaped request can submit it unchanged. The gateway validates
+   * unsupported inputs *before* charging, then delegates to the same x402
+   * submit+poll pipeline as {@link generate}.
+   *
+   * Most SDK users should prefer {@link generate} (structured options like
+   * `imageUrl` / `lastFrameUrl`) — this exists for migrating existing
+   * `content[]` payloads with no reshaping.
+   *
+   * @param content - The Seedance `content` array, e.g.
+   *   `[{ type: "text", text: "a red apple spinning" }]` or a text item plus
+   *   `{ type: "image_url", image_url: { url: "https://..." } }`.
+   * @param options - `model`, `budgetMs`, and any extra top-level body fields
+   *   (`resolution`, `durationSeconds`/`duration_seconds`, `aspectRatio`, …)
+   *   forwarded verbatim.
+   */
+  async generateFromContent(
+    content: Array<Record<string, unknown>>,
+    options?: { model?: string; budgetMs?: number } & Record<string, unknown>
+  ): Promise<VideoResponse> {
+    if (!Array.isArray(content) || content.length === 0) {
+      throw new Error("content must be a non-empty array of Seedance content items.");
+    }
+
+    const { model, budgetMs, ...extra } = options ?? {};
+    const body: Record<string, unknown> = { content, ...extra };
+    if (model !== undefined) body.model = model;
+
+    return this.submitAndPoll(body, budgetMs ?? DEFAULT_GENERATE_BUDGET_MS, "/v1/videos");
+  }
+
   // --------------------------------------------------------------------
   // Internal: async submit + poll
   // --------------------------------------------------------------------
 
   private async submitAndPoll(
     body: Record<string, unknown>,
-    budgetMs: number
+    budgetMs: number,
+    submitPath: string = "/v1/videos/generations"
   ): Promise<VideoResponse> {
-    const submitUrl = `${this.apiUrl}/v1/videos/generations`;
+    const submitUrl = `${this.apiUrl}${submitPath}`;
 
     // Step 1: 402 with payment requirements
     const resp402 = await this.fetchWithTimeout(submitUrl, {

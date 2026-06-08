@@ -2,6 +2,17 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.2.0] - 2026-06-08
+
+### Added
+
+- **`VideoClient.generateFromContent(content, options?)`** — submits a standard
+  Seedance `content[]` body to the gateway's `POST /v1/videos` endpoint
+  (validates unsupported inputs before charging, then delegates to the same
+  x402 submit+poll pipeline as `generate`). For migrating existing
+  `content[]`-shaped payloads unchanged; most callers should still prefer
+  `generate(prompt, …)` with structured options.
+
 ## [3.1.0] - 2026-06-07
 
 ### Added
