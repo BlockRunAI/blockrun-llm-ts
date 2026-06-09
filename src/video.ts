@@ -178,21 +178,55 @@ export class VideoClient {
    * @param content - The Seedance `content` array, e.g.
    *   `[{ type: "text", text: "a red apple spinning" }]` or a text item plus
    *   `{ type: "image_url", image_url: { url: "https://..." } }`.
-   * @param options - `model`, `budgetMs`, and any extra top-level body fields
-   *   (`resolution`, `durationSeconds`/`duration_seconds`, `aspectRatio`, …)
-   *   forwarded verbatim.
+   * @param options - `model`, `budgetMs`, plus the same camelCase render options
+   *   as {@link generate} (`durationSeconds`, `aspectRatio`, `resolution`,
+   *   `generateAudio`, `seed`, `watermark`, `returnLastFrame`). These are mapped
+   *   to the gateway's snake_case fields for you. Any other keys you pass are
+   *   forwarded verbatim (use snake_case for those, since the gateway reads
+   *   snake_case only).
    */
   async generateFromContent(
     content: Array<Record<string, unknown>>,
-    options?: { model?: string; budgetMs?: number } & Record<string, unknown>
+    options?: {
+      model?: string;
+      budgetMs?: number;
+      durationSeconds?: number;
+      aspectRatio?: string;
+      resolution?: string;
+      generateAudio?: boolean;
+      seed?: number;
+      watermark?: boolean;
+      returnLastFrame?: boolean;
+    } & Record<string, unknown>
   ): Promise<VideoResponse> {
     if (!Array.isArray(content) || content.length === 0) {
       throw new Error("content must be a non-empty array of Seedance content items.");
     }
 
-    const { model, budgetMs, ...extra } = options ?? {};
+    const {
+      model,
+      budgetMs,
+      durationSeconds,
+      aspectRatio,
+      resolution,
+      generateAudio,
+      seed,
+      watermark,
+      returnLastFrame,
+      ...extra
+    } = options ?? {};
+
+    // Forward unknown keys verbatim, then map the known camelCase render
+    // options to the snake_case the gateway actually reads (matches generate()).
     const body: Record<string, unknown> = { content, ...extra };
     if (model !== undefined) body.model = model;
+    if (durationSeconds !== undefined) body.duration_seconds = durationSeconds;
+    if (aspectRatio !== undefined) body.aspect_ratio = aspectRatio;
+    if (resolution !== undefined) body.resolution = resolution;
+    if (generateAudio !== undefined) body.generate_audio = generateAudio;
+    if (seed !== undefined) body.seed = seed;
+    if (watermark !== undefined) body.watermark = watermark;
+    if (returnLastFrame !== undefined) body.return_last_frame = returnLastFrame;
 
     return this.submitAndPoll(body, budgetMs ?? DEFAULT_GENERATE_BUDGET_MS, "/v1/videos");
   }

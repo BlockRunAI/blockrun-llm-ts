@@ -2,6 +2,17 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.2.1] - 2026-06-08
+
+### Fixed
+
+- **`generateFromContent` now maps camelCase render options to snake_case.**
+  3.2.0 spread caller options into the `/v1/videos` body verbatim, but the
+  gateway reads snake_case only — so `durationSeconds` / `aspectRatio` /
+  `generateAudio` / `returnLastFrame` were silently dropped (still billed). They
+  are now mapped to `duration_seconds` etc., matching `generate()`. Other keys
+  are still forwarded verbatim (pass those in snake_case).
+
 ## [3.2.0] - 2026-06-08
 
 ### Added
