@@ -216,9 +216,12 @@ export class VideoClient {
       ...extra
     } = options ?? {};
 
-    // Forward unknown keys verbatim, then map the known camelCase render
-    // options to the snake_case the gateway actually reads (matches generate()).
-    const body: Record<string, unknown> = { content, ...extra };
+    // Spread unknown keys FIRST so the validated positional `content` (and the
+    // mapped options below) always win — a stray `content`/`model` inside
+    // options can't clobber the real arguments. Then map the known camelCase
+    // render options to the snake_case the gateway actually reads (matches
+    // generate()); these take precedence over any snake_case passed in extra.
+    const body: Record<string, unknown> = { ...extra, content };
     if (model !== undefined) body.model = model;
     if (durationSeconds !== undefined) body.duration_seconds = durationSeconds;
     if (aspectRatio !== undefined) body.aspect_ratio = aspectRatio;

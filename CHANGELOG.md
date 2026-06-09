@@ -2,6 +2,15 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.2.2] - 2026-06-08
+
+### Fixed
+
+- **`generateFromContent`: the validated `content` argument can no longer be
+  clobbered by a stray `content` key inside `options`.** The body is now built as
+  `{ ...extra, content }` (extra spread first), so the positional `content` (and
+  the mapped render options) always win over arbitrary keys passed in options.
+
 ## [3.2.1] - 2026-06-08
 
 ### Fixed
