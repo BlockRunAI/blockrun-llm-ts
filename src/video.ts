@@ -339,12 +339,17 @@ export class VideoClient {
         );
       }
 
-      if (pollResp.status === 200 && lastStatus === "completed") {
+      // Terminal success is keyed on status, NOT the HTTP code — the gateway
+      // settles the moment a poll reports completed, so coupling success to a
+      // literal 200 would spin to the deadline (and report "not charged") on a
+      // completed-but-non-200 poll the caller was already charged for.
+      if (lastStatus === "completed") {
         const data = pollData as unknown as VideoResponse;
-        const billedSeconds =
-          typeof body.duration_seconds === "number" ? body.duration_seconds : 8;
+        // Account the actual settled amount (micro-USDC from the signed 402),
+        // not a hardcoded per-second rate. Seedance is flat-token priced, so
+        // the old xAI $0.05/sec formula misreported every non-Grok video.
         this.sessionCalls++;
-        this.sessionTotalUsd += 0.05 * billedSeconds * 1.05;
+        this.sessionTotalUsd += Number(details.amount) / 1e6;
         const txHash =
           pollResp.headers.get("x-payment-receipt") ||
           pollResp.headers.get("X-Payment-Receipt");

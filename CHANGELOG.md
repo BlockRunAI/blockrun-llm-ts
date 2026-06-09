@@ -2,6 +2,20 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.2.3] - 2026-06-08
+
+### Fixed
+
+- **Video session cost is now the actual settled amount, not a hardcoded
+  per-second rate.** `submitAndPoll` accounted every video as xAI Grok's
+  `$0.05/sec`, so `getSpending()` misreported every Seedance job (the common
+  case, and all of `generateFromContent`). It now uses the signed 402 amount
+  (micro-USDC), matching the Go SDK and the real on-chain charge.
+- **Video poll: terminal success keyed on `status === "completed"`, not a
+  literal HTTP 200** (parity with the Go 0.16.2 fix). A completed-but-non-200
+  poll no longer spins to the deadline and reports "not charged" for a job the
+  caller was already charged for.
+
 ## [3.2.2] - 2026-06-08
 
 ### Fixed
