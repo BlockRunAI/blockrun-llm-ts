@@ -2,6 +2,34 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.4.0] - 2026-06-11
+
+### Added
+
+- **`LLMClient.onramp(address)` — Coinbase Onramp link.** Mints a one-time
+  `pay.coinbase.com` URL that funds a wallet with USDC on Base via card/bank
+  (60+ fiat → Base USDC). POSTs `{ address, network: "base", asset: "USDC" }` to
+  `/v1/onramp/token` over x402. **FREE** (the signature only authenticates the
+  wallet — no charge), so the funding `address` must equal the signing wallet.
+  The returned URL is single-use and expires ~5min — mint at click time, never
+  cache. Validates `address` against `^0x[0-9a-fA-F]{40}$` and verifies the URL
+  starts with `https://pay.coinbase.com/`, else throws "gateway returned no
+  onramp url". **Base-only** — not added to `SolanaLLMClient`. New `OnrampResult`
+  type (`{ url: string }`) exported from `types`.
+- **Claude Fable 5** (`anthropic/claude-fable-5`) surfaced in the model catalog.
+  Anthropic Mythos-class model above Opus: 1M context, 128K output, always-on
+  thinking, input $10/M, output $50/M, fallback `claude-opus-4.8`. (Model IDs
+  pass through; this is a docs/catalog addition.)
+
+### Changed
+
+- **README payment section rewritten** into an explicit two-phase money flow:
+  Phase 1 fund your wallet once (buy with a card via `onramp()`, transfer
+  existing USDC, or skip with free NVIDIA models), Phase 2 every request pays
+  itself via automatic x402. Clarifies that payment settles on **Base or Solana**
+  depending on the client, while **onramp is Base-only**, plus how to track spend
+  (`getSpending()` / `getCostSummary()`) and verify settlements on Basescan.
+
 ## [3.3.0] - 2026-06-11
 
 ### Changed

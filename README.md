@@ -165,15 +165,59 @@ const tweet = await client.chat('xai/grok-3-mini', 'What is trending on X?', { s
 **Supported endpoint:** `https://sol.blockrun.ai/api`
 **Payment:** Solana USDC (SPL, mainnet)
 
-## How It Works
+## How Payment Works
 
-1. You send a request to BlockRun's API
-2. The API returns a 402 Payment Required with the price
-3. The SDK automatically signs a USDC payment on Base
-4. The request is retried with the payment proof
-5. You receive the AI response
+No API keys, no subscription. You hold USDC in your own wallet, and **every request pays for itself** with an on-chain micropayment. Two phases:
 
-**Your private key never leaves your machine** - it's only used for local signing.
+### Phase 1 — Fund your wallet once
+
+You only do this when your balance runs low. Three ways to get USDC into your wallet:
+
+- **(a) Buy with a card (Base USDC).** Call the new `onramp()` method to mint a one-time Coinbase Onramp link, then open the returned `pay.coinbase.com` URL — pay by card/bank in 60+ fiat currencies and the USDC lands in your wallet. The call itself is **free**. Onramp is **Base-only** (buying USDC with a card always lands Base USDC), and the funding address must equal your signing wallet:
+
+  ```typescript
+  const { url } = await client.onramp(client.getWalletAddress());
+  console.log(`Fund your wallet: ${url}`);  // single-use, expires ~5 min — mint at click time
+  ```
+
+- **(b) Transfer existing USDC.** Send USDC you already hold to your wallet address (`client.getWalletAddress()`). On Base, send Base USDC; on Solana (`SolanaLLMClient`), send Solana SPL USDC.
+
+- **(c) Skip funding entirely.** Use the free NVIDIA models (e.g. `nvidia/deepseek-v4-flash`) — every call is **$0**, no balance required.
+
+$5 of USDC covers thousands of paid requests. Check your balance any time:
+
+```typescript
+const balance = await client.getBalance();        // USDC on Base
+console.log(`Balance: $${balance.toFixed(2)} USDC`);
+```
+
+### Phase 2 — Every request pays itself (automatic x402)
+
+You just call e.g. `client.chat(...)` — the payment is invisible:
+
+1. You send a request to BlockRun's API.
+2. The gateway returns **402 Payment Required** with the price.
+3. The SDK signs a USDC payment **locally** (EIP-712) — on **Base** for `LLMClient`, on **Solana** for `SolanaLLMClient` — using your wallet key.
+4. The request is retried automatically with the payment proof.
+5. The gateway settles on-chain and returns the AI response.
+
+One call, no separate pay step. Free NVIDIA models settle at **$0** (no payment signed).
+
+### Track spend and verify settlements
+
+```typescript
+import { getCostSummary } from '@blockrun/llm';
+
+const spent = client.getSpending();               // this session
+console.log(`Spent $${spent.totalUsd.toFixed(4)} across ${spent.calls} calls`);
+
+const summary = getCostSummary();                  // across sessions (~/.blockrun/data/costs.jsonl)
+console.log(`Lifetime: $${summary.totalUsd.toFixed(2)} over ${summary.calls} calls`);
+```
+
+Every paid request is a real on-chain USDC transfer — look up your wallet address on [Basescan](https://basescan.org) (or a Solana explorer) to verify each settlement independently.
+
+**Non-custodial by design: your private key never leaves your machine** — it is only used for local signing, and no funds are ever held by BlockRun.
 
 ## Smart Routing (ClawRouter)
 
@@ -298,6 +342,7 @@ Released 2026-04-23 — first fully retrained base since GPT-4.5. 1M context, 12
 ### Anthropic Claude
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
+| `anthropic/claude-fable-5` | $10.00/M | $50.00/M | **1M** | Mythos-class flagship above Opus — always-on thinking, 128K output, fallback `claude-opus-4.8`. Alias: `claude-fable-5` |
 | `anthropic/claude-opus-4.8` | $5.00/M | $25.00/M | **1M** | Flagship — agentic coding + adaptive thinking, 128K output |
 | `anthropic/claude-opus-4.7` | $5.00/M | $25.00/M | **1M** | Agentic coding + adaptive thinking, 128K output |
 | `anthropic/claude-opus-4.6` | $5.00/M | $25.00/M | 200K | Hidden but still callable — kept as in-family hot-swap fallback |
@@ -1320,7 +1365,7 @@ const gptResponse = await client.messages.create({
 });
 ```
 
-The `AnthropicClient` wraps the official `@anthropic-ai/sdk` with a custom fetch that handles x402 payment automatically. Your private key never leaves your machine.
+The `AnthropicClient` wraps the official `@anthropic-ai/sdk` with a custom fetch that handles x402 payment automatically. Your private key never leaves your machine. The Mythos-class `claude-fable-5` alias is available here too (1M context, always-on thinking).
 
 ## Links
 
