@@ -847,6 +847,14 @@ export interface ExaFindSimilarOptions {
   excludeSourceDomain?: boolean;
 }
 
+// Coinbase Onramp Types
+// =============================================================================
+
+export interface OnrampResult {
+  /** One-time https://pay.coinbase.com/... URL prefilled for this wallet. */
+  url: string;
+}
+
 // Pyth-backed market-data types (crypto/fx/commodity/usstock/stocks).
 
 export type PriceCategory = "crypto" | "fx" | "commodity" | "usstock" | "stocks";

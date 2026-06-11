@@ -37,6 +37,7 @@ import {
   type ExaAnswerResponse,
   type ExaContentsResponse,
   type ExaFindSimilarOptions,
+  type OnrampResult,
   APIError,
   PaymentError,
 } from "./types";
@@ -1338,6 +1339,41 @@ export class LLMClient {
     if (options?.excludeSourceDomain !== undefined) body.excludeSourceDomain = options.excludeSourceDomain;
     const data = await this.requestWithPaymentRaw("/v1/exa/find-similar", body);
     return (data as { data: ExaSearchResponse }).data;
+  }
+
+  /**
+   * Mint a one-time Coinbase Onramp link to fund this wallet with USDC on Base.
+   *
+   * FREE — the x402 signature only authenticates the wallet (no payment is
+   * charged). Because the funding address must equal the signing wallet, this
+   * mints a `pay.coinbase.com` link prefilled for `address` so a card/bank can
+   * top it up (60+ fiat currencies → Base USDC). Base / USDC only.
+   *
+   * The returned URL is single-use and expires in ~5 minutes — mint it at click
+   * time and never cache it. The funding `address` must match the signing wallet.
+   *
+   * @param address - Destination Base wallet address (0x + 40 hex chars). Must
+   *                  equal the signing wallet that funds it.
+   * @returns `{ url }` — a one-time https://pay.coinbase.com/... link.
+   *
+   * @example
+   * const { url } = await client.onramp(client.getWalletAddress());
+   * console.log(`Fund your wallet: ${url}`);
+   */
+  async onramp(address: string): Promise<OnrampResult> {
+    if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+      throw new Error("address must be a 0x-prefixed 40-hex-character Base address");
+    }
+    const data = await this.requestWithPaymentRaw("/v1/onramp/token", {
+      address,
+      network: "base",
+      asset: "USDC",
+    });
+    const url = typeof data.url === "string" ? data.url : "";
+    if (!url.startsWith("https://pay.coinbase.com/")) {
+      throw new APIError("gateway returned no onramp url", 502, { message: "gateway returned no onramp url" });
+    }
+    return { url };
   }
 
   /**
