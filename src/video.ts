@@ -11,7 +11,8 @@
  *   POST /v1/videos/generations         -> 402 -> sign -> 202 { id, poll_url }
  *   GET  /v1/videos/generations/{id}    -> loop until status=completed
  *
- * The client signs ONCE and replays the same PAYMENT-SIGNATURE on every poll.
+ * The client signs once and replays the same PAYMENT-SIGNATURE on every poll,
+ * re-signing automatically if the 600s authorization window lapses mid-poll.
  * Settlement happens only on the first completed poll, so upstream failure or
  * the caller giving up = zero charge.
  *
@@ -52,10 +53,18 @@ const DEFAULT_MODEL = "xai/grok-imagine-video";
 // `DEFAULT_GENERATE_BUDGET_MS` below, independent of this.
 const DEFAULT_TIMEOUT = 120_000;
 const POLL_INTERVAL_MS = 5_000;
-const DEFAULT_GENERATE_BUDGET_MS = 300_000; // 5 min upstream budget
+// 15 min: generation itself is 1-3 min, but the upstream pipeline can lag the
+// status read-path several minutes behind actual completion (observed: video
+// done in 100s, status flipped ~7.5min later). Jobs stay claimable ~48h, so a
+// patient default beats a premature give-up.
+const DEFAULT_GENERATE_BUDGET_MS = 900_000;
 // Advertised signed-auth window. Server default is 300s; we bump to 600s so
-// the signature stays valid across the async polling window.
+// the signature stays valid across the async polling window. Budgets longer
+// than this window are handled by re-signing mid-poll (see submitAndPoll).
 const MAX_TIMEOUT_SECONDS = 600;
+// Max mid-poll re-signs after a 402 (signature expiry). A fresh signature
+// that 402s again means a genuine payment problem, not expiry.
+const MAX_POLL_RESIGNS = 2;
 
 /**
  * BlockRun Video Generation Client.
@@ -99,8 +108,9 @@ export class VideoClient {
    * Generate a short video clip from a text prompt (or text + image).
    *
    * Submits an async job, then polls until the video is ready. Typical total
-   * wall-time is 60-180s. If upstream runs past the budget (default 5min),
-   * throws without charging.
+   * wall-time is 60-180s, but upstream status can lag several minutes behind
+   * actual completion. If upstream runs past the budget (default 15min),
+   * throws without charging — the job stays claimable ~48h via poll_url.
    *
    * @param prompt - Text description of the video
    * @param options - Optional generation parameters
@@ -256,22 +266,9 @@ export class VideoClient {
       await this.throwApiError(resp402, "Expected 402 on first POST");
     }
 
-    const paymentRequired = await this.extractPaymentRequired(resp402);
-    const details = extractPaymentDetails(paymentRequired);
-
-    const paymentPayload = await createPaymentPayload(
-      this.privateKey,
-      this.account.address,
-      details.recipient,
-      details.amount,
-      details.network || "eip155:8453",
-      {
-        resourceUrl: details.resource?.url || submitUrl,
-        resourceDescription: details.resource?.description || "BlockRun Video Generation",
-        // Ensure signed auth covers the entire polling window.
-        maxTimeoutSeconds: Math.max(details.maxTimeoutSeconds || 0, MAX_TIMEOUT_SECONDS),
-        extra: details.extra,
-      }
+    let { payload: paymentPayload, details } = await this.signFromChallenge(
+      resp402,
+      submitUrl
     );
 
     // Step 2: submit with payment -> 202 { id, poll_url }
@@ -306,9 +303,14 @@ export class VideoClient {
 
     const pollUrl = this.absolute(submitData.poll_url);
 
-    // Step 3: poll with the same PAYMENT-SIGNATURE until completed
+    // Step 3: poll with the same PAYMENT-SIGNATURE until completed. The
+    // signed authorization is valid for MAX_TIMEOUT_SECONDS (600s); when a
+    // poll 402s after that window, we fetch a fresh challenge from the same
+    // poll_url and re-sign with the same wallet — the gateway enforces wallet
+    // binding, not signature equality, so a fresh signature is accepted.
     const deadline = Date.now() + budgetMs;
     let lastStatus = submitData.status || "queued";
+    let resignsLeft = MAX_POLL_RESIGNS;
 
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
@@ -357,6 +359,27 @@ export class VideoClient {
         return data;
       }
 
+      if (pollResp.status === 402) {
+        // Mid-poll 402 = the signed authorization expired (600s window) on a
+        // budget longer than that. Re-challenge + re-sign and keep going. A
+        // fresh signature that 402s again is a genuine payment problem.
+        if (resignsLeft > 0) {
+          resignsLeft--;
+          const challenge = await this.fetchWithTimeout(pollUrl, { method: "GET" });
+          if (challenge.status === 402) {
+            ({ payload: paymentPayload, details } = await this.signFromChallenge(
+              challenge,
+              pollUrl
+            ));
+            continue;
+          }
+        }
+        throw new PaymentError(
+          "Payment verification failed mid-poll (not a signature-expiry). " +
+            "Check the wallet balance and that you poll from the wallet that submitted the job."
+        );
+      }
+
       if (pollResp.status !== 200 && pollResp.status !== 202 && pollResp.status !== 504) {
         await this.throwApiError(pollResp, "Poll failed");
       }
@@ -365,10 +388,40 @@ export class VideoClient {
 
     throw new APIError(
       `Video generation did not complete within ${Math.round(budgetMs / 1000)}s ` +
-        `(last status: ${lastStatus}). No payment was taken.`,
+        `(last status: ${lastStatus}). No payment was taken. The job is NOT lost: ` +
+        `it stays claimable for ~48h — re-GET poll_url with a fresh signature from ` +
+        `the same wallet to fetch (and settle) the finished video.`,
       504,
-      { id: submitData.id, last_status: lastStatus }
+      { id: submitData.id, last_status: lastStatus, poll_url: pollUrl }
     );
+  }
+
+  /**
+   * Parse an x402 challenge response and sign a payment payload for it.
+   * Used for the initial submit AND for mid-poll re-signing after the 600s
+   * authorization window lapses on long polls.
+   */
+  private async signFromChallenge(
+    resp402: Response,
+    fallbackUrl: string
+  ): Promise<{ payload: string; details: ReturnType<typeof extractPaymentDetails> }> {
+    const paymentRequired = await this.extractPaymentRequired(resp402);
+    const details = extractPaymentDetails(paymentRequired);
+    const payload = await createPaymentPayload(
+      this.privateKey,
+      this.account.address,
+      details.recipient,
+      details.amount,
+      details.network || "eip155:8453",
+      {
+        resourceUrl: details.resource?.url || fallbackUrl,
+        resourceDescription: details.resource?.description || "BlockRun Video Generation",
+        // Ensure signed auth covers as much of the polling window as allowed.
+        maxTimeoutSeconds: Math.max(details.maxTimeoutSeconds || 0, MAX_TIMEOUT_SECONDS),
+        extra: details.extra,
+      }
+    );
+    return { payload, details };
   }
 
   private absolute(url: string): string {
