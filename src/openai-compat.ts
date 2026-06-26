@@ -19,7 +19,7 @@
  * });
  */
 
-import { LLMClient } from "./client";
+import { LLMClient, DEFAULT_TIMEOUT } from "./client";
 import type { ChatMessage, ChatResponse, ResponseFormat, Tool, ToolCall, ToolChoice } from "./types";
 
 // OpenAI-compatible types
@@ -272,7 +272,7 @@ export class OpenAI {
   constructor(options: OpenAIClientOptions = {}) {
     const privateKey = options.walletKey || options.privateKey;
     const apiUrl = options.baseURL || "https://blockrun.ai/api";
-    const timeout = options.timeout || 60000;
+    const timeout = options.timeout ?? DEFAULT_TIMEOUT;
 
     this.client = new LLMClient({
       privateKey: privateKey as `0x${string}`,
