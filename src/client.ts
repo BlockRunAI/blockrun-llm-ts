@@ -141,7 +141,29 @@ import { logCost } from "./cost-log";
 
 const DEFAULT_API_URL = "https://blockrun.ai/api";
 const DEFAULT_MAX_TOKENS = 1024;
-const DEFAULT_TIMEOUT = 60000;
+
+/**
+ * Default chat HTTP timeout (milliseconds). Was 60s; reasoning models
+ * (opus-4.8, deepseek-v4-pro) routinely take 200–300s, so 60s timed out
+ * non-streaming calls. Override via the BLOCKRUN_CHAT_TIMEOUT env var
+ * (in SECONDS) or the per-client / per-call `timeout` option (in ms).
+ * Mirrors blockrun-llm (Python) DEFAULT_CHAT_TIMEOUT.
+ */
+function resolveDefaultTimeout(): number {
+  const envVal =
+    typeof process !== "undefined" && process.env
+      ? process.env.BLOCKRUN_CHAT_TIMEOUT
+      : undefined;
+  if (envVal !== undefined) {
+    const seconds = Number(envVal);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return seconds * 1000;
+    }
+  }
+  return 600_000; // 600s
+}
+
+const DEFAULT_TIMEOUT = resolveDefaultTimeout();
 
 // SDK version for User-Agent header (client identification in server logs)
 const SDK_VERSION = "1.5.0";
