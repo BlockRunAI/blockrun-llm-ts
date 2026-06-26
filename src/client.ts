@@ -163,7 +163,7 @@ function resolveDefaultTimeout(): number {
   return 600_000; // 600s
 }
 
-const DEFAULT_TIMEOUT = resolveDefaultTimeout();
+export const DEFAULT_TIMEOUT = resolveDefaultTimeout();
 
 // SDK version for User-Agent header (client identification in server logs)
 const SDK_VERSION = "1.5.0";

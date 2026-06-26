@@ -287,7 +287,7 @@ export interface LLMClientOptions {
   privateKey?: `0x${string}` | string;
   /** API endpoint URL (default: https://blockrun.ai/api) */
   apiUrl?: string;
-  /** Request timeout in milliseconds (default: 60000) */
+  /** Request timeout in milliseconds (default: 600000 / 600s; override via BLOCKRUN_CHAT_TIMEOUT env, in seconds) */
   timeout?: number;
 }
 
@@ -953,7 +953,7 @@ export interface PhoneClientOptions {
   privateKey?: `0x${string}` | string;
   /** API endpoint URL (default: https://blockrun.ai/api) */
   apiUrl?: string;
-  /** Request timeout in milliseconds (default: 60000) */
+  /** Request timeout in milliseconds (default: 600000 / 600s; override via BLOCKRUN_CHAT_TIMEOUT env, in seconds) */
   timeout?: number;
 }
 
@@ -1032,7 +1032,7 @@ export interface PortraitClientOptions {
   privateKey?: `0x${string}` | string;
   /** API endpoint URL (default: https://blockrun.ai/api) */
   apiUrl?: string;
-  /** Request timeout in milliseconds (default: 60000) */
+  /** Request timeout in milliseconds (default: 600000 / 600s; override via BLOCKRUN_CHAT_TIMEOUT env, in seconds) */
   timeout?: number;
 }
 

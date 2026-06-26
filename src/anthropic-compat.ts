@@ -7,6 +7,7 @@ import {
 } from './x402.js';
 import { getOrCreateWallet } from './wallet.js';
 import { validatePrivateKey, validateApiUrl, validateResourceUrl } from './validation.js';
+import { DEFAULT_TIMEOUT } from './client.js';
 
 // ======================================================================
 // Types
@@ -41,7 +42,7 @@ export class AnthropicClient {
     const apiUrl = options.apiUrl ?? 'https://blockrun.ai/api';
     validateApiUrl(apiUrl);
     this._apiUrl = apiUrl.replace(/\/$/, '');
-    this._timeout = options.timeout ?? 60000;
+    this._timeout = options.timeout ?? DEFAULT_TIMEOUT;
   }
 
   private async _getClient(): Promise<import('@anthropic-ai/sdk').default> {
