@@ -2,6 +2,21 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.5.1] - 2026-06-29
+
+### Security
+
+- **Patch transitive advisories via pnpm `overrides` + a dev-tool bump.** Force
+  the patched `ws` (≥8.21.0 on the 8.x line, ≥7.5.11 on 7.x — fixes the
+  memory-exhaustion DoS that reached consumers through `viem` / `@solana/kit`)
+  and `form-data` (≥4.0.6, CRLF injection, pulled via the optional
+  `@anthropic-ai/sdk`), and bump `vitest` 1→3 (clears the dev-only Vitest-UI
+  critical plus the vite/esbuild dev advisories). Dependency-only — no API or
+  source changes; typecheck, build, and all 197 tests pass. The remaining
+  advisories are dev-only (vite/esbuild under vitest, js-yaml under eslint) or
+  have no upstream fix yet (`bigint-buffer`, deep in the optional Solana
+  `spl-token` path).
+
 ## [3.4.0] - 2026-06-11
 
 ### Added
