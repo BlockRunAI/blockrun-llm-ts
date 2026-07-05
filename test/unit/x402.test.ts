@@ -33,6 +33,34 @@ describe("x402 Payment Protocol", () => {
       expect(decoded.payload.authorization.to).toBe(TEST_RECIPIENT);
     });
 
+    it("should attach BlockRun builder-code service code (s)", async () => {
+      const payload = await createPaymentPayload(
+        TEST_PRIVATE_KEY,
+        TEST_ACCOUNT.address,
+        TEST_RECIPIENT,
+        "1000000",
+        "eip155:8453"
+      );
+
+      const decoded = JSON.parse(atob(payload));
+      expect(decoded.extensions["builder-code"].info.s).toEqual(["blockrun"]);
+    });
+
+    it("should preserve server-echoed app code (a) when adding service code", async () => {
+      const payload = await createPaymentPayload(
+        TEST_PRIVATE_KEY,
+        TEST_ACCOUNT.address,
+        TEST_RECIPIENT,
+        "1000000",
+        "eip155:8453",
+        { extensions: { "builder-code": { info: { a: "blockrun" } } } }
+      );
+
+      const decoded = JSON.parse(atob(payload));
+      expect(decoded.extensions["builder-code"].info.a).toBe("blockrun");
+      expect(decoded.extensions["builder-code"].info.s).toEqual(["blockrun"]);
+    });
+
     it("should include resource info when provided", async () => {
       const payload = await createPaymentPayload(
         TEST_PRIVATE_KEY,
