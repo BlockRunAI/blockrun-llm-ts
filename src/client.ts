@@ -41,7 +41,11 @@ import {
   APIError,
   PaymentError,
 } from "./types";
-import { route, DEFAULT_ROUTING_CONFIG, getFallbackChain } from "@blockrun/clawrouter";
+// NOTE: @blockrun/clawrouter is loaded lazily inside smartChat() (see below),
+// not imported at module top level. It is the model-routing engine and is only
+// needed by smartChat(); keeping it out of the eager import graph means a
+// consumer that uses only the wallet / payment / chat helpers never loads it,
+// so a broken or absent router build cannot break importing this SDK.
 
 // Model pricing type for ClawRouter (matches @blockrun/clawrouter internal type)
 type ModelPricing = {
@@ -296,6 +300,25 @@ export class LLMClient {
 
     // Determine max output tokens for cost estimation
     const maxOutputTokens = options?.maxOutputTokens || options?.maxTokens || 1024;
+
+    // Load the router on demand. Only smartChat() needs it, so it stays out of
+    // the SDK's top-level import graph (see the note by the imports). Fail with
+    // a clear message if the optional router dependency is missing or broken,
+    // rather than a cryptic module-load error at import time.
+    let route: typeof import("@blockrun/clawrouter")["route"];
+    let DEFAULT_ROUTING_CONFIG: typeof import("@blockrun/clawrouter")["DEFAULT_ROUTING_CONFIG"];
+    let getFallbackChain: typeof import("@blockrun/clawrouter")["getFallbackChain"];
+    try {
+      ({ route, DEFAULT_ROUTING_CONFIG, getFallbackChain } = await import(
+        "@blockrun/clawrouter"
+      ));
+    } catch (err) {
+      throw new Error(
+        "smartChat() requires the optional '@blockrun/clawrouter' routing engine, " +
+          "which is not installed or failed to load. Install it, or call chat() " +
+          `with an explicit model instead. Cause: ${(err as Error).message}`,
+      );
+    }
 
     // Route the request using ClawRouter
     const decision = route(prompt, options?.system, maxOutputTokens, {
