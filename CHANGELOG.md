@@ -2,6 +2,20 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.5.2] - 2026-07-13
+
+### Fixed
+
+- **Decouple the router (`@blockrun/clawrouter`) from the SDK's import graph.**
+  It was a top-level `import` in `client.ts`, so every consumer loaded it even
+  though only `smartChat()` uses it — meaning a broken or absent router build
+  (e.g. the malformed `@blockrun/clawrouter@0.12.220` bundle) crashed at
+  *import time* for apps that only use the wallet / payment / `chat()` helpers.
+  It is now loaded lazily via `await import()` inside `smartChat()`, wrapped so
+  a missing/broken router surfaces a clear error to `smartChat()` callers only,
+  and moved from `dependencies` to `optionalDependencies` (marked `--external`
+  in the build). Importing the SDK no longer depends on the router's health.
+
 ## [3.5.1] - 2026-06-29
 
 ### Security
