@@ -33,3 +33,8 @@ yarn-error.log*
 # Test files with credentials
 test-*.mjs
 .gstack/
+
+# One package manager: pnpm (see package.json "packageManager").
+# A second lockfile nothing reads is how release v3.6.0 died — CI (pnpm) was
+# green while publish (npm ci) failed on a stale package-lock.json.
+package-lock.json
