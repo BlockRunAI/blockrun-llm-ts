@@ -2,6 +2,18 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.7.0] - 2026-07-14
+
+### Added
+
+- **BlockRun's x402 builder code is now attached to every payment this SDK signs** (#9, @KillerQueen-Z). The ERC-8021 Schema 2 service code (`s: ["blockrun"]`) is merged into the payload's `builder-code` extension on both the EVM and Solana paths, so settlements are attributable to BlockRun on-chain. Any app code (`a`) the server echoes back in its 402 is preserved rather than replaced.
+- **The signed authorization is byte-identical.** `extensions` sits on the outer x402 envelope — it is not in the EIP-712 `message`, not in `TRANSFER_TYPES`, and not in `domain`. `signTypedData` covers only `{from, to, value, validAfter, validBefore, nonce}`, so `amount`, `payTo`, the validity window and the nonce are untouched. This is attribution metadata, not a change to what gets signed.
+- **Verified with a real settle, not just unit tests.** The one thing tests could not prove was whether the CDP facilitator accepts an unregistered service code — and the blast radius was total, since this SDK is the payment layer for both `@blockrun/mcp` and ClawRouter: if the facilitator errored on an unrecognised `s`, every payment on every chain would break. So the branch was built, installed into `@blockrun/mcp`, and driven through one real x402 call on Base (`blockrun_markets` → live Polymarket data, wallet `64.902027 → 64.899027`). CDP accepted it.
+
+### Fixed
+
+- **One package manager, one lockfile** (#12). `package.json` declares `pnpm` and `ci.yml` used `pnpm install --frozen-lockfile`, but `publish.yml` ran `npm ci` against a second lockfile nothing else read — so a `package.json` change could pass CI and still kill the publish. That is exactly how v3.6.0 died (`lock file's @blockrun/clawrouter@0.12.220 does not satisfy 0.12.223`), forcing 3.6.1 to be re-cut. `publish.yml` now installs with pnpm; `package-lock.json` is deleted and gitignored. This release is the first to go out through that path.
+
 ## [3.6.1] - 2026-07-14
 
 Same change as 3.6.0, which never reached npm: its release tag predated the
