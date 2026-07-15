@@ -2,7 +2,12 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
-## [3.6.0] - 2026-07-14
+## [3.6.1] - 2026-07-14
+
+Same change as 3.6.0, which never reached npm: its release tag predated the
+package-lock.json sync, so the publish job died on `npm ci` and no artifact was
+ever produced. Re-cut from a commit that has the fix.
+
 
 ### Changed
 
