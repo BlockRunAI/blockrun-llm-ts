@@ -2,6 +2,32 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.6.0] - 2026-07-14
+
+### Changed
+
+- **`@blockrun/clawrouter` is now an optional _peer_ dependency — npm no longer
+  installs it.** 3.5.2 stopped *loading* the router unless `smartChat()` was
+  called, but it stayed in `optionalDependencies`, which npm installs by default
+  and `npx` consumers cannot opt out of (`--omit=optional` is not reachable
+  through `npx`). So every install still paid **~50MB** — about 15% of a
+  `@blockrun/mcp` install tree — for a routing engine most consumers never call.
+  Moving it to `peerDependencies` + `peerDependenciesMeta.optional: true` means
+  npm skips it entirely unless a consumer asks for it.
+- No code change: `smartChat()` already resolved the router through a guarded
+  `await import()` and threw an actionable error when it was absent (3.5.2). The
+  packaging simply did not match that intent — the dependency was always
+  designed to be optional, and now it is declared that way. Verified: with the
+  router absent, the SDK imports cleanly, `LLMClient` / `BlockrunClient` /
+  `createPaymentPayload` / `PaymentError` all work, and `smartChat()` fails with
+  "requires the optional '@blockrun/clawrouter' routing engine".
+
+### Upgrading
+
+- Callers of `chat()`, the wallet helpers, or the payment helpers: **no action**.
+- Callers of **`smartChat()`**: add `@blockrun/clawrouter` to your own
+  dependencies (`npm i @blockrun/clawrouter`). It is no longer installed for you.
+
 ## [3.5.2] - 2026-07-13
 
 ### Fixed
