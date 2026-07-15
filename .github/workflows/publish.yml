@@ -14,15 +14,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # pnpm, matching package.json's "packageManager" and ci.yml. This job used
+      # `npm ci` against a second lockfile nothing else read, so a package.json
+      # change that CI accepted could still kill the publish — which is exactly
+      # how v3.6.0 died: "lock file's @blockrun/clawrouter@0.12.220 does not
+      # satisfy @blockrun/clawrouter@0.12.223". One package manager, one lockfile.
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
-          cache: npm
+          cache: pnpm
 
-      - run: npm ci
-      - run: npm run build
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
 
+      # pack/publish stay on npm: they read package.json, not a lockfile, and
+      # `npm publish --provenance` is what wires the OIDC attestation.
       - name: Verify package
         run: npm pack --dry-run
 
