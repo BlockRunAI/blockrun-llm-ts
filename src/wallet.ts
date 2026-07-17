@@ -11,6 +11,11 @@ import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import {
+  scanWallets as coreScanWallets,
+  resolveFromFiles as coreResolveFromFiles,
+  resolvePrivateKey as coreResolvePrivateKey,
+} from "@blockrun/core";
 
 // USDC on Base contract address
 export const USDC_BASE_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -70,29 +75,7 @@ export function saveWallet(privateKey: string): string {
  * @returns Array of wallet objects with privateKey and address
  */
 export function scanWallets(): Array<{ privateKey: string; address: string }> {
-  const home = os.homedir();
-  const results: Array<{ mtime: number; privateKey: string; address: string }> = [];
-
-  try {
-    const entries = fs.readdirSync(home, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.name.startsWith(".") || !entry.isDirectory()) continue;
-      const walletFile = path.join(home, entry.name, "wallet.json");
-      if (!fs.existsSync(walletFile)) continue;
-      try {
-        const data = JSON.parse(fs.readFileSync(walletFile, "utf-8"));
-        const pk = data.privateKey || "";
-        const addr = data.address || "";
-        if (pk && addr) {
-          const mtime = fs.statSync(walletFile).mtimeMs;
-          results.push({ mtime, privateKey: pk, address: addr });
-        }
-      } catch { continue; }
-    }
-  } catch { /* ignore */ }
-
-  results.sort((a, b) => b.mtime - a.mtime);
-  return results.map(({ privateKey, address }) => ({ privateKey, address }));
+  return coreScanWallets();
 }
 
 /**
@@ -106,24 +89,7 @@ export function scanWallets(): Array<{ privateKey: string; address: string }> {
  * @returns Private key string or null if not found
  */
 export function loadWallet(): string | null {
-  // Scan provider wallet files
-  const wallets = scanWallets();
-  if (wallets.length > 0) return wallets[0].privateKey;
-
-  // Check .session (legacy)
-  if (fs.existsSync(WALLET_FILE)) {
-    const key = fs.readFileSync(WALLET_FILE, "utf-8").trim();
-    if (key) return key;
-  }
-
-  // Check legacy wallet.key
-  const legacyFile = path.join(WALLET_DIR, "wallet.key");
-  if (fs.existsSync(legacyFile)) {
-    const key = fs.readFileSync(legacyFile, "utf-8").trim();
-    if (key) return key;
-  }
-
-  return null;
+  return coreResolveFromFiles()?.privateKey ?? null;
 }
 
 /**
@@ -139,22 +105,10 @@ export function loadWallet(): string | null {
  * @returns WalletInfo with address, privateKey, and isNew flag
  */
 export function getOrCreateWallet(): WalletInfo {
-  // Check environment variable first
-  const envKey =
-    typeof process !== "undefined" && process.env
-      ? process.env.BLOCKRUN_WALLET_KEY || process.env.BASE_CHAIN_WALLET_KEY
-      : undefined;
-
-  if (envKey) {
-    const account = privateKeyToAccount(envKey as `0x${string}`);
-    return { address: account.address, privateKey: envKey, isNew: false };
-  }
-
-  // Check file
-  const fileKey = loadWallet();
-  if (fileKey) {
-    const account = privateKeyToAccount(fileKey as `0x${string}`);
-    return { address: account.address, privateKey: fileKey, isNew: false };
+  const resolved = coreResolvePrivateKey();
+  if (resolved) {
+    const account = privateKeyToAccount(resolved.privateKey);
+    return { address: account.address, privateKey: resolved.privateKey, isNew: false };
   }
 
   // Create new wallet
@@ -169,21 +123,8 @@ export function getOrCreateWallet(): WalletInfo {
  * @returns Wallet address or null if no wallet configured
  */
 export function getWalletAddress(): string | null {
-  const envKey =
-    typeof process !== "undefined" && process.env
-      ? process.env.BLOCKRUN_WALLET_KEY || process.env.BASE_CHAIN_WALLET_KEY
-      : undefined;
-
-  if (envKey) {
-    return privateKeyToAccount(envKey as `0x${string}`).address;
-  }
-
-  const fileKey = loadWallet();
-  if (fileKey) {
-    return privateKeyToAccount(fileKey as `0x${string}`).address;
-  }
-
-  return null;
+  const resolved = coreResolvePrivateKey();
+  return resolved ? privateKeyToAccount(resolved.privateKey).address : null;
 }
 
 /**
