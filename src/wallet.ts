@@ -62,10 +62,12 @@ export function saveWallet(privateKey: string): string {
 }
 
 /**
- * Scan ~/.<dir>/wallet.json files from any provider (agentcash, etc.).
+ * Discover ~/.<dir>/wallet.json files from other providers.
  *
  * Each file should contain JSON with "privateKey" and "address" fields.
- * Results are sorted by modification time (most recent first).
+ * Results are sorted by modification time (most recent first). Discovery is
+ * intentionally opt-in: a provider wallet must never replace the canonical
+ * BlockRun wallet merely because it was written more recently.
  *
  * @returns Array of wallet objects with privateKey and address
  */
@@ -99,18 +101,14 @@ export function scanWallets(): Array<{ privateKey: string; address: string }> {
  * Load wallet private key from file.
  *
  * Priority:
- * 1. Scan ~/.* /wallet.json (any provider)
- * 2. Legacy ~/.blockrun/.session
- * 3. Legacy ~/.blockrun/wallet.key
+ * 1. ~/.blockrun/.session
+ * 2. ~/.blockrun/wallet.key (legacy)
  *
  * @returns Private key string or null if not found
  */
 export function loadWallet(): string | null {
-  // Scan provider wallet files
-  const wallets = scanWallets();
-  if (wallets.length > 0) return wallets[0].privateKey;
-
-  // Check .session (legacy)
+  // The canonical BlockRun wallet always wins. Do not implicitly adopt a
+  // wallet discovered in another application's private storage.
   if (fs.existsSync(WALLET_FILE)) {
     const key = fs.readFileSync(WALLET_FILE, "utf-8").trim();
     if (key) return key;
@@ -131,10 +129,9 @@ export function loadWallet(): string | null {
  *
  * Priority:
  * 1. BLOCKRUN_WALLET_KEY environment variable
- * 2. Scan wallet.json files from providers
- * 3. ~/.blockrun/.session file
- * 4. ~/.blockrun/wallet.key file - legacy
- * 5. Create new wallet
+ * 2. ~/.blockrun/.session file
+ * 3. ~/.blockrun/wallet.key file - legacy
+ * 4. Create new wallet
  *
  * @returns WalletInfo with address, privateKey, and isNew flag
  */
@@ -150,7 +147,8 @@ export function getOrCreateWallet(): WalletInfo {
     return { address: account.address, privateKey: envKey, isNew: false };
   }
 
-  // Check file
+  // Check the canonical BlockRun wallet. scanWallets() is exposed for an
+  // explicit migration flow only and must not affect automatic selection.
   const fileKey = loadWallet();
   if (fileKey) {
     const account = privateKeyToAccount(fileKey as `0x${string}`);

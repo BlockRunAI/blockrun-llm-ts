@@ -1295,9 +1295,10 @@ await status();
 // Balance: $5.30 USDC
 ```
 
-## Wallet Scanning
+## Wallet Discovery and Migration
 
-The SDK auto-detects wallets from any provider on your system:
+The SDK can discover compatible wallets for an explicit, user-confirmed
+migration. It never automatically makes a discovered provider wallet active:
 
 ```typescript
 import { scanWallets, scanSolanaWallets } from '@blockrun/llm';
@@ -1309,7 +1310,9 @@ const baseWallets = scanWallets();
 const solWallets = scanSolanaWallets();
 ```
 
-`getOrCreateWallet()` checks scanned wallets first, so if you already have a wallet from another BlockRun tool, it will be reused automatically.
+`getOrCreateWallet()` always uses `~/.blockrun/.session` (or an explicit
+wallet environment variable). Review the discovered addresses and import one
+explicitly if you intend to switch wallets.
 
 ## Response Caching
 

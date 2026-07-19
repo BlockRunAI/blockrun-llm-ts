@@ -65,11 +65,12 @@ export function saveSolanaWallet(privateKey: string): string {
 }
 
 /**
- * Scan ~/.<dir>/solana-wallet.json files from any provider.
+ * Discover ~/.<dir>/solana-wallet.json files from other providers.
  *
  * Each file should contain JSON with "privateKey" and "address" fields.
  * Also checks ~/.brcc/wallet.json for BRCC wallets.
- * Results are sorted by modification time (most recent first).
+ * Results are sorted by modification time (most recent first). Discovery is
+ * opt-in and never changes the active BlockRun wallet automatically.
  *
  * @returns Array of wallet objects with secretKey and publicKey
  */
@@ -119,11 +120,7 @@ export function scanSolanaWallets(): Array<{ secretKey: string; publicKey: strin
 }
 
 export function loadSolanaWallet(): string | null {
-  // Scan provider wallet files
-  const wallets = scanSolanaWallets();
-  if (wallets.length > 0) return wallets[0].secretKey;
-
-  // Legacy session file
+  // The canonical BlockRun wallet always wins over a discovered provider key.
   if (fs.existsSync(SOLANA_WALLET_FILE)) {
     const key = fs.readFileSync(SOLANA_WALLET_FILE, "utf-8").trim();
     if (key) return key;
@@ -141,13 +138,7 @@ export async function getOrCreateSolanaWallet(): Promise<SolanaWalletInfo> {
     return { privateKey: envKey, address, isNew: false };
   }
 
-  // 2. Scan provider wallets
-  const wallets = scanSolanaWallets();
-  if (wallets.length > 0) {
-    return { privateKey: wallets[0].secretKey, address: wallets[0].publicKey, isNew: false };
-  }
-
-  // 3. Legacy session file
+  // 2. Canonical BlockRun session file
   if (fs.existsSync(SOLANA_WALLET_FILE)) {
     const fileKey = fs.readFileSync(SOLANA_WALLET_FILE, "utf-8").trim();
     if (fileKey) {
@@ -156,7 +147,7 @@ export async function getOrCreateSolanaWallet(): Promise<SolanaWalletInfo> {
     }
   }
 
-  // 4. Create new wallet
+  // 3. Create new wallet
   const { address, privateKey } = await createSolanaWallet();
   saveSolanaWallet(privateKey);
   return { address, privateKey, isNew: true };
