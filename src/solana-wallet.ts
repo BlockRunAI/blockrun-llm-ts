@@ -128,6 +128,60 @@ export function loadSolanaWallet(): string | null {
   return null;
 }
 
+/**
+ * Warn when a new Solana wallet was created while provider wallets exist.
+ *
+ * Solana counterpart of `formatWalletMigrationNotice`. Addresses are derived
+ * from the discovered secret key rather than trusted from the file's "address"
+ * field.
+ *
+ * @param newAddress Address of the wallet that was just created
+ * @returns Formatted notice, or null if nothing was discovered
+ */
+export async function formatSolanaWalletMigrationNotice(
+  newAddress: string
+): Promise<string | null> {
+  let discovered: Array<{ secretKey: string; publicKey: string }>;
+  try {
+    discovered = scanSolanaWallets();
+  } catch {
+    return null;
+  }
+
+  const addresses: string[] = [];
+  for (const entry of discovered) {
+    try {
+      addresses.push(await solanaPublicKey(entry.secretKey));
+    } catch {
+      continue;
+    }
+  }
+
+  if (addresses.length === 0) return null;
+
+  const found = addresses.map((addr) => `  ${addr}`).join("\n");
+  return `
+NOTICE: BlockRun created a new Solana wallet, but also found existing
+wallet(s) belonging to other applications on this system:
+
+${found}
+
+BlockRun now uses only its own wallet:
+
+  ${newAddress}
+
+Discovered wallets are never adopted automatically — one may belong to a
+different application, or have been planted to make you fund an address you
+do not control.
+
+If an address above is yours and holds your USDC, import it deliberately:
+
+  export SOLANA_WALLET_KEY=<private-key>
+
+or write that key to ~/.blockrun/.solana-session
+`;
+}
+
 export async function getOrCreateSolanaWallet(): Promise<SolanaWalletInfo> {
   // 1. Environment variable
   const envKey = typeof process !== "undefined" && process.env
