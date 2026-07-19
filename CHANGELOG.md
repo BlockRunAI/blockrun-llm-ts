@@ -2,6 +2,19 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.5.2] - 2026-07-19
+
+### Security
+
+- **Keep the canonical BlockRun wallet authoritative.** `loadWallet()` and
+  `getOrCreateWallet()` no longer auto-adopt a `wallet.json` found in another
+  application's dot-directory. A newly installed provider could otherwise
+  become active merely because its file was newer than
+  `~/.blockrun/.session`, causing the wrong address and balance to be shown.
+  The same correction applies to Solana. `scanWallets()` and
+  `scanSolanaWallets()` remain available for an explicit, user-confirmed
+  migration flow.
+
 ## [3.5.1] - 2026-06-29
 
 ### Security
