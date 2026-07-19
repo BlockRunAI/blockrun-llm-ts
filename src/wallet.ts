@@ -125,6 +125,64 @@ export function loadWallet(): string | null {
 }
 
 /**
+ * Warn when a new wallet was created while other provider wallets exist.
+ *
+ * Automatic selection deliberately ignores wallets discovered in other
+ * applications' directories, so a user who previously relied on that discovery
+ * would otherwise land on an empty wallet with no explanation of where their
+ * funds went. This notice names the discovered addresses and tells them how to
+ * import one on purpose.
+ *
+ * Addresses are derived from the discovered private key rather than read from
+ * the file's "address" field, so a file claiming an address it cannot sign for
+ * cannot trick the user into importing it.
+ *
+ * @param newAddress Address of the wallet that was just created
+ * @returns Formatted notice, or null if nothing was discovered
+ */
+export function formatWalletMigrationNotice(newAddress: string): string | null {
+  let discovered: Array<{ privateKey: string; address: string }>;
+  try {
+    discovered = scanWallets();
+  } catch {
+    return null;
+  }
+
+  const addresses: string[] = [];
+  for (const entry of discovered) {
+    try {
+      addresses.push(privateKeyToAccount(entry.privateKey as `0x${string}`).address);
+    } catch {
+      continue;
+    }
+  }
+
+  if (addresses.length === 0) return null;
+
+  const found = addresses.map((addr) => `  ${addr}`).join("\n");
+  return `
+NOTICE: BlockRun created a new wallet, but also found existing wallet(s)
+belonging to other applications on this system:
+
+${found}
+
+BlockRun now uses only its own wallet:
+
+  ${newAddress}
+
+Discovered wallets are never adopted automatically — one may belong to a
+different application, or have been planted to make you fund an address you
+do not control.
+
+If an address above is yours and holds your USDC, import it deliberately:
+
+  export BLOCKRUN_WALLET_KEY=<private-key>
+
+or write that key to ~/.blockrun/.session
+`;
+}
+
+/**
  * Get existing wallet or create new one.
  *
  * Priority:

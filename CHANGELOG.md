@@ -2,7 +2,7 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
-## [3.5.2] - 2026-07-19
+## [3.5.2] - 2026-07-18
 
 ### Security
 
@@ -14,6 +14,14 @@ All notable changes to @blockrun/llm will be documented in this file.
   The same correction applies to Solana. `scanWallets()` and
   `scanSolanaWallets()` remain available for an explicit, user-confirmed
   migration flow.
+- **Migration notice on first run after the lockdown.** When a new wallet is
+  created and other providers' wallets exist on the system,
+  `setupAgentWallet()` and `setupAgentSolanaWallet()` now name those addresses
+  and explain how to import one deliberately, instead of silently leaving the
+  user on an empty wallet. Addresses are derived from the discovered key, so a
+  wallet file claiming an address it cannot sign for cannot trick you into
+  funding it. Exposed as `formatWalletMigrationNotice()` and
+  `formatSolanaWalletMigrationNotice()`.
 
 ## [3.5.1] - 2026-06-29
 
