@@ -71,9 +71,9 @@ export function saveWallet(privateKey: string): string {
  *
  * @returns Array of wallet objects with privateKey and address
  */
-export function scanWallets(): Array<{ privateKey: string; address: string }> {
+export function scanWallets(): Array<{ privateKey: string; address: string; source: string }> {
   const home = os.homedir();
-  const results: Array<{ mtime: number; privateKey: string; address: string }> = [];
+  const results: Array<{ mtime: number; privateKey: string; address: string; source: string }> = [];
 
   try {
     const entries = fs.readdirSync(home, { withFileTypes: true });
@@ -87,14 +87,88 @@ export function scanWallets(): Array<{ privateKey: string; address: string }> {
         const addr = data.address || "";
         if (pk && addr) {
           const mtime = fs.statSync(walletFile).mtimeMs;
-          results.push({ mtime, privateKey: pk, address: addr });
+          results.push({ mtime, privateKey: pk, address: addr, source: walletFile });
         }
       } catch { continue; }
     }
   } catch { /* ignore */ }
 
   results.sort((a, b) => b.mtime - a.mtime);
-  return results.map(({ privateKey, address }) => ({ privateKey, address }));
+  return results.map(({ privateKey, address, source }) => ({ privateKey, address, source }));
+}
+
+/**
+ * List wallets from other applications, safe to show to a user.
+ *
+ * Unlike `scanWallets()`, no private key is returned and the address is derived
+ * from the key rather than read from the file, so a wallet file cannot claim an
+ * address it has no key for.
+ *
+ * Nothing here is active. Adopt one deliberately with `importWallet()`.
+ *
+ * @returns Discovered wallets as `{ address, source }`, most recent first
+ */
+export function listDiscoveredWallets(): Array<{ address: string; source: string }> {
+  const listed: Array<{ address: string; source: string }> = [];
+  for (const entry of scanWallets()) {
+    try {
+      listed.push({
+        address: privateKeyToAccount(entry.privateKey as `0x${string}`).address,
+        source: entry.source,
+      });
+    } catch {
+      continue;
+    }
+  }
+  return listed;
+}
+
+/**
+ * Adopt a discovered wallet by address, making it the active BlockRun wallet.
+ *
+ * This is the deliberate migration path: automatic selection never adopts a
+ * discovered wallet, but you can choose one whose funds you want to spend.
+ * Matching is done against the address *derived from each discovered key*, so a
+ * wallet file claiming someone else's address can never be selected by it.
+ *
+ * The current `~/.blockrun/.session` is backed up beside itself before being
+ * overwritten, so adopting a wallet can't strand the funds in the old one.
+ *
+ * @param address Address to adopt, as shown by `listDiscoveredWallets()`
+ * @returns The adopted address
+ * @throws If no discovered wallet derives to that address
+ */
+export function importWallet(address: string): string {
+  const wanted = address.trim().toLowerCase();
+
+  for (const entry of scanWallets()) {
+    let derived: string;
+    try {
+      derived = privateKeyToAccount(entry.privateKey as `0x${string}`).address;
+    } catch {
+      continue;
+    }
+
+    if (derived.toLowerCase() !== wanted) continue;
+
+    // Preserve the outgoing wallet — it may hold funds.
+    if (fs.existsSync(WALLET_FILE)) {
+      const current = fs.readFileSync(WALLET_FILE, "utf-8").trim();
+      if (current && current !== entry.privateKey) {
+        const backup = path.join(WALLET_DIR, `.session.backup-${Math.floor(Date.now() / 1000)}`);
+        fs.writeFileSync(backup, current, { mode: 0o600 });
+      }
+    }
+
+    saveWallet(entry.privateKey);
+    return derived;
+  }
+
+  const available = listDiscoveredWallets().map((w) => w.address);
+  throw new Error(
+    `No discovered wallet controls ${address}. ` +
+      `Available: ${available.length ? available.join(", ") : "none"}`
+  );
 }
 
 /**
@@ -174,11 +248,13 @@ Discovered wallets are never adopted automatically — one may belong to a
 different application, or have been planted to make you fund an address you
 do not control.
 
-If an address above is yours and holds your USDC, import it deliberately:
+If an address above is yours and holds your USDC, adopt it deliberately:
 
-  export BLOCKRUN_WALLET_KEY=<private-key>
+  import { importWallet } from '@blockrun/llm';
+  importWallet("<address-from-the-list-above>");
 
-or write that key to ~/.blockrun/.session
+Your current wallet is backed up first. You can also set
+BLOCKRUN_WALLET_KEY=<private-key> for a single run without changing anything.
 `;
 }
 

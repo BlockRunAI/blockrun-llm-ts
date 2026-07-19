@@ -74,9 +74,9 @@ export function saveSolanaWallet(privateKey: string): string {
  *
  * @returns Array of wallet objects with secretKey and publicKey
  */
-export function scanSolanaWallets(): Array<{ secretKey: string; publicKey: string }> {
+export function scanSolanaWallets(): Array<{ secretKey: string; publicKey: string; source: string }> {
   const home = os.homedir();
-  const results: Array<{ mtime: number; secretKey: string; publicKey: string }> = [];
+  const results: Array<{ mtime: number; secretKey: string; publicKey: string; source: string }> = [];
 
   try {
     const entries = fs.readdirSync(home, { withFileTypes: true });
@@ -92,7 +92,7 @@ export function scanSolanaWallets(): Array<{ secretKey: string; publicKey: strin
           const addr = data.address || "";
           if (pk && addr) {
             const mtime = fs.statSync(solanaWalletFile).mtimeMs;
-            results.push({ mtime, secretKey: pk, publicKey: addr });
+            results.push({ mtime, secretKey: pk, publicKey: addr, source: solanaWalletFile });
           }
         } catch { /* skip */ }
       }
@@ -107,7 +107,7 @@ export function scanSolanaWallets(): Array<{ secretKey: string; publicKey: strin
             const addr = data.address || "";
             if (pk && addr) {
               const mtime = fs.statSync(brccWalletFile).mtimeMs;
-              results.push({ mtime, secretKey: pk, publicKey: addr });
+              results.push({ mtime, secretKey: pk, publicKey: addr, source: brccWalletFile });
             }
           } catch { /* skip */ }
         }
@@ -116,7 +116,7 @@ export function scanSolanaWallets(): Array<{ secretKey: string; publicKey: strin
   } catch { /* ignore */ }
 
   results.sort((a, b) => b.mtime - a.mtime);
-  return results.map(({ secretKey, publicKey }) => ({ secretKey, publicKey }));
+  return results.map(({ secretKey, publicKey, source }) => ({ secretKey, publicKey, source }));
 }
 
 export function loadSolanaWallet(): string | null {
@@ -126,6 +126,76 @@ export function loadSolanaWallet(): string | null {
     if (key) return key;
   }
   return null;
+}
+
+/**
+ * List Solana wallets from other applications, safe to show to a user.
+ *
+ * Solana counterpart of `listDiscoveredWallets()`: no secret key is returned
+ * and the address is derived from the key rather than trusted from the file.
+ * Nothing here is active — adopt one with `importSolanaWallet()`.
+ *
+ * @returns Discovered wallets as `{ address, source }`, most recent first
+ */
+export async function listDiscoveredSolanaWallets(): Promise<
+  Array<{ address: string; source: string }>
+> {
+  const listed: Array<{ address: string; source: string }> = [];
+  for (const entry of scanSolanaWallets()) {
+    try {
+      listed.push({ address: await solanaPublicKey(entry.secretKey), source: entry.source });
+    } catch {
+      continue;
+    }
+  }
+  return listed;
+}
+
+/**
+ * Adopt a discovered Solana wallet, making it the active BlockRun wallet.
+ *
+ * Solana counterpart of `importWallet()`. Matching is done against the address
+ * derived from each discovered key, and the current
+ * `~/.blockrun/.solana-session` is backed up before being overwritten.
+ *
+ * @param address Address to adopt, as shown by `listDiscoveredSolanaWallets()`
+ * @returns The adopted address
+ * @throws If no discovered wallet derives to that address
+ */
+export async function importSolanaWallet(address: string): Promise<string> {
+  const wanted = address.trim();
+
+  for (const entry of scanSolanaWallets()) {
+    let derived: string;
+    try {
+      derived = await solanaPublicKey(entry.secretKey);
+    } catch {
+      continue;
+    }
+
+    // Base58 is case-sensitive — compare exactly, unlike EVM hex.
+    if (derived !== wanted) continue;
+
+    if (fs.existsSync(SOLANA_WALLET_FILE)) {
+      const current = fs.readFileSync(SOLANA_WALLET_FILE, "utf-8").trim();
+      if (current && current !== entry.secretKey) {
+        const backup = path.join(
+          WALLET_DIR,
+          `.solana-session.backup-${Math.floor(Date.now() / 1000)}`
+        );
+        fs.writeFileSync(backup, current, { mode: 0o600 });
+      }
+    }
+
+    saveSolanaWallet(entry.secretKey);
+    return derived;
+  }
+
+  const available = (await listDiscoveredSolanaWallets()).map((w) => w.address);
+  throw new Error(
+    `No discovered wallet controls ${address}. ` +
+      `Available: ${available.length ? available.join(", ") : "none"}`
+  );
 }
 
 /**
@@ -174,11 +244,13 @@ Discovered wallets are never adopted automatically — one may belong to a
 different application, or have been planted to make you fund an address you
 do not control.
 
-If an address above is yours and holds your USDC, import it deliberately:
+If an address above is yours and holds your USDC, adopt it deliberately:
 
-  export SOLANA_WALLET_KEY=<private-key>
+  import { importSolanaWallet } from '@blockrun/llm';
+  await importSolanaWallet("<address-from-the-list-above>");
 
-or write that key to ~/.blockrun/.solana-session
+Your current wallet is backed up first. You can also set
+SOLANA_WALLET_KEY=<private-key> for a single run without changing anything.
 `;
 }
 

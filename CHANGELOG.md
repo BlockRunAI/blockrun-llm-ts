@@ -2,6 +2,18 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.8.0] - 2026-07-18
+
+### Added
+
+- **Adopt a wallet you already own, deliberately.** `listDiscoveredWallets()` shows wallets belonging to other applications on your system, and `importWallet(address)` makes one of them the active BlockRun wallet. Automatic selection still never adopts a discovered wallet — this is the opt-in path for users whose funds live in a wallet another tool created. Solana counterparts: `listDiscoveredSolanaWallets()` / `importSolanaWallet(address)`.
+- **Adopting backs up the wallet it replaces.** The outgoing key is written to `~/.blockrun/.session.backup-<timestamp>` (mode 0600) before being overwritten, so switching wallets can never strand funds in the old one.
+- **Matching is on the derived address, never the file's claim.** `listDiscoveredWallets()` returns no private keys, and `importWallet()` resolves each candidate's address from its key. A wallet file naming an address it cannot sign for can neither be displayed as that address nor adopted by it.
+
+### Changed
+
+- `scanWallets()` / `scanSolanaWallets()` now also return `source`, the path the wallet was found at, so a user can tell which application a discovered address belongs to.
+
 ## [3.7.1] - 2026-07-18
 
 ### Security

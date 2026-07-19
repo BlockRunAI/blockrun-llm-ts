@@ -1330,10 +1330,30 @@ belonging to other applications on this system:
 ...
 ```
 
-Import it deliberately with `export BLOCKRUN_WALLET_KEY=<private-key>`, or by
-writing the key to `~/.blockrun/.session`. Addresses in that notice are derived
-from the discovered key itself, so a wallet file cannot claim an address it
-cannot sign for.
+Adopt one deliberately:
+
+```typescript
+import { listDiscoveredWallets, importWallet } from '@blockrun/llm';
+
+for (const w of listDiscoveredWallets()) {
+  console.log(w.address, 'from', w.source);
+}
+
+importWallet('0x88f9B82462f6C4bf4a0Fb15e5c3971559a316e7f');
+```
+
+`importWallet()` writes your current wallet to
+`~/.blockrun/.session.backup-<timestamp>` before switching, so adopting a wallet
+never strands funds in the old one. Solana: `listDiscoveredSolanaWallets()` and
+`importSolanaWallet()`.
+
+Addresses shown are derived from the discovered key itself, and `importWallet()`
+matches on that derived address — so a wallet file cannot claim an address it
+cannot sign for, nor be adopted by one. `listDiscoveredWallets()` never returns
+private keys.
+
+For a single run without changing anything, use
+`export BLOCKRUN_WALLET_KEY=<private-key>`.
 
 ## Response Caching
 
