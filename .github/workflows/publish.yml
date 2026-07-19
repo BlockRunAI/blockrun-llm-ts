@@ -1,0 +1,54 @@
+name: Publish to npm
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm, matching package.json's "packageManager" and ci.yml. This job used
+      # `npm ci` against a second lockfile nothing else read, so a package.json
+      # change that CI accepted could still kill the publish — which is exactly
+      # how v3.6.0 died: "lock file's @blockrun/clawrouter@0.12.220 does not
+      # satisfy @blockrun/clawrouter@0.12.223". One package manager, one lockfile.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+
+      # pack/publish stay on npm: they read package.json, not a lockfile, and
+      # `npm publish --provenance` is what wires the OIDC attestation.
+      - name: Verify package
+        run: npm pack --dry-run
+
+      - name: Check if version already published
+        id: check
+        run: |
+          PKG_NAME=$(node -p "require('./package.json').name")
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if npm view "${PKG_NAME}@${PKG_VERSION}" version 2>/dev/null; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "⚠️ ${PKG_NAME}@${PKG_VERSION} already published, skipping"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        if: steps.check.outputs.already_published != 'true'
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

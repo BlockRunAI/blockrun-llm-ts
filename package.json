@@ -1,6 +1,6 @@
 {
   "name": "@blockrun/llm",
-  "version": "3.5.2",
+  "version": "3.7.1",
   "type": "module",
   "description": "BlockRun SDK - Pay-per-request AI (LLM, Image, Video, Music, Voice) via x402 on Base and Solana",
   "main": "dist/index.cjs",
@@ -18,8 +18,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format cjs,esm --dts --clean --external @anthropic-ai/sdk --external @solana/web3.js --external @solana/spl-token --external bs58",
-    "dev": "tsup src/index.ts --format cjs,esm --dts --watch --external @anthropic-ai/sdk --external @solana/web3.js --external @solana/spl-token --external bs58",
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean --external @blockrun/clawrouter --external @anthropic-ai/sdk --external @solana/web3.js --external @solana/spl-token --external bs58",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch --external @blockrun/clawrouter --external @anthropic-ai/sdk --external @solana/web3.js --external @solana/spl-token --external bs58",
     "test": "vitest",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit"
@@ -48,7 +48,6 @@
     "url": "https://github.com/BlockRunAI/blockrun-llm-ts/issues"
   },
   "dependencies": {
-    "@blockrun/clawrouter": "^0.12.190",
     "bs58": "^6.0.0",
     "viem": "^2.49.0"
   },
@@ -76,5 +75,13 @@
   "engines": {
     "node": ">=20"
   },
-  "packageManager": "pnpm@9.15.4"
+  "packageManager": "pnpm@9.15.4",
+  "peerDependencies": {
+    "@blockrun/clawrouter": "^0.12.222"
+  },
+  "peerDependenciesMeta": {
+    "@blockrun/clawrouter": {
+      "optional": true
+    }
+  }
 }
