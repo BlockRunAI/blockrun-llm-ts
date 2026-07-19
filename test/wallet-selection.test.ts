@@ -120,6 +120,102 @@ describe("canonical wallet selection", () => {
   });
 });
 
+describe("importing a discovered wallet", () => {
+  it("adopts by derived address and makes it the active wallet", async () => {
+    const home = temporaryHome();
+    const blockrun = path.join(home, ".blockrun");
+    const provider = path.join(home, ".agentcash");
+    const blockrunKey = `0x${"1".repeat(64)}`;
+    const providerKey = `0x${"2".repeat(64)}`;
+    fs.mkdirSync(blockrun, { recursive: true });
+    fs.mkdirSync(provider, { recursive: true });
+    fs.writeFileSync(path.join(blockrun, ".session"), blockrunKey);
+    fs.writeFileSync(path.join(provider, "wallet.json"), JSON.stringify({
+      privateKey: providerKey,
+      address: "0xNotTheRealAddress",
+    }));
+
+    delete process.env.BLOCKRUN_WALLET_KEY;
+    delete process.env.BASE_CHAIN_WALLET_KEY;
+
+    const { importWallet, getOrCreateWallet } = await importWalletModule(home);
+    const { privateKeyToAccount } = await import("viem/accounts");
+    const providerAddress = privateKeyToAccount(providerKey as `0x${string}`).address;
+
+    expect(importWallet(providerAddress)).toBe(providerAddress);
+
+    // It is now active through the normal selection path.
+    const active = getOrCreateWallet();
+    expect(active.privateKey).toBe(providerKey);
+    expect(active.isNew).toBe(false);
+  });
+
+  it("backs up the wallet it replaces", async () => {
+    const home = temporaryHome();
+    const blockrun = path.join(home, ".blockrun");
+    const provider = path.join(home, ".agentcash");
+    const blockrunKey = `0x${"1".repeat(64)}`;
+    const providerKey = `0x${"2".repeat(64)}`;
+    fs.mkdirSync(blockrun, { recursive: true });
+    fs.mkdirSync(provider, { recursive: true });
+    fs.writeFileSync(path.join(blockrun, ".session"), blockrunKey);
+    fs.writeFileSync(path.join(provider, "wallet.json"), JSON.stringify({
+      privateKey: providerKey,
+      address: "0xNotTheRealAddress",
+    }));
+
+    const { importWallet } = await importWalletModule(home);
+    const { privateKeyToAccount } = await import("viem/accounts");
+    importWallet(privateKeyToAccount(providerKey as `0x${string}`).address);
+
+    const backups = fs.readdirSync(blockrun).filter((f) => f.startsWith(".session.backup-"));
+    expect(backups).toHaveLength(1);
+    expect(fs.readFileSync(path.join(blockrun, backups[0]), "utf-8")).toBe(blockrunKey);
+  });
+
+  it("refuses an address no discovered key controls", async () => {
+    const home = temporaryHome();
+    const blockrun = path.join(home, ".blockrun");
+    const provider = path.join(home, ".agentcash");
+    const blockrunKey = `0x${"1".repeat(64)}`;
+    fs.mkdirSync(blockrun, { recursive: true });
+    fs.mkdirSync(provider, { recursive: true });
+    fs.writeFileSync(path.join(blockrun, ".session"), blockrunKey);
+    fs.writeFileSync(path.join(provider, "wallet.json"), JSON.stringify({
+      privateKey: `0x${"2".repeat(64)}`,
+      address: "0xNotTheRealAddress",
+    }));
+
+    const { importWallet } = await importWalletModule(home);
+
+    expect(() => importWallet("0xNotTheRealAddress")).toThrow(/No discovered wallet controls/);
+    // The active wallet is untouched.
+    expect(fs.readFileSync(path.join(blockrun, ".session"), "utf-8")).toBe(blockrunKey);
+    expect(fs.readdirSync(blockrun).filter((f) => f.startsWith(".session.backup-"))).toHaveLength(0);
+  });
+
+  it("lists discovered wallets without exposing secrets", async () => {
+    const home = temporaryHome();
+    const provider = path.join(home, ".agentcash");
+    const providerKey = `0x${"2".repeat(64)}`;
+    fs.mkdirSync(path.join(home, ".blockrun"), { recursive: true });
+    fs.mkdirSync(provider, { recursive: true });
+    fs.writeFileSync(path.join(provider, "wallet.json"), JSON.stringify({
+      privateKey: providerKey,
+      address: "0xNotTheRealAddress",
+    }));
+
+    const { listDiscoveredWallets } = await importWalletModule(home);
+    const { privateKeyToAccount } = await import("viem/accounts");
+
+    const listed = listDiscoveredWallets();
+    expect(listed).toHaveLength(1);
+    expect(listed[0].address).toBe(privateKeyToAccount(providerKey as `0x${string}`).address);
+    expect(listed[0].source).toContain(".agentcash");
+    expect(JSON.stringify(listed)).not.toContain(providerKey);
+  });
+});
+
 describe("wallet migration notice", () => {
   it("names the address the discovered key controls, not the file's claim", async () => {
     const home = temporaryHome();
