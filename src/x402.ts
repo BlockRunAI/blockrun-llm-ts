@@ -50,6 +50,32 @@ function createNonce(): `0x${string}` {
   return `0x${Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')}` as `0x${string}`;
 }
 
+/**
+ * BlockRun's x402 builder code — the ERC-8021 Schema 2 service code (`s`) that
+ * tags every payment this SDK signs as BlockRun-originated for on-chain
+ * attribution. See https://docs.cdp.coinbase.com/x402/core-concepts/builder-codes
+ */
+export const BLOCKRUN_SERVICE_CODE = "blockrun";
+
+/**
+ * Merge BlockRun's service code (`s`) into the payload's `builder-code`
+ * extension, preserving any app code (`a`) the server echoed back in its 402.
+ * The CDP facilitator reads `builder-code.info.s` and encodes it into the
+ * settlement calldata suffix — no CBOR/encoding happens client-side.
+ */
+function withBuilderCodeServiceCode(
+  extensions?: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...(extensions || {}) };
+  const existing =
+    (merged["builder-code"] as { info?: Record<string, unknown> } | undefined) || {};
+  merged["builder-code"] = {
+    ...existing,
+    info: { ...(existing.info || {}), s: [BLOCKRUN_SERVICE_CODE] },
+  };
+  return merged;
+}
+
 export interface CreatePaymentOptions {
   resourceUrl?: string;
   resourceDescription?: string;
@@ -130,7 +156,7 @@ export async function createPaymentPayload(
         nonce,
       },
     },
-    extensions: options.extensions || {},
+    extensions: withBuilderCodeServiceCode(options.extensions),
   };
 
   // Encode as base64
@@ -259,7 +285,7 @@ export async function createSolanaPaymentPayload(
     payload: {
       transaction: serializedTx,
     },
-    extensions: options.extensions || {},
+    extensions: withBuilderCodeServiceCode(options.extensions),
   };
 
   // Encode as base64
