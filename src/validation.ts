@@ -50,38 +50,26 @@ export function validateModel(model: string): void {
 }
 
 /**
- * Client-side typo guard, NOT a model limit. The gateway already enforces the
- * real per-model ceiling and rejects with that model's own number, so anything
- * hardcoded here can only be wrong in one direction: too low.
+ * Mirrors the gateway's own contract for `max_tokens`, which is exactly
+ * `z.number().int().min(1).optional()` — an integer, at least 1, and
+ * deliberately **no upper bound**.
  *
- * This was 100000. Note what it was and was not doing: until this change no
- * client called `validateMaxTokens` at all, so the bound bound nothing on a
- * real request — it only rejected callers who imported the validator directly
- * off the package's public surface. The guard is now wired into
- * `LLMClient.chatCompletion`, `LLMClient.chatCompletionStream`, and
- * `SolanaLLMClient.chatCompletion`, which is exactly why the number had to go
- * up first: at 100000 it would have started rejecting real requests.
+ * There is no ceiling here on purpose. The gateway clamps every request with
+ * `min(requested, model.maxOutput, contextHeadroom)` and then quotes only a
+ * fraction of the clamped value, so an oversized `maxTokens` cannot inflate a
+ * payment: 1e9 and 1_000_000 produce a byte-identical quote, because both land
+ * on the same `model.maxOutput`. A client-side ceiling could therefore only
+ * ever reject a request the gateway would have accepted and handled correctly.
  *
- * Verified against the live gateway 2026-07-21
- * with the guard bypassed: zai/glm-5.2 accepted 262144, and the whole 128000
- * class accepted 128000 (claude-opus-4.8, claude-sonnet-5, claude-fable-5,
- * gpt-5.6-sol/terra/luna, gpt-5.5, gpt-5.4, gpt-5.3-codex, glm-5/5.1/5-turbo).
- * 19 models advertised above 100000; all 19 accepted their ceiling. Those are
- * as-of-date probe results, not a maintained invariant — nothing in this repo
- * ships a model catalog, so CI cannot detect when they go stale.
- *
- * Keep a bound so an obvious mistake (1e9, a byte count, a timestamp) fails
- * fast locally instead of becoming a payment quote. Set it far above any real
- * model so it can never be the binding constraint again.
- */
-export const MAX_TOKENS_SANITY_LIMIT = 1_000_000;
-
-/**
- * Validates that max_tokens is a positive integer no larger than
- * {@link MAX_TOKENS_SANITY_LIMIT}.
+ * Earlier versions of this file did carry one, justified in a comment as
+ * stopping a stray 1e9 from "becoming a payment quote". That was never true —
+ * it was asserted here without being checked against the route handler, which
+ * is the same mistake as the old `"maxTokens too large (maximum: 100000)"`
+ * message that got recorded downstream as an upstream model ceiling. Verify
+ * against the gateway before reintroducing any number in this file.
  *
  * @param maxTokens - Maximum number of tokens to generate
- * @throws {Error} If maxTokens is invalid
+ * @throws {Error} If maxTokens is not a positive integer
  *
  * @example
  * validateMaxTokens(1000);
@@ -97,20 +85,6 @@ export function validateMaxTokens(maxTokens?: number): void {
 
   if (maxTokens < 1) {
     throw new Error("maxTokens must be positive (minimum: 1)");
-  }
-
-  if (maxTokens > MAX_TOKENS_SANITY_LIMIT) {
-    // Carry the machine-readable fields on the error. The previous throw was a
-    // bare Error whose only handle was the prose "too large (maximum: 100000)",
-    // so any consumer matching on that string breaks when the text changes —
-    // which it just did. Match on `code` instead.
-    throw Object.assign(
-      new Error(
-        `maxTokens implausibly large (client-side sanity limit: ${MAX_TOKENS_SANITY_LIMIT}). ` +
-          `This is not a model limit — the gateway enforces the real per-model ceiling and reports it.`
-      ),
-      { code: "MAX_TOKENS_SANITY_LIMIT" as const, limit: MAX_TOKENS_SANITY_LIMIT }
-    );
   }
 }
 
