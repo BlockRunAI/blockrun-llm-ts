@@ -54,8 +54,15 @@ export function validateModel(model: string): void {
  * real per-model ceiling and rejects with that model's own number, so anything
  * hardcoded here can only be wrong in one direction: too low.
  *
- * This was 100000, which rejected any caller asking for more than that before
- * the request left the process. Verified against the live gateway 2026-07-21
+ * This was 100000. Note what it was and was not doing: until this change no
+ * client called `validateMaxTokens` at all, so the bound bound nothing on a
+ * real request — it only rejected callers who imported the validator directly
+ * off the package's public surface. The guard is now wired into
+ * `LLMClient.chatCompletion`, `LLMClient.chatCompletionStream`, and
+ * `SolanaLLMClient.chatCompletion`, which is exactly why the number had to go
+ * up first: at 100000 it would have started rejecting real requests.
+ *
+ * Verified against the live gateway 2026-07-21
  * with the guard bypassed: zai/glm-5.2 accepted 262144, and the whole 128000
  * class accepted 128000 (claude-opus-4.8, claude-sonnet-5, claude-fable-5,
  * gpt-5.6-sol/terra/luna, gpt-5.5, gpt-5.4, gpt-5.3-codex, glm-5/5.1/5-turbo).
@@ -93,9 +100,16 @@ export function validateMaxTokens(maxTokens?: number): void {
   }
 
   if (maxTokens > MAX_TOKENS_SANITY_LIMIT) {
-    throw new Error(
-      `maxTokens implausibly large (client-side sanity limit: ${MAX_TOKENS_SANITY_LIMIT}). ` +
-        `This is not a model limit — the gateway enforces the real per-model ceiling and reports it.`
+    // Carry the machine-readable fields on the error. The previous throw was a
+    // bare Error whose only handle was the prose "too large (maximum: 100000)",
+    // so any consumer matching on that string breaks when the text changes —
+    // which it just did. Match on `code` instead.
+    throw Object.assign(
+      new Error(
+        `maxTokens implausibly large (client-side sanity limit: ${MAX_TOKENS_SANITY_LIMIT}). ` +
+          `This is not a model limit — the gateway enforces the real per-model ceiling and reports it.`
+      ),
+      { code: "MAX_TOKENS_SANITY_LIMIT" as const, limit: MAX_TOKENS_SANITY_LIMIT }
     );
   }
 }
