@@ -2,6 +2,22 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.8.1] - 2026-07-21
+
+### Fixed
+
+- **`maxTokens` no longer capped below what models actually serve.** The client-side guard rejected anything above `100000`. Probed against the live gateway on 2026-07-21: 19 models advertise a higher ceiling and all 19 accepted it, including `zai/glm-5.2` at 262144 and the whole 128000 class. The bound is now `MAX_TOKENS_SANITY_LIMIT = 1_000_000` — a typo guard, deliberately set far above any real model so it can never be the binding constraint again.
+- **The guard is now actually applied.** `validateMaxTokens` had no call sites: no client invoked it, so the old bound never blocked a real request and only affected callers who imported the validator directly. It now runs in `LLMClient.chatCompletion`, `LLMClient.chatCompletionStream`, and `SolanaLLMClient.chatCompletion`.
+
+### Added
+
+- `MAX_TOKENS_SANITY_LIMIT` is exported from the package entry point, so callers can read the bound instead of hardcoding it.
+- The rejection carries `code: "MAX_TOKENS_SANITY_LIMIT"` and `limit`, so consumers match on a field rather than on error prose. The previous failure was a bare `Error` whose only handle was the string `too large (maximum: 100000)`.
+
+### Changed
+
+- The rejection message no longer reads like a provider response. The old text was mistaken for an upstream model ceiling and recorded as one; it now states the number is the SDK's and that the gateway owns the real per-model limit.
+
 ## [3.8.0] - 2026-07-18
 
 ### Added
