@@ -28,4 +28,24 @@ describe("version consistency", () => {
     const changelog = fs.readFileSync(path.join(repoRoot, "CHANGELOG.md"), "utf-8");
     expect(changelog).toContain(`[${packageVersion()}]`);
   });
+
+  it("SDK_VERSION matches package.json", async () => {
+    // Same drift, third place. client.ts hardcoded "1.5.0" and
+    // solana-client.ts hardcoded "0.3.0" while the package was on 3.8.1, so
+    // every request identified itself to the gateway as a version that had
+    // not shipped in months. Both now read src/version.ts; this pins it.
+    const { SDK_VERSION } = await import("../../src/version");
+    expect(SDK_VERSION).toBe(packageVersion());
+  });
+
+  it("no client hardcodes its own SDK version", () => {
+    // Guard the fix, not just the value: re-introducing a local
+    // `const SDK_VERSION = "..."` in a client would drift silently again.
+    for (const file of ["src/client.ts", "src/solana-client.ts"]) {
+      const source = fs.readFileSync(path.join(repoRoot, file), "utf-8");
+      expect(source, `${file} must import USER_AGENT from ./version`).not.toMatch(
+        /const\s+SDK_VERSION\s*=/
+      );
+    }
+  });
 });

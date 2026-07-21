@@ -38,12 +38,11 @@ import {
   validateMaxTokens,
   validateResourceUrl,
 } from "./validation";
+import { USER_AGENT } from "./version";
 
 const SOLANA_API_URL = "https://sol.blockrun.ai/api";
 const DEFAULT_MAX_TOKENS = 1024;
 const DEFAULT_TIMEOUT = 60000;
-const SDK_VERSION = "0.3.0";
-const USER_AGENT = `blockrun-ts/${SDK_VERSION}`;
 
 /**
  * Default Solana RPC URL — BlockRun's multi-region Tatum-backed JSON-RPC
