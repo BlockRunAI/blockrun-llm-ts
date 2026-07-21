@@ -18,6 +18,15 @@ describe("validateMaxTokens", () => {
     expect(() => validateMaxTokens(2_000_000)).toThrow(/implausibly large/);
   });
 
+  it("accepts everything up to and including the bound", () => {
+    // Without these the whole range between today's largest model and the
+    // typo case is untested, so lowering the constant back toward 262_144
+    // would not fail a single test — which is the bug this file exists for.
+    expect(() => validateMaxTokens(999_999)).not.toThrow();
+    expect(() => validateMaxTokens(MAX_TOKENS_SANITY_LIMIT)).not.toThrow();
+    expect(() => validateMaxTokens(MAX_TOKENS_SANITY_LIMIT + 1)).toThrow(/implausibly large/);
+  });
+
   it("does not describe itself as a model limit", () => {
     // The old message read "maxTokens too large (maximum: 100000)", which is
     // what led a caller to record 100000 as an upstream model ceiling and
@@ -25,7 +34,7 @@ describe("validateMaxTokens", () => {
     // the number is the SDK's, not the model's.
     let message = "";
     try {
-      validateMaxTokens(MAX_TOKENS_SANITY_LIMIT + 1);
+      validateMaxTokens(1_000_001);
     } catch (e) {
       message = (e as Error).message;
     }
@@ -34,7 +43,9 @@ describe("validateMaxTokens", () => {
   });
 
   it("keeps the bound above every ceiling a real model could plausibly serve", () => {
-    expect(MAX_TOKENS_SANITY_LIMIT).toBeGreaterThan(262_144);
+    // Pin the exact value, not just "> today's largest". A bound of 262_145
+    // satisfies `> 262_144` and reintroduces the defect one token higher.
+    expect(MAX_TOKENS_SANITY_LIMIT).toBe(1_000_000);
   });
 
   it("still rejects non-integers and non-positive values", () => {
