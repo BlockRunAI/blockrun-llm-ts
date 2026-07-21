@@ -242,6 +242,7 @@ export type { BlockRunAnthropicOptions } from "./anthropic-compat";
 // Validation utilities
 export {
   KNOWN_PROVIDERS,
+  MAX_TOKENS_SANITY_LIMIT,
   validateModel,
   validateMaxTokens,
   validateTemperature,
