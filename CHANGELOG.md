@@ -2,6 +2,16 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.8.3] - 2026-07-21
+
+### Removed
+
+- **`MAX_TOKENS_SANITY_LIMIT` is gone, and `maxTokens` no longer has a client-side ceiling.** Verified against the gateway's route handler: `max_tokens` is `z.number().int().min(1).optional()` with deliberately no upper bound, and every request is clamped with `min(requested, model.maxOutput, contextHeadroom)` before being quoted on a fraction of the clamped value. `1e9` and `1_000_000` therefore produce an identical quote. A ceiling in the SDK could only ever reject a request the gateway would have accepted and priced correctly, so it is removed rather than re-tuned. If you imported the constant, drop it — there is no replacement, because there is no client-side limit to read.
+
+### Fixed
+
+- **The 3.8.1 ceiling was justified by a claim that was never checked.** Its comment said the bound stopped a stray `1e9` from "becoming a payment quote". It does not: the gateway clamps first, so the oversized value never reaches pricing. That claim was asserted in the source without being verified against the route handler — the same failure as the old `"maxTokens too large (maximum: 100000)"` message, which was mistaken for an upstream model ceiling and recorded as one downstream. `validateMaxTokens` now mirrors the gateway's schema exactly: integer, at least 1, no ceiling.
+
 ## [3.8.2] - 2026-07-21
 
 ### Fixed

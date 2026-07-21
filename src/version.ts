@@ -10,7 +10,7 @@
  * "SDK_VERSION matches package.json" case in test/unit/version-consistency.test.ts
  * fails the build if a release bumps the package and forgets this file.
  */
-export const SDK_VERSION = "3.8.2";
+export const SDK_VERSION = "3.8.3";
 
 /** Client identification sent on every gateway request. */
 export const USER_AGENT = `blockrun-ts/${SDK_VERSION}`;
