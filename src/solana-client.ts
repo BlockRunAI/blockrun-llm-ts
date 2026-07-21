@@ -32,7 +32,12 @@ import {
   SOLANA_NETWORK,
 } from "./x402";
 import { solanaKeyToBytes, solanaPublicKey } from "./solana-wallet";
-import { sanitizeErrorResponse, validateApiUrl, validateResourceUrl } from "./validation";
+import {
+  sanitizeErrorResponse,
+  validateApiUrl,
+  validateMaxTokens,
+  validateResourceUrl,
+} from "./validation";
 
 const SOLANA_API_URL = "https://sol.blockrun.ai/api";
 const DEFAULT_MAX_TOKENS = 1024;
@@ -175,6 +180,8 @@ export class SolanaLLMClient {
     messages: ChatMessage[],
     options?: ChatCompletionOptions
   ): Promise<ChatResponse> {
+    validateMaxTokens(options?.maxTokens);
+
     const body: Record<string, unknown> = {
       model,
       messages,

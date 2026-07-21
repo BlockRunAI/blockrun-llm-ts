@@ -53,4 +53,57 @@ describe("validateMaxTokens", () => {
     expect(() => validateMaxTokens(0)).toThrow(/positive/);
     expect(() => validateMaxTokens(-1)).toThrow(/positive/);
   });
+
+  it("carries a machine-readable code so consumers need not match on prose", () => {
+    // The old failure was a bare Error whose only handle was the string
+    // "too large (maximum: 100000)". Changing that text silently broke anyone
+    // matching on it, so the error now carries the fields instead.
+    try {
+      validateMaxTokens(1_000_001);
+      expect.unreachable();
+    } catch (e) {
+      const err = e as Error & { code?: string; limit?: number };
+      expect(err.code).toBe("MAX_TOKENS_SANITY_LIMIT");
+      expect(err.limit).toBe(MAX_TOKENS_SANITY_LIMIT);
+    }
+  });
+});
+
+describe("maxTokens is validated on the request path", () => {
+  // Regression for the defect the guard's own docblock used to misdescribe:
+  // no client called validateMaxTokens, so the bound never applied to a real
+  // request. These pin the wiring, not just the function.
+  const overLimit = MAX_TOKENS_SANITY_LIMIT + 1;
+  const key = "0x" + "1".repeat(64);
+
+  it("rejects before any network call in LLMClient.chatCompletion", async () => {
+    const { LLMClient } = await import("../../src/client");
+    const client = new LLMClient(key as `0x${string}`);
+    await expect(
+      client.chatCompletion("openai/gpt-5.2", [{ role: "user", content: "hi" }], {
+        maxTokens: overLimit,
+      })
+    ).rejects.toThrow(/implausibly large/);
+  });
+
+  it("rejects before any network call in LLMClient.chatCompletionStream", async () => {
+    const { LLMClient } = await import("../../src/client");
+    const client = new LLMClient(key as `0x${string}`);
+    await expect(
+      client.chatCompletionStream("openai/gpt-5.2", [{ role: "user", content: "hi" }], {
+        maxTokens: overLimit,
+      })
+    ).rejects.toThrow(/implausibly large/);
+  });
+
+  it("accepts a real model ceiling that the old 100000 bound would have rejected", async () => {
+    const { LLMClient } = await import("../../src/client");
+    const client = new LLMClient(key as `0x${string}`);
+    // 262144 must get past validation and fail later (at the network), not here.
+    await expect(
+      client.chatCompletion("zai/glm-5.2", [{ role: "user", content: "hi" }], {
+        maxTokens: 262_144,
+      })
+    ).rejects.not.toThrow(/implausibly large/);
+  });
 });

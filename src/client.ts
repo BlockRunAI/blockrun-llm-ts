@@ -138,6 +138,7 @@ import {
 import {
   validatePrivateKey,
   validateApiUrl,
+  validateMaxTokens,
   sanitizeErrorResponse,
   validateResourceUrl,
 } from "./validation";
@@ -435,6 +436,8 @@ export class LLMClient {
     messages: ChatMessage[],
     options?: ChatCompletionOptions
   ): Promise<ChatResponse> {
+    validateMaxTokens(options?.maxTokens);
+
     const buildBody = (m: string): Record<string, unknown> => {
       const body: Record<string, unknown> = {
         model: m,
@@ -745,6 +748,8 @@ export class LLMClient {
     messages: ChatMessage[],
     options?: ChatCompletionOptions
   ): Promise<Response> {
+    validateMaxTokens(options?.maxTokens);
+
     const url = `${this.apiUrl}/v1/chat/completions`;
     const body: Record<string, unknown> = {
       model,
