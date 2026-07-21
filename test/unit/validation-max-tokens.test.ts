@@ -1,13 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { validateMaxTokens, MAX_TOKENS_SANITY_LIMIT } from "../../src/validation";
 
 describe("validateMaxTokens", () => {
   it("accepts the ceilings the gateway actually serves", () => {
-    // Regression. This bound was 100000, which rejected every ceiling above it
-    // *client-side* — the caller got an Error that never reached the network,
-    // naming a limit no provider had set. Probed against the live gateway on
-    // 2026-07-21 with the guard bypassed: 19 models advertise more than 100000
-    // and all 19 accepted their advertised ceiling.
+    // Regression. This bound was 100000. Nothing called the validator back
+    // then, so the number never blocked a real request — but it is wired into
+    // the clients now, which is why it had to move first. Probed against the
+    // live gateway on 2026-07-21 with the guard bypassed: 19 models advertise
+    // more than 100000 and all 19 accepted their advertised ceiling.
     expect(() => validateMaxTokens(128_000)).not.toThrow(); // opus-4.8, sonnet-5, gpt-5.6, glm-5
     expect(() => validateMaxTokens(262_144)).not.toThrow(); // zai/glm-5.2, the highest served
   });
@@ -74,11 +74,11 @@ describe("maxTokens is validated on the request path", () => {
   // no client called validateMaxTokens, so the bound never applied to a real
   // request. These pin the wiring, not just the function.
   const overLimit = MAX_TOKENS_SANITY_LIMIT + 1;
-  const key = "0x" + "1".repeat(64);
+  const TEST_PRIVATE_KEY = ("0x" + "1".repeat(64)) as `0x${string}`;
 
   it("rejects before any network call in LLMClient.chatCompletion", async () => {
     const { LLMClient } = await import("../../src/client");
-    const client = new LLMClient(key as `0x${string}`);
+    const client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
     await expect(
       client.chatCompletion("openai/gpt-5.2", [{ role: "user", content: "hi" }], {
         maxTokens: overLimit,
@@ -88,7 +88,7 @@ describe("maxTokens is validated on the request path", () => {
 
   it("rejects before any network call in LLMClient.chatCompletionStream", async () => {
     const { LLMClient } = await import("../../src/client");
-    const client = new LLMClient(key as `0x${string}`);
+    const client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
     await expect(
       client.chatCompletionStream("openai/gpt-5.2", [{ role: "user", content: "hi" }], {
         maxTokens: overLimit,
@@ -96,14 +96,29 @@ describe("maxTokens is validated on the request path", () => {
     ).rejects.toThrow(/implausibly large/);
   });
 
-  it("accepts a real model ceiling that the old 100000 bound would have rejected", async () => {
+  it("lets a real model ceiling reach the network", async () => {
+    // The point of the change: 262144 must get *past* validation. Stub fetch so
+    // the assertion is "the request was actually sent with max_tokens=262144",
+    // not "some later error happened" — and so this never touches the gateway.
     const { LLMClient } = await import("../../src/client");
-    const client = new LLMClient(key as `0x${string}`);
-    // 262144 must get past validation and fail later (at the network), not here.
-    await expect(
-      client.chatCompletion("zai/glm-5.2", [{ role: "user", content: "hi" }], {
-        maxTokens: 262_144,
-      })
-    ).rejects.not.toThrow(/implausibly large/);
+    const client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
+
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("upstream stub", { status: 500 }));
+
+    try {
+      await client
+        .chatCompletion("zai/glm-5.2", [{ role: "user", content: "hi" }], {
+          maxTokens: 262_144,
+        })
+        .catch(() => undefined);
+
+      expect(fetchSpy).toHaveBeenCalled();
+      const body = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string);
+      expect(body.max_tokens).toBe(262_144);
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 });
