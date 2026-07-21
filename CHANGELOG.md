@@ -2,6 +2,12 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.8.2] - 2026-07-21
+
+### Fixed
+
+- **The SDK now reports its real version to the gateway.** `User-Agent` was built from a version constant hardcoded separately in each client, and both had rotted: `client.ts` sent `blockrun-ts/1.5.0` and `solana-client.ts` sent `blockrun-ts/0.3.0` while the package was on 3.8.1. Every request identified itself as a release that had not shipped in months, so server-side logs could not attribute traffic to a version that existed. Both clients now read `SDK_VERSION` from `src/version.ts`, and `test/unit/version-consistency.test.ts` fails the build if it drifts from `package.json` or if a client re-declares its own copy.
+
 ## [3.8.1] - 2026-07-21
 
 ### Fixed

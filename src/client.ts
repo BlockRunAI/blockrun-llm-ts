@@ -143,6 +143,7 @@ import {
   validateResourceUrl,
 } from "./validation";
 import { logCost } from "./cost-log";
+import { USER_AGENT } from "./version";
 
 const DEFAULT_API_URL = "https://blockrun.ai/api";
 const DEFAULT_MAX_TOKENS = 1024;
@@ -170,9 +171,8 @@ function resolveDefaultTimeout(): number {
 
 export const DEFAULT_TIMEOUT = resolveDefaultTimeout();
 
-// SDK version for User-Agent header (client identification in server logs)
-const SDK_VERSION = "1.5.0";
-const USER_AGENT = `blockrun-ts/${SDK_VERSION}`;
+// SDK version for User-Agent header (client identification in server logs).
+// Single source of truth in version.ts — this used to be a local "1.5.0".
 
 /**
  * BlockRun LLM Gateway Client.
