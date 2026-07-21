@@ -71,10 +71,33 @@ export function validateMaxTokens(maxTokens?: number): void {
     throw new Error("maxTokens must be positive (minimum: 1)");
   }
 
-  if (maxTokens > 100000) {
-    throw new Error("maxTokens too large (maximum: 100000)");
+  if (maxTokens > MAX_TOKENS_SANITY_LIMIT) {
+    throw new Error(
+      `maxTokens implausibly large (client-side sanity limit: ${MAX_TOKENS_SANITY_LIMIT}). ` +
+        `This is not a model limit — the gateway enforces the real per-model ceiling and reports it.`
+    );
   }
 }
+
+/**
+ * Client-side typo guard, NOT a model limit. The gateway already enforces the
+ * real per-model ceiling and rejects with that model's own number, so anything
+ * hardcoded here can only be wrong in one direction: too low.
+ *
+ * This was 100000, and it silently capped every SDK caller below what models
+ * actually support. Verified against the live gateway 2026-07-21 with the
+ * guard bypassed: zai/glm-5.2 accepts 262144, and the whole 128000 class
+ * accepts 128000 (claude-opus-4.8, claude-sonnet-5, claude-fable-5,
+ * gpt-5.6-sol/terra/luna, gpt-5.5, gpt-5.4, gpt-5.3-codex, glm-5/5.1/5-turbo).
+ * 19 models advertised above 100000; all 19 accepted their ceiling. Callers
+ * asking for them got an error that never reached the network and named a
+ * limit no provider had set.
+ *
+ * Keep a bound so an obvious mistake (1e9, a byte count, a timestamp) fails
+ * fast locally instead of becoming a payment quote. Set it far above any real
+ * model so it can never be the binding constraint again.
+ */
+export const MAX_TOKENS_SANITY_LIMIT = 1_000_000;
 
 /**
  * Validates that temperature is a number between 0 and 2.
