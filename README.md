@@ -1,6 +1,6 @@
 # @blockrun/llm (TypeScript SDK)
 
-> **@blockrun/llm** is a TypeScript/Node.js SDK for accessing 41+ large language models (GPT-5, Claude, Gemini, Grok, DeepSeek, Kimi, and more) with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required — your wallet signature is your authentication. Supports **streaming**, smart routing, Base and Solana chains.
+> **@blockrun/llm** is a TypeScript/Node.js SDK for accessing <!-- br:models.chatVisible -->66<!-- /br:models.chatVisible --> large language models (GPT-5, Claude, Gemini, Grok, DeepSeek, Kimi, and more) with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required — your wallet signature is your authentication. Supports **streaming**, smart routing, Base and Solana chains.
 >
 > 🆓 **Includes 7 fully-free NVIDIA-hosted models** (5 visible in `/v1/models`, 2 hidden but directly callable) — DeepSeek V4 Flash (1M context), Nemotron Nano Omni (vision), Qwen3 Coder, Llama 4, Mistral, plus the gpt-oss pair. Zero USDC, no rate-limit gimmicks. Use `routingProfile: 'free'` or call any `nvidia/*` model directly.
 
@@ -232,7 +232,7 @@ const client = new LLMClient();
 const result = await client.smartChat('What is 2+2?');
 console.log(result.response);     // '4'
 console.log(result.model);        // 'moonshot/kimi-k2.5' (cheap, fast)
-console.log(`Saved ${(result.routing.savings * 100).toFixed(0)}%`); // 'Saved 78%'
+console.log(`Saved ${(result.routing.savings * 100).toFixed(0)}%`); // 'Saved 87%'
 
 // Complex reasoning task -> routes to reasoning model
 const complex = await client.smartChat('Prove the Riemann hypothesis step by step');
@@ -263,7 +263,7 @@ const reply = await client.chat('nvidia/deepseek-v4-flash', 'hello', {
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `free` | NVIDIA free tier — smart-routes across 8 models (DeepSeek V4 Flash, Nemotron Nano Omni, Qwen3, Llama 4, Mistral, plus 2 hidden gpt-oss) | Zero-cost testing, dev, prod |
+| `free` | NVIDIA free tier — smart-routes across <!-- br:models.free -->8<!-- /br:models.free --> models (DeepSeek V4 Flash, Nemotron Nano Omni, Qwen3, Llama 4, Mistral, plus 2 hidden gpt-oss) | Zero-cost testing, dev, prod |
 | `eco` | Cheapest models per tier (DeepSeek, xAI) | Cost-sensitive production |
 | `auto` | Best balance of cost/quality (default) | General use |
 | `premium` | Top-tier models (OpenAI, Anthropic) | Quality-critical tasks |
@@ -858,7 +858,7 @@ const response2 = await client.chat('anthropic/claude-sonnet-4', 'Write a haiku'
 
 ### Smart Routing (ClawRouter)
 
-Save up to 78% on inference costs with intelligent model routing. ClawRouter uses a 14-dimension rule-based scoring algorithm to select the cheapest model that can handle your request (<1ms, 100% local).
+Save up to <!-- br:savings.autoVsBaselinePct -->87<!-- /br:savings.autoVsBaselinePct -->% on inference costs with intelligent model routing. ClawRouter uses a <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions -->-dimension rule-based scoring algorithm to select the cheapest model that can handle your request (<1ms, 100% local).
 
 ```typescript
 import { LLMClient } from '@blockrun/llm';
@@ -870,7 +870,7 @@ const result = await client.smartChat('What is 2+2?');
 console.log(result.response);     // '4'
 console.log(result.model);        // 'google/gemini-2.5-flash'
 console.log(result.routing.tier); // 'SIMPLE'
-console.log(`Saved ${(result.routing.savings * 100).toFixed(0)}%`); // 'Saved 78%'
+console.log(`Saved ${(result.routing.savings * 100).toFixed(0)}%`); // 'Saved 87%'
 
 // Routing profiles
 const free = await client.smartChat('Hello!', { routingProfile: 'free' });     // Zero cost
@@ -883,7 +883,7 @@ const premium = await client.smartChat('Write a legal brief', { routingProfile: 
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `free` | NVIDIA free tier (9 models, smart-routed) | Zero-cost testing, dev, prod |
+| `free` | NVIDIA free tier (<!-- br:models.free -->8<!-- /br:models.free --> models, smart-routed) | Zero-cost testing, dev, prod |
 | `eco` | Budget-optimized | Cost-sensitive workloads |
 | `auto` | Intelligent routing (default) | General use |
 | `premium` | Best quality models | Critical tasks |
@@ -1427,7 +1427,7 @@ The `AnthropicClient` wraps the official `@anthropic-ai/sdk` with a custom fetch
 When you make an API call, the SDK automatically handles x402 payment. It signs a USDC transaction locally using your wallet private key (which never leaves your machine), and includes the payment proof in the request header. Settlement is non-custodial and instant on Base or Solana.
 
 ### What is smart routing / ClawRouter?
-ClawRouter is a built-in smart routing engine that analyzes your request across 14 dimensions and automatically picks the cheapest model capable of handling it. Routing happens locally in under 1ms. It can save up to 78% on LLM costs compared to using premium models for every request.
+ClawRouter is a built-in smart routing engine that analyzes your request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions and automatically picks the cheapest model capable of handling it. Routing happens locally in under 1ms. It can save up to <!-- br:savings.autoVsBaselinePct -->87<!-- /br:savings.autoVsBaselinePct -->% on LLM costs compared to using premium models for every request.
 
 ### Does it support streaming?
 Yes — as of v1.6.1. Use `client.chatCompletionStream()` for native streaming or `stream: true` in the OpenAI-compatible client. Payment is handled automatically: the SDK signs USDC payment before streaming begins, and caches payment requirements per model so subsequent calls skip the 402 round-trip (~200ms faster).
