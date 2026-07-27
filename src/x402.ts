@@ -24,16 +24,13 @@ const DEFAULT_COMPUTE_UNIT_LIMIT = 8000;
 // --- Solana payment fast path ----------------------------------------------
 // Two RPC round-trips used to sit on the critical path of EVERY Solana payment
 // (measured ~107ms each, ~212ms serial, against sol.blockrun.ai): getMint, to
-// read `decimals`, and getLatestBlockhash. Both are now avoided on the common
-// path. See the caches below for why each is safe.
-
-/**
- * SPL Token fixes `decimals` in InitializeMint and ships no instruction to
- * change it, so a mint's decimals is immutable and safe to cache forever.
- * USDC is pre-seeded from the constant this module already exports — fetching
- * a hardcoded 6 over the network was pure latency.
- */
-const mintDecimalsCache = new Map<string, number>([[USDC_SOLANA, SOLANA_USDC_DECIMALS]]);
+// read `decimals`, and getLatestBlockhash.
+//
+// getMint is gone outright: SPL Token fixes `decimals` in InitializeMint and
+// ships no instruction to change it, so a mint's decimals is immutable, and
+// this path only ever transfers USDC — whose decimals this module already
+// exports as SOLANA_USDC_DECIMALS. Fetching a hardcoded 6 over the network was
+// pure latency. getLatestBlockhash is cached; see below for why that is safe.
 
 /**
  * A blockhash is valid for ~150 slots (~60s). The default RPC already caches
@@ -47,13 +44,12 @@ const BLOCKHASH_TTL_MS = 10_000;
  * How many times the priority fee may be nudged to distinguish two otherwise
  * identical payments on one blockhash. Each step is +1 microLamport/CU over
  * 8000 CU = 0.008 lamports, paid by the facilitator fee payer, so the whole
- * range costs under a lamport. Bounded so a pathological caller falls back to
- * fetching a fresh blockhash instead of looping.
+ * range costs under a lamport. The top of the range, 65 microLamports/CU, is
+ * three orders of magnitude under the facilitator's 50_000 ceiling.
  */
 const MAX_FEE_NONCE_STEPS = 64;
 
 interface BlockhashEntry {
-  rpcUrl: string;
   blockhash: string;
   fetchedAt: number;
   /**
@@ -70,7 +66,14 @@ interface BlockhashEntry {
   issued: Set<string>;
 }
 
-let blockhashCache: BlockhashEntry | null = null;
+/**
+ * Keyed by RPC URL rather than held in a single slot: a client that alternates
+ * between a primary and a fallback endpoint would otherwise evict the entry on
+ * every call and throw away `issued` with it — silently disabling the duplicate
+ * guard exactly when two endpoints fronting one cluster can return the same
+ * blockhash.
+ */
+const blockhashCache = new Map<string, BlockhashEntry>();
 
 async function getBlockhashEntry(
   connection: { getLatestBlockhash: () => Promise<{ blockhash: string }> },
@@ -78,30 +81,25 @@ async function getBlockhashEntry(
   forceRefresh: boolean
 ): Promise<BlockhashEntry> {
   const now = Date.now();
-  if (
-    !forceRefresh &&
-    blockhashCache &&
-    blockhashCache.rpcUrl === rpcUrl &&
-    now - blockhashCache.fetchedAt < BLOCKHASH_TTL_MS
-  ) {
-    return blockhashCache;
+  const cached = blockhashCache.get(rpcUrl);
+  if (!forceRefresh && cached && now - cached.fetchedAt < BLOCKHASH_TTL_MS) {
+    return cached;
   }
   const { blockhash } = await connection.getLatestBlockhash();
-  if (blockhashCache?.blockhash === blockhash && blockhashCache.rpcUrl === rpcUrl) {
+  if (cached?.blockhash === blockhash) {
     // Server-side caching can hand back the same hash; keep the issued set so
     // the duplicate guard still sees what was already signed against it.
-    blockhashCache.fetchedAt = now;
-    return blockhashCache;
+    cached.fetchedAt = now;
+    return cached;
   }
-  blockhashCache = { rpcUrl, blockhash, fetchedAt: now, issued: new Set() };
-  return blockhashCache;
+  const entry: BlockhashEntry = { blockhash, fetchedAt: now, issued: new Set() };
+  blockhashCache.set(rpcUrl, entry);
+  return entry;
 }
 
 /** Test seam: drop cached state so a test starts from a cold client. */
 export function __resetSolanaPaymentCaches(): void {
-  blockhashCache = null;
-  mintDecimalsCache.clear();
-  mintDecimalsCache.set(USDC_SOLANA, SOLANA_USDC_DECIMALS);
+  blockhashCache.clear();
 }
 
 // EIP-712 domain for Base USDC
@@ -286,7 +284,7 @@ export async function createSolanaPaymentPayload(
 ): Promise<string> {
   // Dynamic import to avoid bundling Solana deps when not needed
   const { Connection, PublicKey, TransactionMessage, VersionedTransaction, ComputeBudgetProgram } = await import("@solana/web3.js");
-  const { getAssociatedTokenAddress, createTransferCheckedInstruction, getMint } = await import("@solana/spl-token");
+  const { getAssociatedTokenAddress, createTransferCheckedInstruction } = await import("@solana/spl-token");
   const { Keypair } = await import("@solana/web3.js");
 
   const rpcUrl = options.rpcUrl || "https://sol.blockrun.ai/api/v1/solana/rpc";
@@ -303,14 +301,6 @@ export async function createSolanaPaymentPayload(
   const tokenMint = new PublicKey(USDC_SOLANA);
   const payToPubkey = new PublicKey(recipient);
 
-  // Token decimals: immutable per mint, so served from cache (USDC never hits
-  // the network at all). Only an unknown mint pays for the lookup, once.
-  let decimals = mintDecimalsCache.get(USDC_SOLANA);
-  if (decimals === undefined) {
-    decimals = (await getMint(connection, tokenMint)).decimals;
-    mintDecimalsCache.set(USDC_SOLANA, decimals);
-  }
-
   // Pure PDA derivation — no RPC.
   const sourceATA = await getAssociatedTokenAddress(tokenMint, ownerPubkey, false);
   const destinationATA = await getAssociatedTokenAddress(tokenMint, payToPubkey, false);
@@ -322,7 +312,7 @@ export async function createSolanaPaymentPayload(
     destinationATA,
     ownerPubkey,
     BigInt(amount),
-    decimals
+    SOLANA_USDC_DECIMALS
   );
 
   const buildSignedTx = (blockhash: string, unitPriceMicroLamports: number): string => {
@@ -343,32 +333,51 @@ export async function createSolanaPaymentPayload(
     return Buffer.from(transaction.serialize()).toString("base64");
   };
 
+  /**
+   * First transaction against `entry` that has not been issued yet, or null if
+   * the whole fee-nonce range collides.
+   *
+   * Step 0 is the default price, so the common case costs exactly one sign and
+   * no network call. Beyond that, identical economics on a reused blockhash are
+   * resolved by nudging the priority fee rather than by fetching: repeated
+   * same-priced calls are the NORMAL agent pattern, and 8000 CU at
+   * +1 microLamport/CU is 0.008 lamports paid by the facilitator fee payer, so
+   * it is not the user's cost either.
+   */
+  const findDistinctTx = (candidate: BlockhashEntry): string | null => {
+    for (let step = 0; step <= MAX_FEE_NONCE_STEPS; step++) {
+      const tx = buildSignedTx(
+        candidate.blockhash,
+        DEFAULT_COMPUTE_UNIT_PRICE_MICROLAMPORTS + step
+      );
+      if (!candidate.issued.has(tx)) return tx;
+    }
+    return null;
+  };
+
   let entry = await getBlockhashEntry(connection, rpcUrl, false);
-  let unitPrice = DEFAULT_COMPUTE_UNIT_PRICE_MICROLAMPORTS;
-  let serializedTx = buildSignedTx(entry.blockhash, unitPrice);
+  let serializedTx = findDistinctTx(entry);
 
-  if (entry.issued.has(serializedTx)) {
-    // Identical economics on a reused blockhash. Repeated same-priced calls are
-    // the NORMAL agent pattern, so resolve this without touching the network:
-    // nudge the priority fee until the message is distinct. 8000 CU at
-    // +1 microLamport/CU is 0.008 lamports, and `feePayer` is the facilitator,
-    // so it is not the user's cost either.
-    while (
-      entry.issued.has(serializedTx) &&
-      unitPrice - DEFAULT_COMPUTE_UNIT_PRICE_MICROLAMPORTS < MAX_FEE_NONCE_STEPS
-    ) {
-      unitPrice += 1;
-      serializedTx = buildSignedTx(entry.blockhash, unitPrice);
-    }
-
-    // Only if the whole nonce range is exhausted against this blockhash do we
-    // pay for a fresh one — which is simply the pre-cache behaviour.
-    if (entry.issued.has(serializedTx)) {
-      entry = await getBlockhashEntry(connection, rpcUrl, true);
-      unitPrice = DEFAULT_COMPUTE_UNIT_PRICE_MICROLAMPORTS;
-      serializedTx = buildSignedTx(entry.blockhash, unitPrice);
-    }
+  if (serializedTx === null) {
+    // Exhausting the range is the one case worth paying for a fresh blockhash —
+    // simply the pre-cache behaviour. But a forced refresh can legitimately
+    // hand back the SAME blockhash (the RPC caches it 30s server-side), and
+    // getBlockhashEntry then returns the same entry with its issued set intact.
+    // So the search has to run again over that entry rather than restarting at
+    // the default price, which would rebuild the very first transaction.
+    entry = await getBlockhashEntry(connection, rpcUrl, true);
+    serializedTx = findDistinctTx(entry);
   }
+
+  if (serializedTx === null) {
+    // Never emit a transaction known to be a byte-identical duplicate — Solana
+    // would reject it as already-processed with nothing explaining why.
+    throw new Error(
+      `Solana payment: ${MAX_FEE_NONCE_STEPS + 1} identical payments already issued ` +
+        `against blockhash ${entry.blockhash}. Retry once it rotates.`
+    );
+  }
+
   entry.issued.add(serializedTx);
 
   // Create x402 v2 payment payload
