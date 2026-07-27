@@ -1,6 +1,6 @@
 # @blockrun/llm (TypeScript SDK)
 
-TypeScript SDK for 41+ LLMs with streaming, smart routing, and automatic USDC micropayments via x402. No API keys — wallet signature is authentication.
+TypeScript SDK for <!-- br:models.chatVisible -->66<!-- /br:models.chatVisible --> LLMs with streaming, smart routing, and automatic USDC micropayments via x402. No API keys — wallet signature is authentication.
 
 ## Commands
 
