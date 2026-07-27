@@ -748,7 +748,7 @@ Generic escape hatches: `client.defi(path, params)`, `client.dex(path, params, b
 ### Multi-chain RPC
 
 `RpcClient` wraps `POST /v1/rpc/{network}` — standard JSON-RPC 2.0 access to
-40+ chains through one endpoint (Ethereum, Base, Solana, Polygon, BSC,
+<!-- br:chains.rpc -->40<!-- /br:chains.rpc --> chains through one endpoint (Ethereum, Base, Solana, Polygon, BSC,
 Arbitrum, Optimism, Avalanche, Bitcoin, Sui, and more; powered by Tatum's RPC
 gateway). No API key, no per-chain endpoints: flat **$0.002 per call** in
 USDC; a JSON-RPC batch charges per element.
