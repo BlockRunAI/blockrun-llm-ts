@@ -2,6 +2,17 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.8.4] - 2026-07-27
+
+### Changed
+
+- **Solana payments no longer make two RPC round-trips before they can sign.** `getMint` and `getLatestBlockhash` sat on the critical path of every payment, measured at ~107ms each against `sol.blockrun.ai` — ~212ms of the ~286ms median gap between the 402 landing and the paid retry going out, against 2ms for the Base equivalent. `getMint` is gone entirely: SPL Token fixes `decimals` in `InitializeMint` and ships no instruction to change it, this path only ever transfers USDC, and the module already exported `SOLANA_USDC_DECIMALS = 6` — so the call was fetching a constant over the network. `getLatestBlockhash` is cached for 10s; a blockhash is valid ~150 slots (~60s) and the default RPC already caches the method 30s server-side, so the worst case lands around 40s and leaves ~20s of settlement margin. Measured over 24 real payments per run on the live gateway: the Solana sign gap drops from a 286ms median to 7ms, and end-to-end from 1686ms to 1412ms on `openai/chat-latest` and 1532ms to 1143ms on `anthropic/claude-haiku-4.5`.
+
+### Fixed
+
+- **Two same-priced payments in a row no longer collide.** Reusing a blockhash exposes a hazard that fetching a fresh one per payment mostly hid: two payments sharing a blockhash with identical economics compile to a byte-identical message, and ed25519 is deterministic, so both carry the same signature and Solana rejects the second as already-processed. Two same-priced calls in a row is an ordinary agent pattern. Each cached blockhash now tracks the transactions already signed against it, and a collision is resolved by nudging the priority fee until the message is distinct — no network round-trip. One step is +1 microLamport/CU over 8000 CU = 0.008 lamports, `feePayer` is the facilitator, and the top of the range sits three orders of magnitude under the facilitator's 50,000 microLamport/CU ceiling, so it is not the user's cost and it cannot trip verification. This hazard predates blockhash caching: the RPC's own 30s server-side cache already handed the same blockhash to consecutive calls, so same-priced payments inside that window could already collide. They no longer can.
+- **The blockhash cache is keyed per RPC URL and fails loudly when it cannot produce a distinct transaction.** A single cache slot meant a client alternating between a primary and a fallback endpoint evicted the entry on every call and discarded the record of what had already been signed — disabling the duplicate guard exactly when two endpoints fronting one cluster can return the same blockhash. Separately, once the 65-value fee-nonce range was spent on one blockhash, the fallback fetched a fresh one and rebuilt at the default price; but a forced refresh can legitimately return the *same* blockhash, and rebuilding there reproduced the first transaction byte for byte and re-emitted it as a silent duplicate — and stayed stuck that way until the blockhash rotated. The nonce search now re-runs against the refreshed entry, and a genuinely exhausted range throws instead of emitting a transaction already known to be a duplicate.
+
 ## [3.8.3] - 2026-07-21
 
 ### Removed
