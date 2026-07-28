@@ -32,20 +32,69 @@ export async function createSolanaWallet(): Promise<{ address: string; privateKe
 }
 
 /**
- * Convert a bs58 private key string to Uint8Array (64 bytes).
- * Accepts: bs58-encoded 64-byte key (standard Solana format).
+ * Convert a Solana private key string to Uint8Array (64 bytes).
+ * Accepts: bs58-encoded 64-byte key (standard Solana format), the Solana CLI
+ * JSON byte-array format (~/.config/solana/id.json), or a 64-byte hex string
+ * (with or without 0x). A 32-byte hex key is rejected with an explicit hint
+ * that it is the EVM (Base) wallet format, not a Solana key.
  */
 export async function solanaKeyToBytes(privateKey: string): Promise<Uint8Array> {
+  const key = privateKey.trim();
+
+  // Solana CLI JSON array format: [12,34,...] with 64 byte values
+  if (key.startsWith("[")) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(key);
+    } catch {
+      throw new Error(
+        "Invalid Solana private key: looks like a JSON byte array but is not valid JSON"
+      );
+    }
+    if (
+      !Array.isArray(parsed) ||
+      !parsed.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)
+    ) {
+      throw new Error(
+        "Invalid Solana private key: JSON array must contain only byte values (0-255)"
+      );
+    }
+    if (parsed.length !== 64) {
+      throw new Error(
+        `Invalid Solana key length: expected 64 bytes, got ${parsed.length}`
+      );
+    }
+    return Uint8Array.from(parsed as number[]);
+  }
+
+  // Hex forms. bs58 keys are 86-88 chars, so 64/128 hex chars are unambiguous.
+  const hex = key.startsWith("0x") || key.startsWith("0X") ? key.slice(2) : key;
+  if (/^[0-9a-fA-F]+$/.test(hex) && (hex.length === 64 || hex.length === 128)) {
+    if (hex.length === 64) {
+      throw new Error(
+        "Invalid Solana private key: this is a 32-byte hex key — the EVM (Base) " +
+          "wallet format, not a Solana key. Solana keys are 64 bytes, usually " +
+          "base58-encoded (86-88 characters)."
+      );
+    }
+    const bytes = new Uint8Array(64);
+    for (let i = 0; i < 64; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    return bytes;
+  }
+
   try {
     const bs58 = await import("bs58");
-    const bytes = (bs58.default ?? bs58).decode(privateKey);
+    const bytes = (bs58.default ?? bs58).decode(key);
     if (bytes.length !== 64) {
       throw new Error(`Invalid Solana key length: expected 64 bytes, got ${bytes.length}`);
     }
     return bytes;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`Invalid Solana private key: ${msg}`);
+    throw new Error(
+      `Invalid Solana private key: ${msg}. Expected a base58-encoded 64-byte key ` +
+        "(standard Solana format), a 64-byte hex string, or a Solana CLI JSON byte array."
+    );
   }
 }
 
@@ -254,13 +303,26 @@ SOLANA_WALLET_KEY=<private-key> for a single run without changing anything.
 `;
 }
 
+/** Derive the public key, attributing failures to where the key was loaded from. */
+async function solanaPublicKeyFrom(privateKey: string, source: string): Promise<string> {
+  try {
+    return await solanaPublicKey(privateKey);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`${msg} (key loaded from ${source})`);
+  }
+}
+
 export async function getOrCreateSolanaWallet(): Promise<SolanaWalletInfo> {
   // 1. Environment variable
   const envKey = typeof process !== "undefined" && process.env
     ? process.env.SOLANA_WALLET_KEY
     : undefined;
   if (envKey) {
-    const address = await solanaPublicKey(envKey);
+    const address = await solanaPublicKeyFrom(
+      envKey,
+      "the SOLANA_WALLET_KEY environment variable"
+    );
     return { privateKey: envKey, address, isNew: false };
   }
 
@@ -268,7 +330,7 @@ export async function getOrCreateSolanaWallet(): Promise<SolanaWalletInfo> {
   if (fs.existsSync(SOLANA_WALLET_FILE)) {
     const fileKey = fs.readFileSync(SOLANA_WALLET_FILE, "utf-8").trim();
     if (fileKey) {
-      const address = await solanaPublicKey(fileKey);
+      const address = await solanaPublicKeyFrom(fileKey, SOLANA_WALLET_FILE);
       return { privateKey: fileKey, address, isNew: false };
     }
   }

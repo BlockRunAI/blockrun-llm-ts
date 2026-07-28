@@ -2,6 +2,16 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.9.0] - 2026-07-28
+
+### Added
+
+- **`solanaKeyToBytes` accepts the key formats users actually have on disk.** A Solana private key arrives in one of three encodings depending on where it came from: bs58 (what this SDK writes), the JSON byte array the Solana CLI writes to `~/.config/solana/id.json`, and raw hex from various exporters. Only the first was accepted; the other two died at startup with `Invalid Solana private key: Non-base58 character` — seen in the field when a user's `.solana-session` held a CLI-format key. All three now decode: JSON byte arrays (64 values) and 64-byte hex (with or without `0x`) are converted in place. The length gate makes this unambiguous — a bs58-encoded 64-byte key is 86-88 characters, so 64/128-character hex strings and `[`-prefixed arrays can't collide with valid bs58 input.
+
+### Changed
+
+- **An invalid Solana key now says where it was loaded from and what it appears to be.** The old error — `Invalid Solana private key: Non-base58 character`, thrown deep in `solanaKeyToBytes` — left the user to guess which of the SDK's key sources held the bad value. `getOrCreateSolanaWallet` failures now name the source (`the SOLANA_WALLET_KEY environment variable` or the `~/.blockrun/.solana-session` path). A 32-byte hex key is called out as the EVM (Base) wallet format rather than rejected as a character-set error, and unrecognized input gets the list of accepted formats.
+
 ## [3.8.4] - 2026-07-27
 
 ### Changed
