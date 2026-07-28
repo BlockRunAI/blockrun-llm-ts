@@ -38,13 +38,14 @@ const RECIPIENT = Keypair.generate().publicKey.toBase58();
 const PAYER = Keypair.generate();
 const HASH_A = Keypair.generate().publicKey.toBase58();
 
-async function pay(amount: string): Promise<string> {
+async function pay(amount: string, rpcUrl?: string): Promise<string> {
   const raw = await createSolanaPaymentPayload(
     PAYER.secretKey,
     PAYER.publicKey.toBase58(),
     RECIPIENT,
     amount,
     FEE_PAYER,
+    rpcUrl ? { rpcUrl } : {},
   );
   return JSON.parse(atob(raw)).payload.transaction as string;
 }
@@ -74,5 +75,34 @@ describe("Solana payments fired concurrently", () => {
     // that is the round-trip this caching removed.
     await Promise.all(Array.from({ length: 8 }, (_, i) => pay(String(10_000 + i))));
     expect(rpc.calls).toBeLessThan(8);
+  });
+});
+
+describe("bounded memory", () => {
+  beforeEach(() => {
+    rpc.blockhash = HASH_A;
+    rpc.calls = 0;
+    rpc.delayMs = 0;
+    __resetSolanaPaymentCaches();
+  });
+
+  it("keeps guarding the blockhash in use after many rotations", async () => {
+    // Both maps are pruned to a small window. Pruning must never drop what is
+    // in use right now, or the duplicate guard silently stops working on the
+    // hot path. A distinct URL per round forces a real fetch, so the blockhash
+    // genuinely rotates and both windows overflow several times over.
+    const ROUNDS = 20;
+    for (let i = 0; i < ROUNDS; i++) {
+      rpc.blockhash = Keypair.generate().publicKey.toBase58();
+      await pay("11500", `https://rpc-${i}.example/rpc`);
+    }
+    // Guard against a vacuous run: without a fetch per round nothing rotated
+    // and this test would prove nothing.
+    expect(rpc.calls).toBe(ROUNDS);
+
+    const url = `https://rpc-${ROUNDS - 1}.example/rpc`;
+    const first = await pay("9700", url);
+    const second = await pay("9700", url);
+    expect(second).not.toBe(first);
   });
 });
