@@ -49,31 +49,55 @@ const BLOCKHASH_TTL_MS = 10_000;
  */
 const MAX_FEE_NONCE_STEPS = 64;
 
+/** How many blockhashes keep a duplicate-guard record. */
+const MAX_TRACKED_BLOCKHASHES = 8;
+
 interface BlockhashEntry {
   blockhash: string;
   fetchedAt: number;
-  /**
-   * Serialized transactions already produced against this blockhash.
-   *
-   * Two payments that share a blockhash AND have identical economics compile
-   * to a byte-identical message. ed25519 is deterministic, so they yield the
-   * SAME signature, and Solana rejects the second as an already-processed
-   * duplicate. Two same-priced calls in a row is a completely ordinary agent
-   * pattern, so reusing a blockhash without this guard would break them.
-   *
-   * Scoped to the entry, so it is discarded whenever the blockhash rotates.
-   */
-  issued: Set<string>;
 }
 
 /**
- * Keyed by RPC URL rather than held in a single slot: a client that alternates
- * between a primary and a fallback endpoint would otherwise evict the entry on
- * every call and throw away `issued` with it — silently disabling the duplicate
- * guard exactly when two endpoints fronting one cluster can return the same
- * blockhash.
+ * Latest blockhash per RPC endpoint. Keyed by URL because endpoints genuinely
+ * differ on what "latest" is, and because a client alternating between a
+ * primary and a fallback would otherwise evict the entry on every call.
  */
 const blockhashCache = new Map<string, BlockhashEntry>();
+
+/**
+ * Serialized transactions already produced against a given blockhash.
+ *
+ * Two payments that share a blockhash AND have identical economics compile to a
+ * byte-identical message. ed25519 is deterministic, so they yield the SAME
+ * signature, and Solana rejects the second as an already-processed duplicate.
+ * Two same-priced calls in a row is a completely ordinary agent pattern, so
+ * reusing a blockhash without this guard would break them.
+ *
+ * Keyed by BLOCKHASH, not by endpoint. A signed transaction's identity depends
+ * only on its blockhash and its economics — Solana never sees which URL served
+ * the blockhash — so two endpoints handing back the same blockhash must consult
+ * one shared record. Filing this per endpoint let a fallback RPC start from an
+ * empty record and re-emit bytes the primary had already sent.
+ */
+const issuedByBlockhash = new Map<string, Set<string>>();
+
+function issuedFor(blockhash: string): Set<string> {
+  let issued = issuedByBlockhash.get(blockhash);
+  if (!issued) {
+    issued = new Set();
+    issuedByBlockhash.set(blockhash, issued);
+    // A blockhash expires in ~60s, so a transaction built against an older one
+    // cannot land no matter what this map says. A small insertion-ordered
+    // window is therefore enough, and it keeps memory bounded for a
+    // long-running process that would otherwise accumulate every blockhash and
+    // every transaction it ever signed.
+    while (issuedByBlockhash.size > MAX_TRACKED_BLOCKHASHES) {
+      const oldest = issuedByBlockhash.keys().next().value as string;
+      issuedByBlockhash.delete(oldest);
+    }
+  }
+  return issued;
+}
 
 async function getBlockhashEntry(
   connection: { getLatestBlockhash: () => Promise<{ blockhash: string }> },
@@ -86,13 +110,18 @@ async function getBlockhashEntry(
     return cached;
   }
   const { blockhash } = await connection.getLatestBlockhash();
-  if (cached?.blockhash === blockhash) {
-    // Server-side caching can hand back the same hash; keep the issued set so
-    // the duplicate guard still sees what was already signed against it.
-    cached.fetchedAt = now;
-    return cached;
+  // Re-read rather than reuse the pre-await snapshot. Payments fired together
+  // are all in flight here at once — a real RPC takes ~107ms — so a sibling may
+  // have stored an entry while this one waited, and the stale snapshot would
+  // miss it and churn out a replacement for a blockhash already cached.
+  const current = blockhashCache.get(rpcUrl);
+  if (current?.blockhash === blockhash) {
+    // Server-side caching can hand back the same hash. Keep the entry so its
+    // TTL reflects the last time this value was actually confirmed as latest.
+    current.fetchedAt = now;
+    return current;
   }
-  const entry: BlockhashEntry = { blockhash, fetchedAt: now, issued: new Set() };
+  const entry: BlockhashEntry = { blockhash, fetchedAt: now };
   blockhashCache.set(rpcUrl, entry);
   return entry;
 }
@@ -100,6 +129,7 @@ async function getBlockhashEntry(
 /** Test seam: drop cached state so a test starts from a cold client. */
 export function __resetSolanaPaymentCaches(): void {
   blockhashCache.clear();
+  issuedByBlockhash.clear();
 }
 
 // EIP-712 domain for Base USDC
@@ -345,12 +375,13 @@ export async function createSolanaPaymentPayload(
    * it is not the user's cost either.
    */
   const findDistinctTx = (candidate: BlockhashEntry): string | null => {
+    const issued = issuedFor(candidate.blockhash);
     for (let step = 0; step <= MAX_FEE_NONCE_STEPS; step++) {
       const tx = buildSignedTx(
         candidate.blockhash,
         DEFAULT_COMPUTE_UNIT_PRICE_MICROLAMPORTS + step
       );
-      if (!candidate.issued.has(tx)) return tx;
+      if (!issued.has(tx)) return tx;
     }
     return null;
   };
@@ -361,10 +392,11 @@ export async function createSolanaPaymentPayload(
   if (serializedTx === null) {
     // Exhausting the range is the one case worth paying for a fresh blockhash —
     // simply the pre-cache behaviour. But a forced refresh can legitimately
-    // hand back the SAME blockhash (the RPC caches it 30s server-side), and
-    // getBlockhashEntry then returns the same entry with its issued set intact.
-    // So the search has to run again over that entry rather than restarting at
-    // the default price, which would rebuild the very first transaction.
+    // hand back the SAME blockhash (the RPC caches it 30s server-side), and the
+    // record of what was issued against it is keyed by that blockhash, so it
+    // survives. The search therefore has to run again over whatever comes back
+    // rather than restarting at the default price, which on an unchanged
+    // blockhash would rebuild the very first transaction.
     entry = await getBlockhashEntry(connection, rpcUrl, true);
     serializedTx = findDistinctTx(entry);
   }
@@ -378,7 +410,7 @@ export async function createSolanaPaymentPayload(
     );
   }
 
-  entry.issued.add(serializedTx);
+  issuedFor(entry.blockhash).add(serializedTx);
 
   // Create x402 v2 payment payload
   const paymentData = {
