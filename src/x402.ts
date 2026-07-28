@@ -21,6 +21,132 @@ export const SOLANA_USDC_DECIMALS = 6;
 const DEFAULT_COMPUTE_UNIT_PRICE_MICROLAMPORTS = 1;
 const DEFAULT_COMPUTE_UNIT_LIMIT = 8000;
 
+// --- Solana payment fast path ----------------------------------------------
+// Two RPC round-trips used to sit on the critical path of EVERY Solana payment
+// (measured ~107ms each, ~212ms serial, against sol.blockrun.ai): getMint, to
+// read `decimals`, and getLatestBlockhash.
+//
+// getMint is gone outright: SPL Token fixes `decimals` in InitializeMint and
+// ships no instruction to change it, so a mint's decimals is immutable, and
+// this path only ever transfers USDC — whose decimals this module already
+// exports as SOLANA_USDC_DECIMALS. Fetching a hardcoded 6 over the network was
+// pure latency. getLatestBlockhash is cached; see below for why that is safe.
+
+/**
+ * A blockhash is valid for ~150 slots (~60s). The default RPC already caches
+ * `getLatestBlockhash` for 30s server-side, so a value can be 30s old on
+ * arrival; a 10s client TTL keeps the worst case at ~40s and leaves ~20s of
+ * settlement margin.
+ */
+const BLOCKHASH_TTL_MS = 10_000;
+
+/**
+ * How many times the priority fee may be nudged to distinguish two otherwise
+ * identical payments on one blockhash. Each step is +1 microLamport/CU over
+ * 8000 CU = 0.008 lamports, paid by the facilitator fee payer, so the whole
+ * range costs under a lamport. The top of the range, 65 microLamports/CU, is
+ * three orders of magnitude under the facilitator's 50_000 ceiling.
+ */
+const MAX_FEE_NONCE_STEPS = 64;
+
+/** How many blockhashes keep a duplicate-guard record. */
+const MAX_TRACKED_BLOCKHASHES = 8;
+
+/** How many RPC endpoints keep a cached blockhash. */
+const MAX_TRACKED_ENDPOINTS = 8;
+
+interface BlockhashEntry {
+  blockhash: string;
+  fetchedAt: number;
+}
+
+/**
+ * Latest blockhash per RPC endpoint. Keyed by URL because endpoints genuinely
+ * differ on what "latest" is, and because a client alternating between a
+ * primary and a fallback would otherwise evict the entry on every call.
+ *
+ * Bounded the same way as the record below: a caller that builds a fresh URL
+ * per request — a rotating token in a query string, say — would otherwise leave
+ * one dead entry behind forever.
+ */
+const blockhashCache = new Map<string, BlockhashEntry>();
+
+/** Drop the oldest keys until `map` is back within `limit`. */
+function trimOldest(map: Map<string, unknown>, limit: number): void {
+  while (map.size > limit) {
+    const oldest = map.keys().next().value as string;
+    map.delete(oldest);
+  }
+}
+
+/**
+ * Serialized transactions already produced against a given blockhash.
+ *
+ * Two payments that share a blockhash AND have identical economics compile to a
+ * byte-identical message. ed25519 is deterministic, so they yield the SAME
+ * signature, and Solana rejects the second as an already-processed duplicate.
+ * Two same-priced calls in a row is a completely ordinary agent pattern, so
+ * reusing a blockhash without this guard would break them.
+ *
+ * Keyed by BLOCKHASH, not by endpoint. A signed transaction's identity depends
+ * only on its blockhash and its economics — Solana never sees which URL served
+ * the blockhash — so two endpoints handing back the same blockhash must consult
+ * one shared record. Filing this per endpoint let a fallback RPC start from an
+ * empty record and re-emit bytes the primary had already sent.
+ */
+const issuedByBlockhash = new Map<string, Set<string>>();
+
+function issuedFor(blockhash: string): Set<string> {
+  let issued = issuedByBlockhash.get(blockhash);
+  if (!issued) {
+    issued = new Set();
+    issuedByBlockhash.set(blockhash, issued);
+    // A blockhash expires in ~60s, so a transaction built against an older one
+    // cannot land no matter what this map says. A small insertion-ordered
+    // window is therefore enough, and it keeps memory bounded for a
+    // long-running process that would otherwise accumulate every blockhash and
+    // every transaction it ever signed. Trimming the OLDEST is what makes this
+    // safe: the blockhash being paid against right now is the one just
+    // inserted, so it is never the one dropped.
+    trimOldest(issuedByBlockhash, MAX_TRACKED_BLOCKHASHES);
+  }
+  return issued;
+}
+
+async function getBlockhashEntry(
+  connection: { getLatestBlockhash: () => Promise<{ blockhash: string }> },
+  rpcUrl: string,
+  forceRefresh: boolean
+): Promise<BlockhashEntry> {
+  const now = Date.now();
+  const cached = blockhashCache.get(rpcUrl);
+  if (!forceRefresh && cached && now - cached.fetchedAt < BLOCKHASH_TTL_MS) {
+    return cached;
+  }
+  const { blockhash } = await connection.getLatestBlockhash();
+  // Re-read rather than reuse the pre-await snapshot. Payments fired together
+  // are all in flight here at once — a real RPC takes ~107ms — so a sibling may
+  // have stored an entry while this one waited, and the stale snapshot would
+  // miss it and churn out a replacement for a blockhash already cached.
+  const current = blockhashCache.get(rpcUrl);
+  if (current?.blockhash === blockhash) {
+    // Server-side caching can hand back the same hash. Keep the entry so its
+    // TTL reflects the last time this value was actually confirmed as latest.
+    current.fetchedAt = now;
+    return current;
+  }
+  const entry: BlockhashEntry = { blockhash, fetchedAt: now };
+  blockhashCache.set(rpcUrl, entry);
+  trimOldest(blockhashCache, MAX_TRACKED_ENDPOINTS);
+  return entry;
+}
+
+/** Test seam: drop cached state so a test starts from a cold client. */
+export function __resetSolanaPaymentCaches(): void {
+  blockhashCache.clear();
+  issuedByBlockhash.clear();
+}
+
 // EIP-712 domain for Base USDC
 const USDC_DOMAIN = {
   name: "USD Coin",
@@ -203,7 +329,7 @@ export async function createSolanaPaymentPayload(
 ): Promise<string> {
   // Dynamic import to avoid bundling Solana deps when not needed
   const { Connection, PublicKey, TransactionMessage, VersionedTransaction, ComputeBudgetProgram } = await import("@solana/web3.js");
-  const { getAssociatedTokenAddress, createTransferCheckedInstruction, getMint } = await import("@solana/spl-token");
+  const { getAssociatedTokenAddress, createTransferCheckedInstruction } = await import("@solana/spl-token");
   const { Keypair } = await import("@solana/web3.js");
 
   const rpcUrl = options.rpcUrl || "https://sol.blockrun.ai/api/v1/solana/rpc";
@@ -220,24 +346,9 @@ export async function createSolanaPaymentPayload(
   const tokenMint = new PublicKey(USDC_SOLANA);
   const payToPubkey = new PublicKey(recipient);
 
-  // Get token mint info for decimals
-  const mintInfo = await getMint(connection, tokenMint);
-
-  // Get associated token accounts
+  // Pure PDA derivation — no RPC.
   const sourceATA = await getAssociatedTokenAddress(tokenMint, ownerPubkey, false);
   const destinationATA = await getAssociatedTokenAddress(tokenMint, payToPubkey, false);
-
-  // Get latest blockhash
-  const { blockhash } = await connection.getLatestBlockhash();
-
-  // Create compute budget instructions
-  const setComputeUnitPriceIx = ComputeBudgetProgram.setComputeUnitPrice({
-    microLamports: DEFAULT_COMPUTE_UNIT_PRICE_MICROLAMPORTS,
-  });
-
-  const setComputeUnitLimitIx = ComputeBudgetProgram.setComputeUnitLimit({
-    units: DEFAULT_COMPUTE_UNIT_LIMIT,
-  });
 
   // Create transfer checked instruction
   const transferIx = createTransferCheckedInstruction(
@@ -246,24 +357,75 @@ export async function createSolanaPaymentPayload(
     destinationATA,
     ownerPubkey,
     BigInt(amount),
-    mintInfo.decimals
+    SOLANA_USDC_DECIMALS
   );
 
-  // Create v0 transaction message - order matches @x402/svm: limit, price, transfer
-  const messageV0 = new TransactionMessage({
-    payerKey: feePayerPubkey,
-    recentBlockhash: blockhash,
-    instructions: [setComputeUnitLimitIx, setComputeUnitPriceIx, transferIx],
-  }).compileToV0Message();
+  const buildSignedTx = (blockhash: string, unitPriceMicroLamports: number): string => {
+    // Create v0 transaction message - order matches @x402/svm: limit, price, transfer
+    const messageV0 = new TransactionMessage({
+      payerKey: feePayerPubkey,
+      recentBlockhash: blockhash,
+      instructions: [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: DEFAULT_COMPUTE_UNIT_LIMIT }),
+        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: unitPriceMicroLamports }),
+        transferIx,
+      ],
+    }).compileToV0Message();
 
-  // Create versioned transaction
-  const transaction = new VersionedTransaction(messageV0);
+    const transaction = new VersionedTransaction(messageV0);
+    // Sign with wallet (partial signature - only the transfer authority)
+    transaction.sign([keypair]);
+    return Buffer.from(transaction.serialize()).toString("base64");
+  };
 
-  // Sign with wallet (partial signature - only the transfer authority)
-  transaction.sign([keypair]);
+  /**
+   * First transaction against `entry` that has not been issued yet, or null if
+   * the whole fee-nonce range collides.
+   *
+   * Step 0 is the default price, so the common case costs exactly one sign and
+   * no network call. Beyond that, identical economics on a reused blockhash are
+   * resolved by nudging the priority fee rather than by fetching: repeated
+   * same-priced calls are the NORMAL agent pattern, and 8000 CU at
+   * +1 microLamport/CU is 0.008 lamports paid by the facilitator fee payer, so
+   * it is not the user's cost either.
+   */
+  const findDistinctTx = (candidate: BlockhashEntry): string | null => {
+    const issued = issuedFor(candidate.blockhash);
+    for (let step = 0; step <= MAX_FEE_NONCE_STEPS; step++) {
+      const tx = buildSignedTx(
+        candidate.blockhash,
+        DEFAULT_COMPUTE_UNIT_PRICE_MICROLAMPORTS + step
+      );
+      if (!issued.has(tx)) return tx;
+    }
+    return null;
+  };
 
-  // Serialize to base64
-  const serializedTx = Buffer.from(transaction.serialize()).toString("base64");
+  let entry = await getBlockhashEntry(connection, rpcUrl, false);
+  let serializedTx = findDistinctTx(entry);
+
+  if (serializedTx === null) {
+    // Exhausting the range is the one case worth paying for a fresh blockhash —
+    // simply the pre-cache behaviour. But a forced refresh can legitimately
+    // hand back the SAME blockhash (the RPC caches it 30s server-side), and the
+    // record of what was issued against it is keyed by that blockhash, so it
+    // survives. The search therefore has to run again over whatever comes back
+    // rather than restarting at the default price, which on an unchanged
+    // blockhash would rebuild the very first transaction.
+    entry = await getBlockhashEntry(connection, rpcUrl, true);
+    serializedTx = findDistinctTx(entry);
+  }
+
+  if (serializedTx === null) {
+    // Never emit a transaction known to be a byte-identical duplicate — Solana
+    // would reject it as already-processed with nothing explaining why.
+    throw new Error(
+      `Solana payment: ${MAX_FEE_NONCE_STEPS + 1} identical payments already issued ` +
+        `against blockhash ${entry.blockhash}. Retry once it rotates.`
+    );
+  }
+
+  issuedFor(entry.blockhash).add(serializedTx);
 
   // Create x402 v2 payment payload
   const paymentData = {
