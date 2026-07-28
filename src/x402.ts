@@ -52,6 +52,9 @@ const MAX_FEE_NONCE_STEPS = 64;
 /** How many blockhashes keep a duplicate-guard record. */
 const MAX_TRACKED_BLOCKHASHES = 8;
 
+/** How many RPC endpoints keep a cached blockhash. */
+const MAX_TRACKED_ENDPOINTS = 8;
+
 interface BlockhashEntry {
   blockhash: string;
   fetchedAt: number;
@@ -61,8 +64,20 @@ interface BlockhashEntry {
  * Latest blockhash per RPC endpoint. Keyed by URL because endpoints genuinely
  * differ on what "latest" is, and because a client alternating between a
  * primary and a fallback would otherwise evict the entry on every call.
+ *
+ * Bounded the same way as the record below: a caller that builds a fresh URL
+ * per request — a rotating token in a query string, say — would otherwise leave
+ * one dead entry behind forever.
  */
 const blockhashCache = new Map<string, BlockhashEntry>();
+
+/** Drop the oldest keys until `map` is back within `limit`. */
+function trimOldest(map: Map<string, unknown>, limit: number): void {
+  while (map.size > limit) {
+    const oldest = map.keys().next().value as string;
+    map.delete(oldest);
+  }
+}
 
 /**
  * Serialized transactions already produced against a given blockhash.
@@ -90,11 +105,10 @@ function issuedFor(blockhash: string): Set<string> {
     // cannot land no matter what this map says. A small insertion-ordered
     // window is therefore enough, and it keeps memory bounded for a
     // long-running process that would otherwise accumulate every blockhash and
-    // every transaction it ever signed.
-    while (issuedByBlockhash.size > MAX_TRACKED_BLOCKHASHES) {
-      const oldest = issuedByBlockhash.keys().next().value as string;
-      issuedByBlockhash.delete(oldest);
-    }
+    // every transaction it ever signed. Trimming the OLDEST is what makes this
+    // safe: the blockhash being paid against right now is the one just
+    // inserted, so it is never the one dropped.
+    trimOldest(issuedByBlockhash, MAX_TRACKED_BLOCKHASHES);
   }
   return issued;
 }
@@ -123,6 +137,7 @@ async function getBlockhashEntry(
   }
   const entry: BlockhashEntry = { blockhash, fetchedAt: now };
   blockhashCache.set(rpcUrl, entry);
+  trimOldest(blockhashCache, MAX_TRACKED_ENDPOINTS);
   return entry;
 }
 
