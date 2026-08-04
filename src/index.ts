@@ -160,6 +160,7 @@ export {
   // Error classes
   BlockrunError,
   PaymentError,
+  RetiredEndpointError,
   APIError,
 } from "./types";
 export {
