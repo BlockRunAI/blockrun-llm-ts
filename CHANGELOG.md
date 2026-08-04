@@ -2,6 +2,18 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **Wallet resolution now comes from `@blockrun/core`, so every BlockRun product reads the same wallet by construction.** `scanWallets`, `listDiscoveredWallets`, `importWallet`, `loadWallet`, `getOrCreateWallet`, and `getWalletAddress` delegate to the shared kernel instead of re-implementing the canonical order (`env → ~/.blockrun/.session → legacy wallet.key`) in this package. That duplication is what let the two drift: this SDK fixed provider-wallet takeover in 3.7.1 (#14) while core kept resolving provider `wallet.json` files first until `@blockrun/core@0.1.0`, so the `blockrun` CLI signed x402 payments with whatever key a planted `~/.<app>/wallet.json` supplied. Public signatures are unchanged and all ten canonical-selection regression tests pass against the delegated implementation — including the ones proving a discovered wallet is never adopted automatically and that a file cannot claim an address it holds no key for. `src/wallet.ts` drops 128 lines of duplicated logic.
+- **`BLOCKRUN_HOME` now overrides the wallet directory.** Path resolution comes from core, which supports this for test isolation and power users. Previously this module always used the OS home directory. Unset, behaviour is identical.
+
+### Notes
+
+- Requires `@blockrun/core@^0.1.0`. Earlier versions carry the provider-takeover defect described above and must not be used.
+- Solana wallet resolution is still SDK-local — core has no Solana key store yet.
+
 ## [3.12.0] - 2026-08-10
 
 ### Added — Router Core V3 is bundled into both chain clients (PR #25, reviewed and hardened)

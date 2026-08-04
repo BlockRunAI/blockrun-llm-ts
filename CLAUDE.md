@@ -48,6 +48,8 @@ src/
 ## Key dependencies
 
 - `@blockrun/router-core` — bundled, product-neutral smart model routing
+- `@blockrun/core` — Shared kernel; owns Base wallet resolution, discovery, and adoption
+  so this SDK, the `blockrun` CLI, and clawrouter-codex read the same wallet
 - `viem` — Ethereum interaction
 - `bs58` — Base58 encoding (Solana)
 - Optional: `@anthropic-ai/sdk`, `@solana/web3.js`, `@solana/spl-token`
