@@ -1109,6 +1109,20 @@ export class BlockrunError extends Error {
   }
 }
 
+/**
+ * Thrown by a helper whose upstream endpoint no longer exists.
+ *
+ * Kept as a throwing method rather than deleted so upgrading does not break
+ * imports or property access — the failure is explicit and immediate instead of
+ * a round trip that returns 410/404.
+ */
+export class RetiredEndpointError extends BlockrunError {
+  constructor(message: string) {
+    super(message);
+    this.name = "RetiredEndpointError";
+  }
+}
+
 export class PaymentError extends BlockrunError {
   constructor(message: string) {
     super(message);
