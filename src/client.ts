@@ -40,6 +40,7 @@ import {
   type OnrampResult,
   APIError,
   PaymentError,
+  RetiredEndpointError,
 } from "./types";
 // NOTE: @blockrun/clawrouter is loaded lazily inside smartChat() (see below),
 // not imported at module top level. It is the model-routing engine and is only
@@ -1507,22 +1508,43 @@ export class LLMClient {
   // ── PM convenience helpers (Predexon v2) ─────────────────────────────────
   // Thin wrappers over pm() / pmQuery() for the most common v2 endpoints.
 
-  /** List canonical cross-venue markets (Predexon v2). Tier 1 ($0.001/call).
-   * Filter with venue, status, category, league, event_id, pagination_key. */
-  async pmMarkets(params?: Record<string, string>): Promise<Record<string, unknown>> {
-    return this.pm("markets", params);
+  /** RETIRED — `/v1/pm/markets` no longer exists.
+   *
+   * Predexon sunset market matching on 2026-07-20 and the whole canonical layer
+   * went with it, so this path returns 410 upstream. Use
+   * `pm("markets/search", { q })` for cross-venue lookups.
+   *
+   * Kept as a throwing stub rather than deleted so upgrading does not break
+   * property access; it throws before any network I/O.
+   *
+   * @throws {RetiredEndpointError} always. */
+  async pmMarkets(_params?: Record<string, string>): Promise<Record<string, unknown>> {
+    throw new RetiredEndpointError(
+      "/v1/pm/markets was sunset by Predexon on 2026-07-20 (upstream 410). " +
+        'Use pm("markets/search", { q }) for cross-venue lookups.',
+    );
   }
 
-  /** List venue-native executable listings flattened across canonical markets
-   * (Predexon v2). Tier 1 ($0.001/call). */
-  async pmListings(params?: Record<string, string>): Promise<Record<string, unknown>> {
-    return this.pm("markets/listings", params);
+  /** RETIRED — `/v1/pm/markets/listings` no longer exists (410, sunset
+   * 2026-07-20 with market matching). Use `pm("markets/search", { q })`.
+   *
+   * @throws {RetiredEndpointError} always. */
+  async pmListings(_params?: Record<string, string>): Promise<Record<string, unknown>> {
+    throw new RetiredEndpointError(
+      "/v1/pm/markets/listings was sunset by Predexon on 2026-07-20 (upstream 410). " +
+        'Use pm("markets/search", { q }) for cross-venue lookups.',
+    );
   }
 
-  /** Resolve a canonical Predexon outcome ID to its market context and venue
-   * listings. Tier 1 ($0.001/call). */
-  async pmOutcome(predexonId: string): Promise<Record<string, unknown>> {
-    return this.pm(`outcomes/${predexonId}`);
+  /** RETIRED — `/v1/pm/outcomes/{predexonId}` no longer exists (410, sunset
+   * 2026-07-20 with market matching). Use `pm("markets/search", { q })`.
+   *
+   * @throws {RetiredEndpointError} always. */
+  async pmOutcome(_predexonId: string): Promise<Record<string, unknown>> {
+    throw new RetiredEndpointError(
+      "/v1/pm/outcomes/{predexon_id} was sunset by Predexon on 2026-07-20 (upstream 410). " +
+        'Use pm("markets/search", { q }) for cross-venue lookups.',
+    );
   }
 
   /** Polymarket markets with cursor-based keyset pagination (use pagination_key).
@@ -1537,13 +1559,19 @@ export class LLMClient {
     return this.pm("polymarket/events/keyset", params);
   }
 
-  /** List available sports categories. Tier 1 ($0.001/call). */
+  /** List available sports categories. Tier 1 ($0.001/call).
+   *
+   * NOTE: upstream returns 500 for every `sports/*` path as of 2026-08-04.
+   * The route still resolves, so this works again the moment Predexon restores
+   * it, but do not build on it yet. */
   async pmSportsCategories(): Promise<Record<string, unknown>> {
     return this.pm("sports/categories");
   }
 
   /** List sports markets grouped by game. Filter with league, sport_type,
-   * status, venue. Tier 1 ($0.001/call). */
+   * status, venue. Tier 1 ($0.001/call).
+   *
+   * NOTE: upstream returns 500 for every `sports/*` path as of 2026-08-04. */
   async pmSportsMarkets(params?: Record<string, string>): Promise<Record<string, unknown>> {
     return this.pm("sports/markets", params);
   }
