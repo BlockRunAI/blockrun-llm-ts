@@ -11,15 +11,19 @@ function temporaryHome(): string {
   return home;
 }
 
+/**
+ * Base wallet resolution lives in @blockrun/core, which resolves its own paths and
+ * honours BLOCKRUN_HOME. Mocking `os.homedir()` only redirects this package's own
+ * module graph, so it would leave core reading the real home directory — point core
+ * at the fixture instead.
+ */
 async function importWalletModule(home: string) {
   vi.resetModules();
-  vi.doMock("os", async () => {
-    const actual = await vi.importActual<typeof import("node:os")>("node:os");
-    return { ...actual, homedir: () => home };
-  });
+  process.env.BLOCKRUN_HOME = home;
   return import("../src/wallet.js");
 }
 
+/** Solana resolution is still SDK-local, so it reads os.homedir() directly. */
 async function importSolanaWalletModule(home: string) {
   vi.resetModules();
   vi.doMock("os", async () => {
@@ -29,8 +33,12 @@ async function importSolanaWalletModule(home: string) {
   return import("../src/solana-wallet.js");
 }
 
+const savedBlockrunHome = process.env.BLOCKRUN_HOME;
+
 afterEach(() => {
   vi.doUnmock("os");
+  if (savedBlockrunHome === undefined) delete process.env.BLOCKRUN_HOME;
+  else process.env.BLOCKRUN_HOME = savedBlockrunHome;
   while (temporaryHomes.length > 0) {
     fs.rmSync(temporaryHomes.pop()!, { recursive: true, force: true });
   }

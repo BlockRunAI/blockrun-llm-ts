@@ -5,20 +5,36 @@
  * - Auto-creates wallet if none exists
  * - Stores key securely at ~/.blockrun/.session
  * - Generates EIP-681 URIs for easy MetaMask funding
+ *
+ * Key resolution, discovery, and adoption are delegated to `@blockrun/core`, the
+ * shared kernel every BlockRun product reads. That is what guarantees this SDK,
+ * the `blockrun` CLI, and clawrouter-codex all resolve the SAME wallet — the
+ * behaviour is defined in one place instead of being re-implemented per product
+ * and drifting. The funding/messaging surface below stays here because it is
+ * specific to this SDK.
+ *
+ * Because path resolution now comes from core, `BLOCKRUN_HOME` overrides the base
+ * directory (previously this module always used the OS home directory).
  */
 
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
+import {
+  paths as corePaths,
+  resolveFromFiles,
+  resolvePrivateKey,
+  listDiscoveredWallets as coreListDiscoveredWallets,
+  scanWallets as coreScanWallets,
+  adoptWallet as coreAdoptWallet,
+} from "@blockrun/core";
 import * as fs from "fs";
-import * as path from "path";
-import * as os from "os";
 
 // USDC on Base contract address
 export const USDC_BASE_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 export const BASE_CHAIN_ID = "8453";
 
-// Wallet storage location
-const WALLET_DIR = path.join(os.homedir(), ".blockrun");
-const WALLET_FILE = path.join(WALLET_DIR, ".session");
+// Wallet storage location — resolved by core so every product agrees on it.
+const WALLET_DIR = corePaths().dir;
+const WALLET_FILE = corePaths().session;
 
 export interface WalletInfo {
   privateKey: string;
@@ -72,29 +88,7 @@ export function saveWallet(privateKey: string): string {
  * @returns Array of wallet objects with privateKey and address
  */
 export function scanWallets(): Array<{ privateKey: string; address: string; source: string }> {
-  const home = os.homedir();
-  const results: Array<{ mtime: number; privateKey: string; address: string; source: string }> = [];
-
-  try {
-    const entries = fs.readdirSync(home, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.name.startsWith(".") || !entry.isDirectory()) continue;
-      const walletFile = path.join(home, entry.name, "wallet.json");
-      if (!fs.existsSync(walletFile)) continue;
-      try {
-        const data = JSON.parse(fs.readFileSync(walletFile, "utf-8"));
-        const pk = data.privateKey || "";
-        const addr = data.address || "";
-        if (pk && addr) {
-          const mtime = fs.statSync(walletFile).mtimeMs;
-          results.push({ mtime, privateKey: pk, address: addr, source: walletFile });
-        }
-      } catch { continue; }
-    }
-  } catch { /* ignore */ }
-
-  results.sort((a, b) => b.mtime - a.mtime);
-  return results.map(({ privateKey, address, source }) => ({ privateKey, address, source }));
+  return coreScanWallets();
 }
 
 /**
@@ -109,18 +103,7 @@ export function scanWallets(): Array<{ privateKey: string; address: string; sour
  * @returns Discovered wallets as `{ address, source }`, most recent first
  */
 export function listDiscoveredWallets(): Array<{ address: string; source: string }> {
-  const listed: Array<{ address: string; source: string }> = [];
-  for (const entry of scanWallets()) {
-    try {
-      listed.push({
-        address: privateKeyToAccount(entry.privateKey as `0x${string}`).address,
-        source: entry.source,
-      });
-    } catch {
-      continue;
-    }
-  }
-  return listed;
+  return coreListDiscoveredWallets();
 }
 
 /**
@@ -139,36 +122,7 @@ export function listDiscoveredWallets(): Array<{ address: string; source: string
  * @throws If no discovered wallet derives to that address
  */
 export function importWallet(address: string): string {
-  const wanted = address.trim().toLowerCase();
-
-  for (const entry of scanWallets()) {
-    let derived: string;
-    try {
-      derived = privateKeyToAccount(entry.privateKey as `0x${string}`).address;
-    } catch {
-      continue;
-    }
-
-    if (derived.toLowerCase() !== wanted) continue;
-
-    // Preserve the outgoing wallet — it may hold funds.
-    if (fs.existsSync(WALLET_FILE)) {
-      const current = fs.readFileSync(WALLET_FILE, "utf-8").trim();
-      if (current && current !== entry.privateKey) {
-        const backup = path.join(WALLET_DIR, `.session.backup-${Math.floor(Date.now() / 1000)}`);
-        fs.writeFileSync(backup, current, { mode: 0o600 });
-      }
-    }
-
-    saveWallet(entry.privateKey);
-    return derived;
-  }
-
-  const available = listDiscoveredWallets().map((w) => w.address);
-  throw new Error(
-    `No discovered wallet controls ${address}. ` +
-      `Available: ${available.length ? available.join(", ") : "none"}`
-  );
+  return coreAdoptWallet(address).address;
 }
 
 /**
@@ -181,21 +135,10 @@ export function importWallet(address: string): string {
  * @returns Private key string or null if not found
  */
 export function loadWallet(): string | null {
-  // The canonical BlockRun wallet always wins. Do not implicitly adopt a
-  // wallet discovered in another application's private storage.
-  if (fs.existsSync(WALLET_FILE)) {
-    const key = fs.readFileSync(WALLET_FILE, "utf-8").trim();
-    if (key) return key;
-  }
-
-  // Check legacy wallet.key
-  const legacyFile = path.join(WALLET_DIR, "wallet.key");
-  if (fs.existsSync(legacyFile)) {
-    const key = fs.readFileSync(legacyFile, "utf-8").trim();
-    if (key) return key;
-  }
-
-  return null;
+  // The canonical BlockRun wallet always wins. core's resolveFromFiles() reads
+  // .session then legacy and never adopts a wallet discovered in another
+  // application's private storage.
+  return resolveFromFiles()?.privateKey ?? null;
 }
 
 /**
@@ -215,20 +158,13 @@ export function loadWallet(): string | null {
  * @returns Formatted notice, or null if nothing was discovered
  */
 export function formatWalletMigrationNotice(newAddress: string): string | null {
-  let discovered: Array<{ privateKey: string; address: string }>;
+  let addresses: string[];
   try {
-    discovered = scanWallets();
+    // core derives each address from the discovered key, so a planted file cannot
+    // name an address it has no key for and trick the user into importing it.
+    addresses = coreListDiscoveredWallets().map((w) => w.address);
   } catch {
     return null;
-  }
-
-  const addresses: string[] = [];
-  for (const entry of discovered) {
-    try {
-      addresses.push(privateKeyToAccount(entry.privateKey as `0x${string}`).address);
-    } catch {
-      continue;
-    }
   }
 
   if (addresses.length === 0) return null;
@@ -270,23 +206,13 @@ BLOCKRUN_WALLET_KEY=<private-key> for a single run without changing anything.
  * @returns WalletInfo with address, privateKey, and isNew flag
  */
 export function getOrCreateWallet(): WalletInfo {
-  // Check environment variable first
-  const envKey =
-    typeof process !== "undefined" && process.env
-      ? process.env.BLOCKRUN_WALLET_KEY || process.env.BASE_CHAIN_WALLET_KEY
-      : undefined;
-
-  if (envKey) {
-    const account = privateKeyToAccount(envKey as `0x${string}`);
-    return { address: account.address, privateKey: envKey, isNew: false };
-  }
-
-  // Check the canonical BlockRun wallet. scanWallets() is exposed for an
-  // explicit migration flow only and must not affect automatic selection.
-  const fileKey = loadWallet();
-  if (fileKey) {
-    const account = privateKeyToAccount(fileKey as `0x${string}`);
-    return { address: account.address, privateKey: fileKey, isNew: false };
+  // core's canonical order: env (BLOCKRUN_WALLET_KEY|BASE_CHAIN_WALLET_KEY) →
+  // .session → legacy. Discovered provider wallets are deliberately excluded;
+  // scanWallets() is exposed for the explicit migration flow only.
+  const resolved = resolvePrivateKey();
+  if (resolved) {
+    const account = privateKeyToAccount(resolved.privateKey);
+    return { address: account.address, privateKey: resolved.privateKey, isNew: false };
   }
 
   // Create new wallet
@@ -301,21 +227,8 @@ export function getOrCreateWallet(): WalletInfo {
  * @returns Wallet address or null if no wallet configured
  */
 export function getWalletAddress(): string | null {
-  const envKey =
-    typeof process !== "undefined" && process.env
-      ? process.env.BLOCKRUN_WALLET_KEY || process.env.BASE_CHAIN_WALLET_KEY
-      : undefined;
-
-  if (envKey) {
-    return privateKeyToAccount(envKey as `0x${string}`).address;
-  }
-
-  const fileKey = loadWallet();
-  if (fileKey) {
-    return privateKeyToAccount(fileKey as `0x${string}`).address;
-  }
-
-  return null;
+  const resolved = resolvePrivateKey();
+  return resolved ? privateKeyToAccount(resolved.privateKey).address : null;
 }
 
 /**
