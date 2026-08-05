@@ -1,6 +1,6 @@
 # @blockrun/llm (TypeScript SDK)
 
-> **@blockrun/llm** is a TypeScript/Node.js SDK for accessing <!-- br:models.chatVisible -->66<!-- /br:models.chatVisible --> large language models (GPT-5, Claude, Gemini, Grok, DeepSeek, Kimi, and more) with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required — your wallet signature is your authentication. Supports **streaming**, smart routing, Base and Solana chains.
+> **@blockrun/llm** is a TypeScript/Node.js SDK for accessing <!-- br:models.chatVisible -->71<!-- /br:models.chatVisible --> large language models (GPT-5, Claude, Gemini, Grok, DeepSeek, Kimi, and more) with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required — your wallet signature is your authentication. Supports **streaming**, smart routing, Base and Solana chains.
 >
 > 🆓 **Includes 7 fully-free NVIDIA-hosted models** (5 visible in `/v1/models`, 2 hidden but directly callable) — DeepSeek V4 Flash (1M context), Nemotron Nano Omni (vision), Qwen3 Coder, Llama 4, Mistral, plus the gpt-oss pair. Zero USDC, no rate-limit gimmicks. Use `routingProfile: 'free'` or call any `nvidia/*` model directly.
 
@@ -263,7 +263,7 @@ const reply = await client.chat('nvidia/deepseek-v4-flash', 'hello', {
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `free` | NVIDIA free tier — smart-routes across <!-- br:models.free -->8<!-- /br:models.free --> models (DeepSeek V4 Flash, Nemotron Nano Omni, Qwen3, Llama 4, Mistral, plus 2 hidden gpt-oss) | Zero-cost testing, dev, prod |
+| `free` | NVIDIA free tier — smart-routes across <!-- br:models.free -->6<!-- /br:models.free --> models (DeepSeek V4 Flash, Nemotron Nano Omni, Qwen3, Llama 4, Mistral, plus 2 hidden gpt-oss) | Zero-cost testing, dev, prod |
 | `eco` | Cheapest models per tier (DeepSeek, xAI) | Cost-sensitive production |
 | `auto` | Best balance of cost/quality (default) | General use |
 | `premium` | Top-tier models (OpenAI, Anthropic) | Quality-critical tasks |
@@ -883,7 +883,7 @@ const premium = await client.smartChat('Write a legal brief', { routingProfile: 
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `free` | NVIDIA free tier (<!-- br:models.free -->8<!-- /br:models.free --> models, smart-routed) | Zero-cost testing, dev, prod |
+| `free` | NVIDIA free tier (<!-- br:models.free -->6<!-- /br:models.free --> models, smart-routed) | Zero-cost testing, dev, prod |
 | `eco` | Budget-optimized | Cost-sensitive workloads |
 | `auto` | Intelligent routing (default) | General use |
 | `premium` | Best quality models | Critical tasks |
