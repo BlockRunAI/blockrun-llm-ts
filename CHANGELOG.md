@@ -2,6 +2,27 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.10.0] - 2026-08-08
+
+### Changed — the Solana packages are optional PEER dependencies now
+
+`@solana/web3.js` and `@solana/spl-token` move from `optionalDependencies` to `peerDependencies` + `peerDependenciesMeta.optional`. npm installs optional dependencies automatically; it does not install optional peers. That is the whole point.
+
+**Why:** `@solana/spl-token` pulls `@solana/buffer-layout-utils` → `bigint-buffer`, whose native `toBigIntLE()` carries an unpatched buffer overflow ([GHSA-3gc7-fjrx-p6mg](https://github.com/advisories/GHSA-3gc7-fjrx-p6mg)). There is no fixed release anywhere: 1.1.5 is the last publish, from 2019, and `@trufflesuite/bigint-buffer@1.1.10` ships **byte-identical** `src/bigint-buffer.c` — the fork exists for prebuild reasons, not security, so overriding onto it would launder the advisory without fixing anything.
+
+As an optional *dependency* it reached the lockfile of every consumer, including projects that only ever pay on Base and never touch a Solana code path. As an optional *peer* it reaches only the projects that ask for it. Verified by installing the packed tarball into a clean project: **3.9.0 pulls `bigint-buffer`; 3.10.0 pulls neither it nor `@solana/spl-token`.**
+
+**Migration — if you make Solana payments, install the two packages explicitly:**
+
+```bash
+npm install @solana/web3.js @solana/spl-token
+```
+
+Base/EVM-only consumers do nothing and get a smaller tree. This mirrors what 3.6.0 already did to `@blockrun/clawrouter` for the same reason.
+
+- New `src/solana-deps.ts` wraps the three lazy `await import()` sites. A missing peer now throws an error naming the package, the exact install command, and why it is not automatic, instead of a bare `ERR_MODULE_NOT_FOUND` surfacing from inside a payment call.
+- `@anthropic-ai/sdk` deliberately stays an `optionalDependency`: `anthropic-compat.ts` uses it in **type** positions (`import('@anthropic-ai/sdk').default`), so consumers without it installed would fail to typecheck the shipped `.d.ts`. The Solana packages have no such type exposure.
+
 ## [3.9.0] - 2026-07-28
 
 ### Added

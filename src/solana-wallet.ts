@@ -5,6 +5,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import { loadSolanaWeb3 } from "./solana-deps.js";
 
 const WALLET_DIR = path.join(os.homedir(), ".blockrun");
 const SOLANA_WALLET_FILE = path.join(WALLET_DIR, ".solana-session");
@@ -22,7 +23,7 @@ export interface SolanaWalletInfo {
  * and ESM consumers don't trip over esbuild's __require shim.
  */
 export async function createSolanaWallet(): Promise<{ address: string; privateKey: string }> {
-  const { Keypair } = await import("@solana/web3.js");
+  const { Keypair } = await loadSolanaWeb3("Solana wallet operations");
   const bs58 = await import("bs58");
   const keypair = Keypair.generate();
   return {
@@ -102,7 +103,7 @@ export async function solanaKeyToBytes(privateKey: string): Promise<Uint8Array> 
  * Get Solana public key (address) from bs58 private key.
  */
 export async function solanaPublicKey(privateKey: string): Promise<string> {
-  const { Keypair } = await import("@solana/web3.js");
+  const { Keypair } = await loadSolanaWeb3("Solana wallet operations");
   const bytes = await solanaKeyToBytes(privateKey);
   return Keypair.fromSecretKey(bytes).publicKey.toBase58();
 }

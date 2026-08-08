@@ -7,6 +7,7 @@
 
 import { signTypedData } from "viem/accounts";
 import type { PaymentRequired, ResourceInfo } from "./types";
+import { loadSolanaWeb3, loadSplToken } from "./solana-deps.js";
 
 // Chain and token constants
 export const BASE_CHAIN_ID = 8453;
@@ -327,10 +328,20 @@ export async function createSolanaPaymentPayload(
   feePayer: string,
   options: CreateSolanaPaymentOptions = {}
 ): Promise<string> {
-  // Dynamic import to avoid bundling Solana deps when not needed
-  const { Connection, PublicKey, TransactionMessage, VersionedTransaction, ComputeBudgetProgram } = await import("@solana/web3.js");
-  const { getAssociatedTokenAddress, createTransferCheckedInstruction } = await import("@solana/spl-token");
-  const { Keypair } = await import("@solana/web3.js");
+  // Dynamic import to avoid bundling Solana deps when not needed. These are
+  // optional PEER dependencies — npm does not install them, so the loaders turn
+  // a bare ERR_MODULE_NOT_FOUND into an actionable message.
+  const {
+    Connection,
+    PublicKey,
+    TransactionMessage,
+    VersionedTransaction,
+    ComputeBudgetProgram,
+    Keypair,
+  } = await loadSolanaWeb3("createSolanaPaymentPayload()");
+  const { getAssociatedTokenAddress, createTransferCheckedInstruction } = await loadSplToken(
+    "createSolanaPaymentPayload()"
+  );
 
   const rpcUrl = options.rpcUrl || "https://sol.blockrun.ai/api/v1/solana/rpc";
   const connection = options.rpcHeaders
