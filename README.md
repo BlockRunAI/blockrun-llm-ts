@@ -21,13 +21,28 @@
 ## Installation
 
 ```bash
-# Base and Solana support (optional Solana deps auto-installed)
+# Base / EVM payments — nothing else needed
 npm install @blockrun/llm
 # or
 pnpm add @blockrun/llm
 # or
 yarn add @blockrun/llm
 ```
+
+**Solana payments** need two more packages. They are optional peer dependencies,
+so npm will not install them for you:
+
+```bash
+npm install @blockrun/llm @solana/web3.js @solana/spl-token
+```
+
+Why they are not automatic: `@solana/spl-token` pulls in `bigint-buffer`, whose
+native `toBigIntLE()` has an unpatched buffer overflow
+([GHSA-3gc7-fjrx-p6mg](https://github.com/advisories/GHSA-3gc7-fjrx-p6mg)) with no
+fixed release anywhere. As an optional *dependency* it landed in the lockfile of
+every consumer, including projects that only ever pay on Base. As an optional
+*peer* it reaches only the projects that ask for Solana. Calling a Solana path
+without them throws an error naming the exact install command.
 
 ## Quick Start (Base - Default)
 
