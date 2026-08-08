@@ -873,7 +873,7 @@ const response2 = await client.chat('anthropic/claude-sonnet-4', 'Write a haiku'
 
 ### Smart Routing (ClawRouter)
 
-Save up to <!-- br:savings.autoVsBaselinePct -->87<!-- /br:savings.autoVsBaselinePct -->% on inference costs with intelligent model routing. ClawRouter uses a <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions -->-dimension rule-based scoring algorithm to select the cheapest model that can handle your request (<1ms, 100% local).
+Save up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% on inference costs with intelligent model routing. ClawRouter uses a <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions -->-dimension rule-based scoring algorithm to select the cheapest model that can handle your request (<1ms, 100% local).
 
 ```typescript
 import { LLMClient } from '@blockrun/llm';
@@ -1442,7 +1442,7 @@ The `AnthropicClient` wraps the official `@anthropic-ai/sdk` with a custom fetch
 When you make an API call, the SDK automatically handles x402 payment. It signs a USDC transaction locally using your wallet private key (which never leaves your machine), and includes the payment proof in the request header. Settlement is non-custodial and instant on Base or Solana.
 
 ### What is smart routing / ClawRouter?
-ClawRouter is a built-in smart routing engine that analyzes your request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions and automatically picks the cheapest model capable of handling it. Routing happens locally in under 1ms. It can save up to <!-- br:savings.autoVsBaselinePct -->87<!-- /br:savings.autoVsBaselinePct -->% on LLM costs compared to using premium models for every request.
+ClawRouter is a built-in smart routing engine that analyzes your request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions and automatically picks the cheapest model capable of handling it. Routing happens locally in under 1ms. It can save up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% on LLM costs compared to using premium models for every request.
 
 ### Does it support streaming?
 Yes — as of v1.6.1. Use `client.chatCompletionStream()` for native streaming or `stream: true` in the OpenAI-compatible client. Payment is handled automatically: the SDK signs USDC payment before streaming begins, and caches payment requirements per model so subsequent calls skip the 402 round-trip (~200ms faster).
