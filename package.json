@@ -55,8 +55,7 @@
     "@anthropic-ai/sdk": "^0.39.0"
   },
   "devDependencies": {
-    "@blockrun/clawrouter": "^0.12.244",
-    "@blockrun/router-core": "https://codeload.github.com/BlockRunAI/router-core/tar.gz/6a790ebec60161825bbc8c4093fd221006b4e5fb",
+    "@blockrun/router-core": "https://codeload.github.com/BlockRunAI/router-core/tar.gz/d4308049348e11e17ed08a254676a34949be80f9",
     "@eslint/js": "^9.39.4",
     "@types/node": "^20.19.41",
     "eslint": "^9.39.4",
@@ -77,14 +76,10 @@
   },
   "packageManager": "pnpm@9.15.4",
   "peerDependencies": {
-    "@blockrun/clawrouter": "^0.12.242",
     "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.4"
   },
   "peerDependenciesMeta": {
-    "@blockrun/clawrouter": {
-      "optional": true
-    },
     "@solana/spl-token": {
       "optional": true
     },

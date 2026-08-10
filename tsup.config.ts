@@ -14,7 +14,6 @@ export default defineConfig({
   },
   clean: true,
   external: [
-    "@blockrun/clawrouter",
     "@anthropic-ai/sdk",
     "@solana/web3.js",
     "@solana/spl-token",
