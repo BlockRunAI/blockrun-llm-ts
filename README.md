@@ -1,11 +1,30 @@
 # @blockrun/llm (TypeScript SDK)
 
-> **@blockrun/llm** is a TypeScript/Node.js SDK for accessing <!-- br:models.chatVisible -->71<!-- /br:models.chatVisible --> large language models (GPT-5, Claude, Gemini, Grok, DeepSeek, Kimi, and more) with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required — your wallet signature is your authentication. Supports **streaming**, smart routing, Base and Solana chains.
+> **@blockrun/llm** is a TypeScript/Node.js SDK that **cuts your LLM bill by up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->%**. Its built-in smart router ([ClawRouter](https://github.com/BlockRunAI/ClawRouter)) classifies every request locally in <1ms and routes it to the cheapest of <!-- br:models.chatVisible -->71<!-- /br:models.chatVisible --> models (GPT-5, Claude, Gemini, Grok, DeepSeek, Kimi, and more) that can actually handle it — then pays for exactly that one request in USDC via x402. No API keys, no subscriptions, no vendor lock-in: your wallet signature is your authentication. **Streaming**, Base and Solana.
 >
 > 🆓 **Includes <!-- br:models.free -->6<!-- /br:models.free --> fully-free NVIDIA-hosted models** (plus the hidden gpt-oss pair, directly callable) — DeepSeek V4 Flash (1M context), Nemotron Nano Omni (multimodal), Mistral Nemotron, Step 3.7 Flash, and the Nemotron Nano pair. Zero USDC, no rate-limit gimmicks. Call any `nvidia/*` model directly, or use `routingProfile: 'eco'` — its portfolio ranks the free tier first.
 
 [![npm](https://img.shields.io/npm/v/@blockrun/llm.svg)](https://www.npmjs.com/package/@blockrun/llm)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+## Your Bill, Before and After
+
+One line. The router does the rest:
+
+```typescript
+import { LLMClient } from '@blockrun/llm';
+
+const client = new LLMClient();
+
+const r = await client.smartChat('Prove step by step that the sum of two odd integers is even.');
+console.log(r.model);            // 'deepseek/deepseek-v4-pro' — the right model, not the $75/M flagship
+console.log(r.routing.savings);  // 0.96 — this exact request cost 96% less than pinning the baseline
+console.log(r.response);         // the proof
+```
+
+**<!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% cheaper than pinning Claude Opus 5** across a realistic workload on the default `auto` profile, **<!-- br:savings.ecoVsBaselinePct -->98<!-- /br:savings.ecoVsBaselinePct -->%** on `eco` — and eco's first stop is the free tier, so simple requests cost $0.00 outright. Not an "up to" figure: the baseline, workload mix, and token ratio are published in [`savings-mix.json`](https://github.com/BlockRunAI/blockrun/blob/main/src/brand/savings-mix.json) so anyone can recompute the claim. Details in [Smart Routing](#smart-routing-clawrouter).
+
+Prefer to pick models yourself? Every model is one `chat()` call away — but then the savings are on you.
 
 ## Supported Chains
 
@@ -50,10 +69,17 @@ without them throws an error naming the exact install command.
 import { LLMClient } from '@blockrun/llm';
 
 const client = new LLMClient();  // Uses BASE_CHAIN_WALLET_KEY (never sent to server)
+
+// Recommended: let the router pick the cheapest capable model
+const result = await client.smartChat('Hello!');
+
+// Or pin a model yourself
 const response = await client.chat('openai/gpt-4o', 'Hello!');
 ```
 
-That's it. The SDK handles x402 payment automatically.
+That's it. The SDK handles x402 payment automatically — and `smartChat()`
+keeps the bill down on every request. (`smartChat()` needs the optional
+routing peer: `npm install @blockrun/clawrouter`.)
 
 ## `BlockrunClient` — the universal primitive (recommended for new code)
 
@@ -1520,7 +1546,7 @@ The `AnthropicClient` wraps the official `@anthropic-ai/sdk` with a custom fetch
 ## Frequently Asked Questions
 
 ### What is @blockrun/llm?
-@blockrun/llm is a TypeScript SDK that provides pay-per-request access to 40+ large language models from OpenAI, Anthropic, Google, xAI, DeepSeek, Moonshot, and more. It uses the x402 protocol for automatic USDC micropayments — no API keys, no subscriptions, no vendor lock-in.
+@blockrun/llm is a TypeScript SDK that cuts LLM costs by up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% with built-in smart routing: every request is routed to the cheapest of <!-- br:models.chatVisible -->71<!-- /br:models.chatVisible --> models (OpenAI, Anthropic, Google, xAI, DeepSeek, Moonshot, and more) that can handle it, then paid per-request in USDC via the x402 protocol — no API keys, no subscriptions, no vendor lock-in.
 
 ### How does payment work?
 When you make an API call, the SDK automatically handles x402 payment. It signs a USDC transaction locally using your wallet private key (which never leaves your machine), and includes the payment proof in the request header. Settlement is non-custodial and instant on Base or Solana.
