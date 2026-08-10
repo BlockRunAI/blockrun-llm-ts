@@ -29,10 +29,6 @@ import {
   type Spending,
   type SmartChatOptions,
   type SmartChatResponse,
-  type RoutingDecision,
-  type RoutingProfile,
-  type RoutingTier,
-  type RoutingTierConfig,
   type SearchResult,
   type SearchOptions,
   type ExaSearchOptions,
@@ -51,38 +47,20 @@ import {
 // consumer that uses only the wallet / payment / chat helpers never loads it,
 // so a broken or absent router build cannot break importing this SDK.
 
-// Model pricing type for ClawRouter (matches @blockrun/clawrouter internal type)
-type ModelPricing = {
-  inputPrice: number;  // per 1M tokens
-  outputPrice: number; // per 1M tokens
-};
+// Model pricing rates per 1M tokens, in router-core's shape so the map we
+// build feeds route() directly.
+type ModelPricing = import("@blockrun/router-core").ModelPricing;
 
-// Structural view of the '@blockrun/clawrouter' surface smartChat() uses.
-// Since v0.12.242 the published package's .d.ts re-exports these from
-// '@blockrun/router-core', which is inlined into its bundle at build time and
-// never installed in consumer trees — so `typeof import("@blockrun/clawrouter")`
-// resolves to `any` here. Typing the dynamic import against this interface
-// keeps smartChat() type-safe independent of that declaration gap.
+// The '@blockrun/clawrouter' surface smartChat() uses, typed from
+// '@blockrun/router-core' — the engine ClawRouter inlines into its bundle,
+// which this repo pins (devDependency) to the same immutable commit its
+// published build uses. clawrouter's own .d.ts re-exports from router-core
+// without shipping it, so `typeof import("@blockrun/clawrouter")` resolves to
+// `any` in consumer trees; router-core is where the real declarations live.
 interface ClawRouterRoutingModule {
-  route(
-    prompt: string,
-    systemPrompt: string | undefined,
-    maxOutputTokens: number,
-    options: {
-      config: ClawRouterRoutingConfig;
-      modelPricing: Map<string, ModelPricing>;
-      routingProfile?: RoutingProfile;
-    },
-  ): RoutingDecision;
-  DEFAULT_ROUTING_CONFIG: ClawRouterRoutingConfig;
-  getFallbackChain(
-    tier: RoutingTier,
-    tiers: Record<RoutingTier, RoutingTierConfig>,
-  ): string[];
-}
-
-interface ClawRouterRoutingConfig {
-  tiers: Record<RoutingTier, RoutingTierConfig>;
+  route: typeof import("@blockrun/router-core").route;
+  DEFAULT_ROUTING_CONFIG: typeof import("@blockrun/router-core").DEFAULT_ROUTING_CONFIG;
+  getFallbackChain: typeof import("@blockrun/router-core").getFallbackChain;
 }
 
 /**

@@ -33,6 +33,9 @@ importers:
       '@blockrun/clawrouter':
         specifier: ^0.12.244
         version: 0.12.244(@solana/spl-token@0.4.14(@solana/web3.js@1.98.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6))(@solana/sysvars@5.5.1(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))(@solana/web3.js@1.98.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76)
+      '@blockrun/router-core':
+        specifier: https://codeload.github.com/BlockRunAI/router-core/tar.gz/6a790ebec60161825bbc8c4093fd221006b4e5fb
+        version: https://codeload.github.com/BlockRunAI/router-core/tar.gz/6a790ebec60161825bbc8c4093fd221006b4e5fb
       '@eslint/js':
         specifier: ^9.39.4
         version: 9.39.4
@@ -91,6 +94,11 @@ packages:
         optional: true
       '@solana/web3.js':
         optional: true
+
+  '@blockrun/router-core@https://codeload.github.com/BlockRunAI/router-core/tar.gz/6a790ebec60161825bbc8c4093fd221006b4e5fb':
+    resolution: {tarball: https://codeload.github.com/BlockRunAI/router-core/tar.gz/6a790ebec60161825bbc8c4093fd221006b4e5fb}
+    version: 0.1.0
+    engines: {node: '>=20.19.0'}
 
   '@esbuild/aix-ppc64@0.21.5':
     resolution: {integrity: sha512-1SDgH6ZSPTlggy1yI6+Dbkiz8xzpHJEVAlF/AM1tHPLsf5STom9rwtjE4hKAF20FfXXNTFqEYXyJNWh1GiZedQ==}
@@ -2660,6 +2668,8 @@ snapshots:
       - typescript
       - utf-8-validate
       - zod
+
+  '@blockrun/router-core@https://codeload.github.com/BlockRunAI/router-core/tar.gz/6a790ebec60161825bbc8c4093fd221006b4e5fb': {}
 
   '@esbuild/aix-ppc64@0.21.5':
     optional: true
