@@ -236,9 +236,18 @@ Every paid request is a real on-chain USDC transfer — look up your wallet addr
 
 ## Smart Routing (ClawRouter)
 
-Let the SDK automatically pick the cheapest capable model for each request.
+Let the SDK automatically pick the cheapest capable model for each request — **<!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% cheaper than pinning Claude Opus 5** for the same traffic on `auto`, **<!-- br:savings.ecoVsBaselinePct -->98<!-- /br:savings.ecoVsBaselinePct -->%** on `eco`.
 
-Smart routing is powered by [ClawRouter](https://github.com/BlockRunAI/ClawRouter), an **optional peer dependency** — install it alongside the SDK:
+Not an "up to" figure. The baseline, the workload mix and the token ratio are
+published in [`savings-mix.json`](https://github.com/BlockRunAI/blockrun/blob/main/src/brand/savings-mix.json),
+priced against the live catalog, so anyone can recompute the claim and get the
+same answer.
+
+Smart routing is powered by [ClawRouter](https://github.com/BlockRunAI/ClawRouter) —
+the open-source, agent-first LLM router: wallet signatures instead of API keys,
+USDC micropayments instead of credit cards, and <1ms fully-local routing with
+zero external calls. In this SDK it is an **optional peer dependency** —
+install it alongside the SDK:
 
 ```bash
 npm install @blockrun/clawrouter
@@ -289,12 +298,12 @@ const reply = await client.chat('nvidia/deepseek-v4-flash', 'hello', {
 
 ### Routing Profiles
 
-| Profile | Description | Best For |
-|---------|-------------|----------|
-| `free` | NVIDIA free tier — smart-routes across <!-- br:models.free -->6<!-- /br:models.free --> models (DeepSeek V4 Flash, Nemotron Nano Omni, Qwen3, Llama 4, Mistral, plus 2 hidden gpt-oss) | Zero-cost testing, dev, prod |
-| `eco` | Cheapest models per tier (DeepSeek, xAI) | Cost-sensitive production |
-| `auto` | Best balance of cost/quality (default) | General use |
-| `premium` | Top-tier models (OpenAI, Anthropic) | Quality-critical tasks |
+| Profile | Strategy | Savings vs Opus 5 | Best For |
+|---------|----------|-------------------|----------|
+| `free` | NVIDIA free tier — smart-routes across <!-- br:models.free -->6<!-- /br:models.free --> models (DeepSeek V4 Flash, Nemotron Nano Omni, Qwen3, Llama 4, Mistral, plus 2 hidden gpt-oss) | **100%** | Zero-cost testing, dev, prod |
+| `eco` | Cheapest capable model per tier | **<!-- br:savings.ecoVsBaselinePct -->98<!-- /br:savings.ecoVsBaselinePct -->%** | Cost-sensitive production |
+| `auto` | Best balance of cost/quality (default) | **<!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->%** | General use |
+| `premium` | Top-tier models (OpenAI, Anthropic) | 0% | Quality-critical tasks |
 
 ```typescript
 // Use premium models for complex tasks
@@ -317,16 +326,25 @@ The winner becomes `routing.model`; the rest surface as `routing.candidates`
 and feed SmartChat's transient-error fallback chain. Routing stays 100% local
 and deterministic — <1ms, no extra model call, no network hop.
 
-Classification still maps to one of four tiers (`routing.tier`), which the
-rules strategy (`routing.method: 'rules'`, the rollback lever) routes with
-directly:
+Classification still maps to one of four tiers (`routing.tier`). Each
+tier × profile has a designated primary (what the rules strategy —
+`routing.method: 'rules'`, the rollback lever — routes to directly, and what
+anchors the portfolio's candidate pool):
 
-| Tier | Example Tasks |
-|------|---------------|
-| SIMPLE | "What is 2+2?", definitions |
-| MEDIUM | Code snippets, explanations |
-| COMPLEX | Architecture, long documents |
-| REASONING | Proofs, multi-step reasoning |
+| Tier | Example Tasks | ECO | AUTO | PREMIUM |
+|------|---------------|-----|------|---------|
+| SIMPLE | "What is 2+2?", definitions | free/gpt-oss-120b † (**FREE**) | gemini-2.5-flash ($0.30/$2.50) | kimi-k2.7 † ($0.95/$4.00) |
+| MEDIUM | Code snippets, explanations | gemini-3.1-flash-lite ($0.25/$1.50) | kimi-k2.7 ($0.95/$4.00) | gpt-5.3-codex ($1.75/$14.00) |
+| COMPLEX | Architecture, long documents | gemini-3.1-flash-lite ($0.25/$1.50) | gemini-3.1-pro ($2/$12) | claude-fable-5 ($10/$50) |
+| REASONING | Proofs, multi-step reasoning | grok-4-1-fast-reasoning † ($0.20/$0.50) | grok-4-1-fast-reasoning † ($0.20/$0.50) | claude-sonnet-4.6 ($3/$15) |
+
+† Withheld from `/v1/models` — the router still calls it by direct ID, but you
+will not find it on the public pricing page. The published savings claim is
+priced on visible models only.
+
+This table mirrors ClawRouter's tier configs at the version this SDK pins;
+the [ClawRouter README](https://github.com/BlockRunAI/ClawRouter#how-it-works)
+is the live source of truth as models and prices move.
 
 ### Routing Metadata Reference
 
@@ -361,6 +379,15 @@ published build inlines, and shipped **inlined in this SDK's declaration
 files**. You do not need to install `@blockrun/clawrouter` (or router-core,
 which is not on npm) for your project to typecheck against these types; the
 runtime package is only needed to actually call `smartChat()`.
+
+### Going Deeper
+
+- [ClawRouter](https://github.com/BlockRunAI/ClawRouter) — the router itself: OpenClaw plugin, standalone proxy for Cursor / continue.dev / any OpenAI-compatible client, Telegram integration
+- [Routing profiles in depth](https://github.com/BlockRunAI/ClawRouter/blob/main/docs/routing-profiles.md) — ECO / AUTO / PREMIUM details
+- [How the routing engine works](https://github.com/BlockRunAI/ClawRouter/blob/main/docs/smart-llm-router-14-dimension-classifier.md) — the classifier, dimension by dimension
+- [Router benchmark](https://github.com/BlockRunAI/ClawRouter/blob/main/docs/llm-router-benchmark-46-models-sub-1ms-routing.md) — sub-1ms routing across the catalog
+- [ClawRouter vs OpenRouter](https://github.com/BlockRunAI/ClawRouter/blob/main/docs/clawrouter-vs-openrouter-llm-routing-comparison.md) — head-to-head comparison
+- [`@blockrun/router-core`](https://github.com/BlockRunAI/router-core) — the deterministic routing engine both share
 
 ## Available Models
 
