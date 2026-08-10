@@ -281,11 +281,11 @@ console.log(complex.routing.fallbacks);  // ['anthropic/claude-opus-4.7', ...]
 
 ### Automatic Fallback on Transient Errors
 
-`smartChat()` populates a tier-specific fallback chain and `chat()` /
-`chatCompletion()` walk it automatically when the primary model returns a
-transient error — timeouts, network failures, or 5xx responses (502/503/504/
-522/524). 4xx errors and `PaymentError` propagate immediately so wallet /
-auth issues surface fast.
+`smartChat()` populates a fallback chain from the portfolio ranking and
+`chat()` / `chatCompletion()` walk it automatically when the primary model
+returns a transient error — timeouts, network failures, 429 rate limits, or
+5xx responses (502/503/504/522/524). Other 4xx errors and `PaymentError`
+propagate immediately so wallet / auth issues surface fast.
 
 ```typescript
 // Manually pass a fallback chain to chat() / chatCompletion()
@@ -360,7 +360,7 @@ picked:
 | `taskType` | Portfolio task classification: `'chat'`, `'extraction'`, `'code_edit'`, `'code_agent'`, `'tool_agent'`, `'debug'`, `'reasoning'`, `'reasoning_math'`, `'long_context'`, `'vision'`, … |
 | `candidates` | Ordered, capability-eligible models ranked by the portfolio router; the first entry is `model` |
 | `candidateScores` | Per-candidate score breakdown (`quality` / `cost` / `speed` / `reliability`), ordered with `candidates` |
-| `fallbacks` | The chain `chat()` walks on transient errors — `candidates` minus the primary and any model the catalog doesn't price (SDK-computed) |
+| `fallbacks` | The chain `chat()` walks on transient errors (timeout / network / 429 / 5xx) — `candidates` minus the primary, with ClawRouter's proxy-namespace `free/*` ids mapped to their `nvidia/*` gateway ids (SDK-computed) |
 | `savings` | 0–1 fraction saved vs the premium baseline |
 | `costEstimate` / `baselineCost` | Estimated cost of the pick vs that baseline, in USD |
 | `confidence` | Sigmoid-calibrated classifier confidence, 0–1 |

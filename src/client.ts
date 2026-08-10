@@ -66,16 +66,17 @@ interface ClawRouterRoutingModule {
 /**
  * Whether an error is the kind of transient failure that warrants trying
  * the next model in a fallback chain. True for: AbortError (timeout),
- * generic network/fetch errors, and APIError with 5xx status codes
- * typically associated with upstream availability problems.
+ * generic network/fetch errors, 429 (this upstream is saturated — the next
+ * model in the chain is a different upstream), and APIError with 5xx status
+ * codes typically associated with upstream availability problems.
  *
- * False for: 4xx client errors (bad request, auth) and PaymentError —
+ * False for: other 4xx client errors (bad request, auth) and PaymentError —
  * those aren't "swap upstream and retry" situations.
  */
 function isTransientError(err: unknown): boolean {
   if (err instanceof PaymentError) return false;
   if (err instanceof APIError) {
-    return [502, 503, 504, 522, 524].includes(err.statusCode);
+    return [429, 502, 503, 504, 522, 524].includes(err.statusCode);
   }
   // AbortError (timeout) or generic TypeError: failed to fetch
   if (err instanceof Error) {
@@ -342,25 +343,44 @@ export class LLMClient {
       routingProfile: options?.routingProfile,
     });
 
-    // Compute the fallback chain — the models chat() will walk to if the
-    // primary returns a transient error (timeout, network, 5xx). The
-    // portfolio router (default since ClawRouter v0.12.242) already ranks an
-    // ordered, capability-eligible candidate list, so prefer that ordering;
-    // rules-mode decisions and older routers fall back to the tier chain.
-    // Either way: exclude the primary itself, and skip models the catalog
-    // doesn't price (so we don't end up calling something we can't estimate
-    // cost for).
+    // Turn the routing decision into a gateway-callable model list. The
+    // portfolio router (default since ClawRouter v0.12.242) ranks an ordered,
+    // capability-eligible candidate list, so prefer that ordering; rules-mode
+    // decisions and older routers fall back to the tier chain (which also
+    // leads with its primary).
+    //
+    // The ranking is trusted as-is — including ids withheld from /v1/models
+    // (e.g. moonshot/kimi-k2.7), which the gateway serves by direct id and
+    // the router prices from its own catalog snapshot — with one exception:
+    // ClawRouter names its free tier `free/<model>`, a namespace resolved by
+    // its own proxy. The gateway's ids are `nvidia/<model>`, and an unmapped
+    // `free/*` id draws a hard 400 — which is not a transient error, so the
+    // fallback chain would never engage. Map `free/*` to its catalog-listed
+    // `nvidia/*` id, and drop it when there is none (the withheld gpt-oss
+    // pair): those ids exist only behind ClawRouter's proxy.
+    // The first surviving entry is the model actually called; the rest become
+    // the transient-error fallback chain.
     const tierConfigs = decision.tierConfigs ?? DEFAULT_ROUTING_CONFIG.tiers;
-    const fullChain = decision.candidates?.length
+    const ranked = decision.candidates?.length
       ? decision.candidates
-      : getFallbackChain(decision.tier, tierConfigs);
-    const fallbacks = fullChain.filter(
-      (id) => id !== decision.model && modelPricing.has(id),
-    );
+      : [decision.model, ...getFallbackChain(decision.tier, tierConfigs)];
+    const callable: string[] = [];
+    for (const id of ranked) {
+      const resolved = !id.startsWith("free/")
+        ? id
+        : modelPricing.has(`nvidia/${id.slice(5)}`)
+          ? `nvidia/${id.slice(5)}`
+          : null;
+      if (resolved && !callable.includes(resolved)) callable.push(resolved);
+    }
+    // If nothing survived (a chain of proxy-only free ids), call the router's
+    // pick as-is so the gateway's error surfaces rather than an invented one.
+    const primary = callable[0] ?? decision.model;
+    const fallbacks = callable.slice(1);
 
     // Make the chat request with the selected model, passing the fallback
     // chain so transient failures fall over instead of bubbling up.
-    const response = await this.chat(decision.model, prompt, {
+    const response = await this.chat(primary, prompt, {
       system: options?.system,
       maxTokens: options?.maxTokens,
       temperature: options?.temperature,
@@ -374,8 +394,8 @@ export class LLMClient {
 
     return {
       response,
-      model: decision.model,
-      routing: { ...decision, fallbacks },
+      model: primary,
+      routing: { ...decision, model: primary, fallbacks },
     };
   }
 
