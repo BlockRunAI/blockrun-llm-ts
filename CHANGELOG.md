@@ -16,6 +16,7 @@ ClawRouter v0.12.242 made the deterministic portfolio router the Auto default an
 ### Docs
 
 - README's routing sections describe the portfolio strategy (hard capability filters, ranked candidates, rules rollback) instead of the retired "14-dimension rule-based classifier" prose, and the stale 87% savings examples follow the published 88% number.
+- The router finally has real documentation. README: `smartChat()`'s requirement on the optional `@blockrun/clawrouter` peer is stated where the feature is taught (it was documented nowhere — the FAQ even called the router "built-in"), plus a full `RoutingDecision` field reference and a note that the routing types ship inlined (no install needed to typecheck). CONTRIBUTING: the two-package bump procedure — re-pin the router-core tarball to the commit the new ClawRouter pins, then prove `dist/index.d.ts` kept zero router-core references. CLAUDE.md / AGENTS.md: the smartChat architecture (lazy load, portfolio candidates → fallback chain, derived types) for humans and agents working on the repo.
 
 ## [3.10.0] - 2026-08-08
 

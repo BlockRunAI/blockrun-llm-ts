@@ -68,13 +68,36 @@ pnpm typecheck          # TypeScript check
 - `LLMClient` - Main client class
 - `chat()` - Simple chat method
 - `chatCompletion()` - Full OpenAI-compatible response
+- `smartChat()` - Automatic model routing via ClawRouter (see below)
 - Automatic x402 payment handling
+
+## Smart Routing (smartChat)
+
+- `client.smartChat(prompt, { routingProfile? })` picks the cheapest capable
+  model per request. Profiles: `'eco' | 'auto' | 'premium'` (default `auto`).
+- Requires the **optional peer** `@blockrun/clawrouter` (`npm install
+  @blockrun/clawrouter`). It is lazy-loaded inside `smartChat()` only — every
+  other API works without it, and a missing router throws an actionable error
+  instead of breaking the import.
+- The default strategy is ClawRouter's deterministic portfolio router
+  (`routing.method: 'portfolio'`): local classification, hard capability
+  filters, ranked `routing.candidates`. The SDK builds `routing.fallbacks`
+  from that ranking (primary excluded, unpriced models filtered) and `chat()`
+  walks it automatically on transient errors (timeout / network / 5xx).
+- Routing types (`RoutingDecision`, `RoutingTier`, `RoutingTaskType`,
+  `RoutingTierConfig`) are derived from `@blockrun/router-core` — a
+  devDependency pinned to the commit ClawRouter's published build inlines —
+  and ship inlined in the SDK's `.d.ts`, so consumers typecheck without
+  installing either package. Do not hand-edit these shapes; re-pin the
+  router-core commit whenever `@blockrun/clawrouter` is bumped (procedure in
+  CONTRIBUTING.md).
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `client.ts` | Main `LLMClient` with `chat()`, `chatCompletion()`, `listModels()` |
+| `client.ts` | Main `LLMClient` with `chat()`, `chatCompletion()`, `smartChat()`, `listModels()` |
+| `tsup.config.ts` | Build config; `dts.resolve` inlines `@blockrun/router-core` types into the shipped `.d.ts` |
 | `x402.ts` | x402 payment protocol implementation |
 | `wallet.ts` | Multi-network wallet support (Base via viem, Solana via @solana/web3.js) |
 | `validation.ts` | Input validation for keys, URLs, parameters |
