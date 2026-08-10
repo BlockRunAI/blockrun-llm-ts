@@ -4,6 +4,10 @@ All notable changes to @blockrun/llm will be documented in this file.
 
 ## [Unreleased]
 
+### Docs — README rebuilt to flagship-repo standard
+
+Centered hero (tagline: "Cut your LLM bill by 88%. One line of TypeScript."), full badge wall (npm version/downloads, CI, license, Node, TypeScript, Base/Solana/x402/Telegram), a quick-links row, a "Why This SDK" feature grid, a "How It Compares" table vs OpenAI SDK / OpenRouter / LiteLLM, a mermaid routing-flow diagram in the Smart Routing section, and a star CTA footer. Onboarding order fixed: Install → Quick Start → Try It Free → Smart Routing now flow uninterrupted — the `BlockrunClient` deep-dive and payment mechanics moved below the selling points, and the Solana peer-dependency rationale and chain matrix collapsed into `<details>`.
+
 ### Docs — the router's savings lead the README
 
 The router is the product's main selling point, but the README's opening pitch mentioned "smart routing" as the sixth feature in a list and the Quick Start's first line taught pinning `openai/gpt-4o` by hand. Repositioned: the headline now opens with "cuts your LLM bill by up to 88%", a hero demo right under the badges shows a real routed request with its measured 96% saving (taken verbatim from the v3.11.0 E2E run), Quick Start leads with `smartChat()`, and the FAQ / AGENTS.md pitches follow suit. All numbers marker-managed.
