@@ -1,15 +1,29 @@
-# @blockrun/llm (TypeScript SDK)
+<div align="center">
 
-> **@blockrun/llm** is a TypeScript/Node.js SDK that **cuts your LLM bill by up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->%**. Its built-in smart router ([ClawRouter](https://github.com/BlockRunAI/ClawRouter)) classifies every request locally in <1ms and routes it to the cheapest of <!-- br:models.chatVisible -->71<!-- /br:models.chatVisible --> models (GPT-5, Claude, Gemini, Grok, DeepSeek, Kimi, and more) that can actually handle it — then pays for exactly that one request in USDC via x402. No API keys, no subscriptions, no vendor lock-in: your wallet signature is your authentication. **Streaming**, Base and Solana.
->
-> 🆓 **Includes <!-- br:models.free -->6<!-- /br:models.free --> fully-free NVIDIA-hosted models** (plus the hidden gpt-oss pair, directly callable) — DeepSeek V4 Flash (1M context), Nemotron Nano Omni (multimodal), Mistral Nemotron, Step 3.7 Flash, and the Nemotron Nano pair. Zero USDC, no rate-limit gimmicks. Call any `nvidia/*` model directly, or use `routingProfile: 'eco'` — its portfolio ranks the free tier first.
+# @blockrun/llm
 
-[![npm](https://img.shields.io/npm/v/@blockrun/llm.svg)](https://www.npmjs.com/package/@blockrun/llm)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+### Cut your LLM bill by <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->%. One line of TypeScript.
 
-## Your Bill, Before and After
+The smart-routing SDK for <!-- br:models.chatVisible -->71<!-- /br:models.chatVisible --> models — every request goes to the cheapest model that can handle it,
+paid per-request in USDC. No API keys. No subscriptions. No vendor lock-in.
 
-One line. The router does the rest:
+[![npm](https://img.shields.io/npm/v/@blockrun/llm.svg?style=flat-square)](https://www.npmjs.com/package/@blockrun/llm)
+[![npm downloads](https://img.shields.io/npm/dm/@blockrun/llm.svg?style=flat-square)](https://www.npmjs.com/package/@blockrun/llm)
+[![CI](https://img.shields.io/github/actions/workflow/status/BlockRunAI/blockrun-llm-ts/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/BlockRunAI/blockrun-llm-ts/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
+[![Node](https://img.shields.io/badge/Node-%E2%89%A520-brightgreen?style=flat-square&logo=node.js&logoColor=white)](package.json)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript&logoColor=white)](tsconfig.json)
+
+[![Base Network](https://img.shields.io/badge/Base-USDC-0052FF?style=flat-square&logo=coinbase&logoColor=white)](https://base.org)
+[![Solana](https://img.shields.io/badge/Solana-USDC-9945FF?style=flat-square&logo=solana&logoColor=white)](https://solana.com)
+[![x402](https://img.shields.io/badge/x402-micropayments-orange?style=flat-square)](https://x402.org)
+[![Telegram](https://img.shields.io/badge/Telegram-Community-26A5E4?style=flat-square&logo=telegram)](https://t.me/blockrunAI)
+
+[Website](https://blockrun.ai) · [Models & Pricing](https://blockrun.ai/models) · [ClawRouter](https://github.com/BlockRunAI/ClawRouter) · [Python SDK](https://github.com/BlockRunAI/blockrun-llm) · [Telegram](https://t.me/blockrunAI)
+
+</div>
+
+---
 
 ```typescript
 import { LLMClient } from '@blockrun/llm';
@@ -24,32 +38,36 @@ console.log(r.response);         // the proof
 
 **<!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% cheaper than pinning Claude Opus 5** across a realistic workload on the default `auto` profile, **<!-- br:savings.ecoVsBaselinePct -->98<!-- /br:savings.ecoVsBaselinePct -->%** on `eco` — and eco's first stop is the free tier, so simple requests cost $0.00 outright. Not an "up to" figure: the baseline, workload mix, and token ratio are published in [`savings-mix.json`](https://github.com/BlockRunAI/blockrun/blob/main/src/brand/savings-mix.json) so anyone can recompute the claim. Details in [Smart Routing](#smart-routing-clawrouter).
 
-Prefer to pick models yourself? Every model is one `chat()` call away — but then the savings are on you.
+## Why This SDK
 
-## Supported Chains
+- 🧠 **Smart routing that pays for itself** — [ClawRouter](https://github.com/BlockRunAI/ClawRouter) classifies every request locally in <1ms across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions and routes to the cheapest capable model. The main event.
+- 🆓 **<!-- br:models.free -->6<!-- /br:models.free --> genuinely free models** — NVIDIA-hosted, $0 in and out, incl. 1M-context DeepSeek V4 Flash and a multimodal Nemotron. No rate-limit gimmicks.
+- 🔐 **No API keys** — your wallet signature is your authentication. No accounts, no dashboards, no key rotation.
+- 💸 **Pay per request in USDC** — x402 micropayments on Base or Solana. $5 covers thousands of requests; agents can pay their own way.
+- 🛡️ **Automatic failover** — transient errors (timeouts, 429, 5xx) walk the router's ranked fallback chain instead of failing your request.
+- ⚡ **Streaming, OpenAI & Anthropic compat** — drop-in `chat.completions` / `messages` layers, SSE streaming, strict TypeScript.
+- 🎨 **Beyond chat** — image, video, music, speech, live search, prediction markets, crypto data, and 40-chain RPC through the same wallet.
 
-| Chain | Network | Payment | Status |
-|-------|---------|---------|--------|
-| **Base** | Base Mainnet (Chain ID: 8453) | USDC | Primary |
-| **Base Testnet** | Base Sepolia (Chain ID: 84532) | Testnet USDC | Development |
-| **Solana** | Solana Mainnet | USDC (SPL) | New |
+## How It Compares
 
-
-**Protocol:** x402 v2 (CDP Facilitator)
+|                    | OpenAI SDK     | OpenRouter        | LiteLLM          | **@blockrun/llm**                                                       |
+| ------------------ | -------------- | ----------------- | ---------------- | ----------------------------------------------------------------------- |
+| **Cost routing**   | ✗ one vendor   | Manual selection  | Manual selection | **Automatic — <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% cheaper** |
+| **Models**         | GPT only       | 200+              | 100+ (BYO keys)  | **<!-- br:models.chatVisible -->71<!-- /br:models.chatVisible -->, one wallet** |
+| **Free tier**      | ✗              | Rate-limited      | ✗                | **<!-- br:models.free -->6<!-- /br:models.free --> models, no signup**  |
+| **Auth**           | API key        | Account + API key | Your API keys    | **Wallet signature**                                                    |
+| **Payment**        | Card + invoice | Credit card       | BYO keys         | **USDC per-request**                                                    |
+| **Agent-ready**    | ✗              | ✗                 | ✗                | **✓ — agents fund their own wallet**                                    |
 
 ## Installation
 
 ```bash
-# Base / EVM payments — nothing else needed
-npm install @blockrun/llm
-# or
-pnpm add @blockrun/llm
-# or
-yarn add @blockrun/llm
+npm install @blockrun/llm          # Base / EVM payments — nothing else needed
+npm install @blockrun/clawrouter   # optional: the smart router behind smartChat()
 ```
 
-**Solana payments** need two more packages. They are optional peer dependencies,
-so npm will not install them for you:
+<details>
+<summary><strong>Solana payments</strong> — two more optional peers</summary>
 
 ```bash
 npm install @blockrun/llm @solana/web3.js @solana/spl-token
@@ -62,6 +80,21 @@ fixed release anywhere. As an optional *dependency* it landed in the lockfile of
 every consumer, including projects that only ever pay on Base. As an optional
 *peer* it reaches only the projects that ask for Solana. Calling a Solana path
 without them throws an error naming the exact install command.
+
+</details>
+
+<details>
+<summary><strong>Supported chains</strong> — Base (primary), Base Sepolia, Solana</summary>
+
+| Chain | Network | Payment | Status |
+|-------|---------|---------|--------|
+| **Base** | Base Mainnet (Chain ID: 8453) | USDC | Primary |
+| **Base Testnet** | Base Sepolia (Chain ID: 84532) | Testnet USDC | Development |
+| **Solana** | Solana Mainnet | USDC (SPL) | New |
+
+**Protocol:** x402 v2 (CDP Facilitator)
+
+</details>
 
 ## Quick Start (Base - Default)
 
@@ -80,53 +113,6 @@ const response = await client.chat('openai/gpt-4o', 'Hello!');
 That's it. The SDK handles x402 payment automatically — and `smartChat()`
 keeps the bill down on every request. (`smartChat()` needs the optional
 routing peer: `npm install @blockrun/clawrouter`.)
-
-## `BlockrunClient` — the universal primitive (recommended for new code)
-
-Starting in `2.5.0`, the SDK ships a single `BlockrunClient` that speaks to
-**every** BlockRun endpoint over x402. New API surfaces are intended to be
-distributed as [Claude Code skills](https://github.com/anthropics/skills)
-that drive this primitive — no SDK release required to add an endpoint.
-
-```typescript
-import { BlockrunClient } from '@blockrun/llm';
-
-const br = new BlockrunClient();
-
-// Sync GET — Surf market price (Tier 1, $0.001)
-const btc = await br.get('/v1/surf/market/price', { symbol: 'BTC' });
-
-// Sync POST — raw on-chain SQL (Tier 3, $0.020)
-const rows = await br.post('/v1/surf/onchain/sql', {
-  query: 'SELECT block_number FROM ethereum.blocks ORDER BY block_number DESC LIMIT 1',
-});
-
-// Submit + poll — long-running video gen (settled only on completion)
-const video = await br.poll('/v1/videos/generations', {
-  model: 'xai/grok-imagine-video',
-  prompt: 'a red apple spinning',
-});
-
-// Streaming SSE — chat completions
-for await (const chunk of br.stream('/v1/chat/completions', {
-  model: 'anthropic/claude-sonnet-4-6',
-  messages: [{ role: 'user', content: 'Hi' }],
-  stream: true,
-})) {
-  process.stdout.write(chunk?.choices?.[0]?.delta?.content ?? '');
-}
-```
-
-Four call shapes cover every endpoint type:
-- `get<T>(path, params?)` — synchronous GET (price, ranking, list, news)
-- `post<T>(path, body?)` — synchronous POST (on-chain SQL, search)
-- `poll<T>(path, body?, { budgetMs, intervalMs })` — submit + poll (image, video, music, voice)
-- `stream<T>(path, body?)` — async iterator over SSE chunks (chat)
-
-The per-API client classes (`LLMClient`, `ImageClient`, `VideoClient`,
-`PortraitClient`, `VoiceClient`, `MusicClient`, `SearchClient`, `RpcClient`,
-`PriceClient`, `SurfClient`) all remain — they will be soft-deprecated in 2.6 (rewritten as
-shims over `BlockrunClient`) and removed in 3.0.
 
 ### Try It Free (No USDC Required)
 
@@ -179,89 +165,6 @@ console.log(response);
 ```
 
 Set `SOLANA_WALLET_KEY` to your bs58-encoded Solana secret key. Payments are automatic via x402 — your key never leaves your machine.
-
-## Solana Support
-
-Pay for AI calls with Solana USDC via [sol.blockrun.ai](https://sol.blockrun.ai):
-
-```typescript
-import { SolanaLLMClient } from '@blockrun/llm';
-
-// SOLANA_WALLET_KEY env var (bs58-encoded Solana secret key)
-const client = new SolanaLLMClient();
-
-// Or pass key directly
-const client2 = new SolanaLLMClient({ privateKey: 'your-bs58-solana-key' });
-
-// Same API as LLMClient
-const response = await client.chat('openai/gpt-4o', 'gm Solana');
-console.log(response);
-
-// Live Search with Grok (Solana payment)
-const tweet = await client.chat('xai/grok-3-mini', 'What is trending on X?', { search: true });
-```
-
-**Setup:**
-1. Export your Solana wallet key: `export SOLANA_WALLET_KEY="your-bs58-key"`
-2. Fund with USDC on Solana mainnet
-3. That's it — payments are automatic via x402
-
-**Supported endpoint:** `https://sol.blockrun.ai/api`
-**Payment:** Solana USDC (SPL, mainnet)
-
-## How Payment Works
-
-No API keys, no subscription. You hold USDC in your own wallet, and **every request pays for itself** with an on-chain micropayment. Two phases:
-
-### Phase 1 — Fund your wallet once
-
-You only do this when your balance runs low. Three ways to get USDC into your wallet:
-
-- **(a) Buy with a card (Base USDC).** Call the new `onramp()` method to mint a one-time Coinbase Onramp link, then open the returned `pay.coinbase.com` URL — pay by card/bank in 60+ fiat currencies and the USDC lands in your wallet. The call itself is **free**. Onramp is **Base-only** (buying USDC with a card always lands Base USDC), and the funding address must equal your signing wallet:
-
-  ```typescript
-  const { url } = await client.onramp(client.getWalletAddress());
-  console.log(`Fund your wallet: ${url}`);  // single-use, expires ~5 min — mint at click time
-  ```
-
-- **(b) Transfer existing USDC.** Send USDC you already hold to your wallet address (`client.getWalletAddress()`). On Base, send Base USDC; on Solana (`SolanaLLMClient`), send Solana SPL USDC.
-
-- **(c) Skip funding entirely.** Use the free NVIDIA models (e.g. `nvidia/deepseek-v4-flash`) — every call is **$0**, no balance required.
-
-$5 of USDC covers thousands of paid requests. Check your balance any time:
-
-```typescript
-const balance = await client.getBalance();        // USDC on Base
-console.log(`Balance: $${balance.toFixed(2)} USDC`);
-```
-
-### Phase 2 — Every request pays itself (automatic x402)
-
-You just call e.g. `client.chat(...)` — the payment is invisible:
-
-1. You send a request to BlockRun's API.
-2. The gateway returns **402 Payment Required** with the price.
-3. The SDK signs a USDC payment **locally** (EIP-712) — on **Base** for `LLMClient`, on **Solana** for `SolanaLLMClient` — using your wallet key.
-4. The request is retried automatically with the payment proof.
-5. The gateway settles on-chain and returns the AI response.
-
-One call, no separate pay step. Free NVIDIA models settle at **$0** (no payment signed).
-
-### Track spend and verify settlements
-
-```typescript
-import { getCostSummary } from '@blockrun/llm';
-
-const spent = client.getSpending();               // this session
-console.log(`Spent $${spent.totalUsd.toFixed(4)} across ${spent.calls} calls`);
-
-const summary = getCostSummary();                  // across sessions (~/.blockrun/data/costs.jsonl)
-console.log(`Lifetime: $${summary.totalUsd.toFixed(2)} over ${summary.calls} calls`);
-```
-
-Every paid request is a real on-chain USDC transfer — look up your wallet address on [Basescan](https://basescan.org) (or a Solana explorer) to verify each settlement independently.
-
-**Non-custodial by design: your private key never leaves your machine** — it is only used for local signing, and no funds are ever held by BlockRun.
 
 ## Smart Routing (ClawRouter)
 
@@ -348,6 +251,16 @@ console.log(result.model);  // 'anthropic/claude-opus-4.7'
 
 ### How ClawRouter Works
 
+```mermaid
+flowchart LR
+    A["prompt"] --> B["classify locally<br/>15 dimensions, &lt;1ms"]
+    B --> C["hard filters<br/>tools · vision · context ·<br/>structured output"]
+    C --> D["rank portfolio<br/>quality · cost · speed ·<br/>reliability"]
+    D --> E["cheapest capable model<br/>+ ranked fallback chain"]
+    E --> F["x402 USDC payment<br/>for this request only"]
+    F --> G["response<br/>+ full routing metadata"]
+```
+
 Since ClawRouter v0.12.242, Auto uses the deterministic **Router v3.4 portfolio
 strategy**: it classifies the task shape locally across
 <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions
@@ -420,6 +333,136 @@ runtime package is only needed to actually call `smartChat()`.
 - [Router benchmark](https://github.com/BlockRunAI/ClawRouter/blob/main/docs/llm-router-benchmark-46-models-sub-1ms-routing.md) — sub-1ms routing across the catalog
 - [ClawRouter vs OpenRouter](https://github.com/BlockRunAI/ClawRouter/blob/main/docs/clawrouter-vs-openrouter-llm-routing-comparison.md) — head-to-head comparison
 - [`@blockrun/router-core`](https://github.com/BlockRunAI/router-core) — the deterministic routing engine both share
+
+## Solana Support
+
+Pay for AI calls with Solana USDC via [sol.blockrun.ai](https://sol.blockrun.ai):
+
+```typescript
+import { SolanaLLMClient } from '@blockrun/llm';
+
+// SOLANA_WALLET_KEY env var (bs58-encoded Solana secret key)
+const client = new SolanaLLMClient();
+
+// Or pass key directly
+const client2 = new SolanaLLMClient({ privateKey: 'your-bs58-solana-key' });
+
+// Same API as LLMClient
+const response = await client.chat('openai/gpt-4o', 'gm Solana');
+console.log(response);
+
+// Live Search with Grok (Solana payment)
+const tweet = await client.chat('xai/grok-3-mini', 'What is trending on X?', { search: true });
+```
+
+**Setup:**
+1. Export your Solana wallet key: `export SOLANA_WALLET_KEY="your-bs58-key"`
+2. Fund with USDC on Solana mainnet
+3. That's it — payments are automatic via x402
+
+**Supported endpoint:** `https://sol.blockrun.ai/api`
+**Payment:** Solana USDC (SPL, mainnet)
+
+## How Payment Works
+
+No API keys, no subscription. You hold USDC in your own wallet, and **every request pays for itself** with an on-chain micropayment. Two phases:
+
+### Phase 1 — Fund your wallet once
+
+You only do this when your balance runs low. Three ways to get USDC into your wallet:
+
+- **(a) Buy with a card (Base USDC).** Call the new `onramp()` method to mint a one-time Coinbase Onramp link, then open the returned `pay.coinbase.com` URL — pay by card/bank in 60+ fiat currencies and the USDC lands in your wallet. The call itself is **free**. Onramp is **Base-only** (buying USDC with a card always lands Base USDC), and the funding address must equal your signing wallet:
+
+  ```typescript
+  const { url } = await client.onramp(client.getWalletAddress());
+  console.log(`Fund your wallet: ${url}`);  // single-use, expires ~5 min — mint at click time
+  ```
+
+- **(b) Transfer existing USDC.** Send USDC you already hold to your wallet address (`client.getWalletAddress()`). On Base, send Base USDC; on Solana (`SolanaLLMClient`), send Solana SPL USDC.
+
+- **(c) Skip funding entirely.** Use the free NVIDIA models (e.g. `nvidia/deepseek-v4-flash`) — every call is **$0**, no balance required.
+
+$5 of USDC covers thousands of paid requests. Check your balance any time:
+
+```typescript
+const balance = await client.getBalance();        // USDC on Base
+console.log(`Balance: $${balance.toFixed(2)} USDC`);
+```
+
+### Phase 2 — Every request pays itself (automatic x402)
+
+You just call e.g. `client.chat(...)` — the payment is invisible:
+
+1. You send a request to BlockRun's API.
+2. The gateway returns **402 Payment Required** with the price.
+3. The SDK signs a USDC payment **locally** (EIP-712) — on **Base** for `LLMClient`, on **Solana** for `SolanaLLMClient` — using your wallet key.
+4. The request is retried automatically with the payment proof.
+5. The gateway settles on-chain and returns the AI response.
+
+One call, no separate pay step. Free NVIDIA models settle at **$0** (no payment signed).
+
+### Track spend and verify settlements
+
+```typescript
+import { getCostSummary } from '@blockrun/llm';
+
+const spent = client.getSpending();               // this session
+console.log(`Spent $${spent.totalUsd.toFixed(4)} across ${spent.calls} calls`);
+
+const summary = getCostSummary();                  // across sessions (~/.blockrun/data/costs.jsonl)
+console.log(`Lifetime: $${summary.totalUsd.toFixed(2)} over ${summary.calls} calls`);
+```
+
+Every paid request is a real on-chain USDC transfer — look up your wallet address on [Basescan](https://basescan.org) (or a Solana explorer) to verify each settlement independently.
+
+**Non-custodial by design: your private key never leaves your machine** — it is only used for local signing, and no funds are ever held by BlockRun.
+
+## `BlockrunClient` — the universal primitive (recommended for new code)
+
+Starting in `2.5.0`, the SDK ships a single `BlockrunClient` that speaks to
+**every** BlockRun endpoint over x402. New API surfaces are intended to be
+distributed as [Claude Code skills](https://github.com/anthropics/skills)
+that drive this primitive — no SDK release required to add an endpoint.
+
+```typescript
+import { BlockrunClient } from '@blockrun/llm';
+
+const br = new BlockrunClient();
+
+// Sync GET — Surf market price (Tier 1, $0.001)
+const btc = await br.get('/v1/surf/market/price', { symbol: 'BTC' });
+
+// Sync POST — raw on-chain SQL (Tier 3, $0.020)
+const rows = await br.post('/v1/surf/onchain/sql', {
+  query: 'SELECT block_number FROM ethereum.blocks ORDER BY block_number DESC LIMIT 1',
+});
+
+// Submit + poll — long-running video gen (settled only on completion)
+const video = await br.poll('/v1/videos/generations', {
+  model: 'xai/grok-imagine-video',
+  prompt: 'a red apple spinning',
+});
+
+// Streaming SSE — chat completions
+for await (const chunk of br.stream('/v1/chat/completions', {
+  model: 'anthropic/claude-sonnet-4-6',
+  messages: [{ role: 'user', content: 'Hi' }],
+  stream: true,
+})) {
+  process.stdout.write(chunk?.choices?.[0]?.delta?.content ?? '');
+}
+```
+
+Four call shapes cover every endpoint type:
+- `get<T>(path, params?)` — synchronous GET (price, ranking, list, news)
+- `post<T>(path, body?)` — synchronous POST (on-chain SQL, search)
+- `poll<T>(path, body?, { budgetMs, intervalMs })` — submit + poll (image, video, music, voice)
+- `stream<T>(path, body?)` — async iterator over SSE chunks (chat)
+
+The per-API client classes (`LLMClient`, `ImageClient`, `VideoClient`,
+`PortraitClient`, `VoiceClient`, `MusicClient`, `SearchClient`, `RpcClient`,
+`PriceClient`, `SurfClient`) all remain — they will be soft-deprecated in 2.6 (rewritten as
+shims over `BlockrunClient`) and removed in 3.0.
 
 ## Available Models
 
@@ -1562,6 +1605,16 @@ Pay only for what you use. Prices start at $0.0002 per request (GPT-5 Nano). The
 
 ### Does it support both Base and Solana?
 Yes. Use `LLMClient` for Base (EVM) payments and `SolanaLLMClient` for Solana payments. Same API, different payment chain.
+
+---
+
+<div align="center">
+
+**If the router just cut your bill, [give it a star ⭐](https://github.com/BlockRunAI/blockrun-llm-ts)** — it helps more agents pay less.
+
+[Website](https://blockrun.ai) · [Models & Pricing](https://blockrun.ai/models) · [ClawRouter](https://github.com/BlockRunAI/ClawRouter) · [Python SDK](https://github.com/BlockRunAI/blockrun-llm) · [Telegram](https://t.me/blockrunAI)
+
+</div>
 
 ## License
 
