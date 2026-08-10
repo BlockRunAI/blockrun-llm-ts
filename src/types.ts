@@ -385,9 +385,11 @@ export type RoutingTierConfig = CoreRoutingConfig["tiers"][CoreTier];
 
 export interface RoutingDecision extends CoreRoutingDecision {
   /**
-   * Remaining models with known pricing, in fallback order. `chat()`
-   * walks this list when the primary model hits a transient error
-   * (timeout, network, 5xx). Excludes the primary itself.
+   * Remaining gateway-callable models, in the router's ranked order.
+   * `chat()` walks this list when the primary model hits a transient error
+   * (timeout, network, 429, 5xx). Excludes the primary itself. ClawRouter's
+   * proxy-namespace `free/*` ids appear here as their `nvidia/*` gateway
+   * ids (or are dropped when the mapping is proxy-only).
    */
   fallbacks?: string[];
 }
