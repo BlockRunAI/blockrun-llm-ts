@@ -2,6 +2,25 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## Unreleased
+
+### Added — Router Core V3 is now built into both chain clients
+
+- The SDK bundles the product-neutral `@blockrun/router-core` implementation
+  pinned to commit `d430804`; users no longer install or load ClawRouter.
+- `blockrun/auto`, `blockrun/eco`, and `blockrun/premium` are accepted anywhere
+  a chat model is accepted, including full agent/tool turns and streaming.
+- `smartChatCompletion()` routes an OpenAI-compatible message/tool payload and
+  returns the complete local decision in `response.routing`.
+- Base and Solana now share the same constraint-first task classification,
+  catalog filtering, portfolio ranking, and transient fallback order. Routing
+  happens locally before the first x402 quote, so it adds no inference call.
+
+### Fixed
+
+- Base balance lookup now uses the valid PublicNode Base RPC hostname and a
+  working public fallback.
+
 ## [3.11.0] - 2026-08-10
 
 ### Changed — smartChat() synced to ClawRouter's Router v3.4 portfolio strategy

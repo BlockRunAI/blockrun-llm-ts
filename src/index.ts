@@ -136,6 +136,8 @@ export {
   type RoutingDecision,
   type SmartChatOptions,
   type SmartChatResponse,
+  type SmartChatCompletionOptions,
+  type SmartChatCompletionResponse,
   // Pyth market-data types
   type PriceCategory,
   type StockMarket,

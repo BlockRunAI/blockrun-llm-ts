@@ -234,17 +234,13 @@ Every paid request is a real on-chain USDC transfer — look up your wallet addr
 
 **Non-custodial by design: your private key never leaves your machine** — it is only used for local signing, and no funds are ever held by BlockRun.
 
-## Smart Routing (ClawRouter)
+## Smart Routing (Router Core V3)
 
 Let the SDK automatically pick the cheapest capable model for each request.
 
-Smart routing is powered by [ClawRouter](https://github.com/BlockRunAI/ClawRouter), an **optional peer dependency** — install it alongside the SDK:
-
-```bash
-npm install @blockrun/clawrouter
-```
-
-Only `smartChat()` needs it: every other API works without it, and the package is loaded lazily, so a missing or broken router can never break `import '@blockrun/llm'`. Calling `smartChat()` without it throws an error naming the package instead of a cryptic module-load failure.
+Smart routing is powered by the product-neutral
+[`@blockrun/router-core`](https://github.com/BlockRunAI/router-core) V3 engine.
+It is bundled into this SDK, so there is no separate router package to install.
 
 ```typescript
 import { LLMClient } from '@blockrun/llm';
@@ -268,6 +264,13 @@ console.log(complex.routing.candidates); // ranked, capability-eligible models
 
 // Inspect the fallback chain SmartChat will walk on transient errors.
 console.log(complex.routing.fallbacks);  // ['anthropic/claude-opus-4.7', ...]
+
+// Or use Auto as a normal model id for a complete agent/tool turn.
+const agentTurn = await client.chatCompletion('blockrun/auto', messages, {
+  tools,
+  toolChoice: 'auto',
+});
+console.log(agentTurn.routing?.taskType);
 ```
 
 ### Automatic Fallback on Transient Errors
@@ -305,10 +308,9 @@ const result = await client.smartChat(
 console.log(result.model);  // 'anthropic/claude-opus-4.7'
 ```
 
-### How ClawRouter Works
+### How Router Core V3 Works
 
-Since ClawRouter v0.12.242, Auto uses the deterministic **Router v3.4 portfolio
-strategy**: it classifies the task shape locally across
+Auto uses the deterministic **Router V3 portfolio strategy**: it classifies the task shape locally across
 <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions
 (token count, code presence, reasoning markers, technical/creative terms,
 agentic patterns, …), enforces tool / vision / structured-output / context
@@ -355,12 +357,9 @@ picked:
 
 `RoutingDecision`, `RoutingProfile`, `RoutingTier`, `RoutingTaskType`, and
 `RoutingTierConfig` are exported from `@blockrun/llm`. They are derived from
-[`@blockrun/router-core`](https://github.com/BlockRunAI/router-core) — the
-routing engine ClawRouter bundles — pinned to the exact commit ClawRouter's
-published build inlines, and shipped **inlined in this SDK's declaration
-files**. You do not need to install `@blockrun/clawrouter` (or router-core,
-which is not on npm) for your project to typecheck against these types; the
-runtime package is only needed to actually call `smartChat()`.
+[`@blockrun/router-core`](https://github.com/BlockRunAI/router-core), pinned to
+an immutable commit and shipped **inlined in this SDK's JavaScript and
+declaration files**. You do not need to install another routing package.
 
 ## Available Models
 
@@ -921,9 +920,9 @@ const response2 = await client.chat('anthropic/claude-sonnet-4', 'Write a haiku'
 });
 ```
 
-### Smart Routing (ClawRouter)
+### Smart Routing (Router Core V3)
 
-Save up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% on inference costs with intelligent model routing. ClawRouter's deterministic portfolio router (v3.4, default since ClawRouter v0.12.242) classifies each request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions, applies hard capability filters, and ranks the cheapest capable models (<1ms, 100% local). Requires the optional peer dependency: `npm install @blockrun/clawrouter`.
+Save up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% on inference costs with intelligent model routing. The bundled Router Core V3 classifies each request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions, applies hard capability filters, and ranks the eligible models locally without a second inference request.
 
 ```typescript
 import { LLMClient } from '@blockrun/llm';
@@ -1491,8 +1490,8 @@ The `AnthropicClient` wraps the official `@anthropic-ai/sdk` with a custom fetch
 ### How does payment work?
 When you make an API call, the SDK automatically handles x402 payment. It signs a USDC transaction locally using your wallet private key (which never leaves your machine), and includes the payment proof in the request header. Settlement is non-custodial and instant on Base or Solana.
 
-### What is smart routing / ClawRouter?
-ClawRouter is the SDK's smart routing engine, shipped as the optional `@blockrun/clawrouter` peer dependency (`npm install @blockrun/clawrouter` — only `smartChat()` needs it). It analyzes your request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions and automatically picks the cheapest model capable of handling it. Routing happens locally in under 1ms. It can save up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% on LLM costs compared to using premium models for every request.
+### What is smart routing / Router Core?
+Router Core V3 is bundled into the SDK. It analyzes the request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions, enforces tool/vision/context constraints, and ranks eligible models without another model call. Use `smartChat()`, `smartChatCompletion()`, or the `blockrun/auto` model alias; no routing peer dependency is required.
 
 ### Does it support streaming?
 Yes — as of v1.6.1. Use `client.chatCompletionStream()` for native streaming or `stream: true` in the OpenAI-compatible client. Payment is handled automatically: the SDK signs USDC payment before streaming begins, and caches payment requirements per model so subsequent calls skip the 402 round-trip (~200ms faster).
