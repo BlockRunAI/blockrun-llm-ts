@@ -4,7 +4,7 @@ Guidance for AI coding agents working with the BlockRun TypeScript SDK.
 
 ## Project Overview
 
-**@blockrun/llm** is a TypeScript SDK for pay-per-request access to AI models (GPT, Claude, Gemini, Grok) via x402 micropayments on Base and Solana. **Includes 6 fully-free NVIDIA-hosted models** — DeepSeek V4 Flash (1M ctx), Nemotron Nano Omni (multimodal), Mistral Nemotron, Step 3.7 Flash, and the Nemotron Nano pair — plus the hidden gpt-oss pair, directly callable. Access them by calling any `nvidia/*` model id directly, or via `routingProfile: 'eco'`, which ranks the free tier first. (There is no `'free'` routing profile — `routingProfile` accepts `'eco' | 'auto' | 'premium'`.)
+**@blockrun/llm** is a TypeScript SDK that **cuts LLM costs by up to 88%**: its built-in smart router (ClawRouter) picks the cheapest capable model for every request — locally, in <1ms — and pays per-request in USDC via x402 on Base or Solana. No API keys, no subscriptions. Use `smartChat()` for routed (cheapest) calls; `chat()` to pin a model. **Includes 6 fully-free NVIDIA-hosted models** — DeepSeek V4 Flash (1M ctx), Nemotron Nano Omni (multimodal), Mistral Nemotron, Step 3.7 Flash, and the Nemotron Nano pair — plus the hidden gpt-oss pair, directly callable. Access them by calling any `nvidia/*` model id directly, or via `routingProfile: 'eco'`, which ranks the free tier first. (There is no `'free'` routing profile — `routingProfile` accepts `'eco' | 'auto' | 'premium'`.)
 
 **Package:** `@blockrun/llm` (npm)
 **Node:** >=20

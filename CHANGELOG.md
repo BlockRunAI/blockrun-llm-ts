@@ -4,6 +4,10 @@ All notable changes to @blockrun/llm will be documented in this file.
 
 ## [Unreleased]
 
+### Docs — the router's savings lead the README
+
+The router is the product's main selling point, but the README's opening pitch mentioned "smart routing" as the sixth feature in a list and the Quick Start's first line taught pinning `openai/gpt-4o` by hand. Repositioned: the headline now opens with "cuts your LLM bill by up to 88%", a hero demo right under the badges shows a real routed request with its measured 96% saving (taken verbatim from the v3.11.0 E2E run), Quick Start leads with `smartChat()`, and the FAQ / AGENTS.md pitches follow suit. All numbers marker-managed.
+
 ### Docs — retire the `routingProfile: 'free'` claim, refresh the free-model catalog
 
 - README (three places) and AGENTS.md advertised `routingProfile: 'free'`, but `SmartChatOptions.routingProfile` has only ever accepted `'eco' | 'auto' | 'premium'` — the examples did not even typecheck, and `route()` treats an unknown profile as `auto`, silently routing to **paid** models. The docs now teach the two paths that actually exist: pin a `nvidia/*` model for guaranteed $0, or use `eco`, whose portfolio ranks the free NVIDIA tier first (verified live in the v3.11.0 E2E run: `nvidia/deepseek-v4-flash`, $0, 100% reported savings). Each spot also states explicitly that `/model free` belongs to ClawRouter's proxy, not to this SDK's router options.
