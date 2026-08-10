@@ -2,6 +2,13 @@
  * Type definitions for BlockRun LLM SDK
  */
 
+import type {
+  RoutingConfig as CoreRoutingConfig,
+  RoutingDecision as CoreRoutingDecision,
+  TaskType as CoreTaskType,
+  Tier as CoreTier,
+} from "@blockrun/router-core";
+
 // Tool calling types (OpenAI compatible)
 export interface FunctionDefinition {
   name: string;
@@ -354,70 +361,29 @@ export interface ChatCompletionOptions {
   fallbackModels?: string[];
 }
 
-// Smart routing types (ClawRouter integration)
+// Smart routing types (ClawRouter integration).
+//
+// Derived from '@blockrun/router-core' — the routing engine ClawRouter inlines
+// into its bundle, pinned here (devDependency) to the same immutable commit
+// its published build uses, so these types cannot drift from the runtime.
+// tsup's DTS bundling inlines the derived declarations into this package's
+// shipped .d.ts, so npm consumers install neither router-core nor clawrouter
+// to typecheck against this SDK. (`TierConfig` is not exported by router-core,
+// hence the indexed access.)
 export type RoutingProfile = "eco" | "auto" | "premium";
 
-export type RoutingTier = "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
+export type RoutingTier = CoreTier;
 
 /**
  * Request classification produced by the portfolio router (ClawRouter
  * v0.12.242+, Router v3.4). Present on decisions with `method: "portfolio"`.
  */
-export type RoutingTaskType =
-  | "chat"
-  | "extraction"
-  | "code_edit"
-  | "code_agent"
-  | "tool_agent"
-  | "tool_agent_parallel"
-  | "debug"
-  | "reasoning"
-  | "reasoning_mcq"
-  | "reasoning_math"
-  | "long_context"
-  | "vision";
+export type RoutingTaskType = CoreTaskType;
 
 /** Primary model + ordered fallbacks for one routing tier. */
-export interface RoutingTierConfig {
-  primary: string;
-  fallback: string[];
-}
+export type RoutingTierConfig = CoreRoutingConfig["tiers"][CoreTier];
 
-export interface RoutingDecision {
-  model: string;
-  tier: RoutingTier;
-  confidence: number;
-  /** "portfolio" is the Auto default since ClawRouter v0.12.242; "rules" is the rollback strategy. */
-  method: "rules" | "llm" | "portfolio";
-  reasoning: string;
-  costEstimate: number;
-  baselineCost: number;
-  savings: number; // 0-1 percentage
-  /** Routing profile applied by clawrouter (may include "agentic" on gateway responses). */
-  profile?: RoutingProfile | "agentic";
-  /** Score used when agentic routing is active. */
-  agenticScore?: number;
-  /** Tier configs the decision was made against — avoids re-deriving them from config. */
-  tierConfigs?: Record<RoutingTier, RoutingTierConfig>;
-  /**
-   * Ordered, capability-eligible candidates ranked by the portfolio router.
-   * The first entry is `model` itself. smartChat() prefers this ordering
-   * when building the fallback chain.
-   */
-  candidates?: string[];
-  /** Explainable request classification used by the portfolio router. */
-  taskType?: RoutingTaskType;
-  /** Router implementation that made the selection. */
-  routerVersion?: "v2-rules" | "v3-portfolio";
-  /** Explainable local portfolio score breakdown, ordered with `candidates`. */
-  candidateScores?: Array<{
-    model: string;
-    score: number;
-    quality: number;
-    cost: number;
-    speed: number;
-    reliability: number;
-  }>;
+export interface RoutingDecision extends CoreRoutingDecision {
   /**
    * Remaining models with known pricing, in fallback order. `chat()`
    * walks this list when the primary model hits a transient error

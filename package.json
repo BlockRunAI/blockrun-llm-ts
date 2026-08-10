@@ -18,8 +18,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format cjs,esm --dts --clean --external @blockrun/clawrouter --external @anthropic-ai/sdk --external @solana/web3.js --external @solana/spl-token --external bs58",
-    "dev": "tsup src/index.ts --format cjs,esm --dts --watch --external @blockrun/clawrouter --external @anthropic-ai/sdk --external @solana/web3.js --external @solana/spl-token --external bs58",
+    "build": "tsup",
+    "dev": "tsup --watch",
     "test": "vitest",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit"
@@ -56,6 +56,7 @@
   },
   "devDependencies": {
     "@blockrun/clawrouter": "^0.12.244",
+    "@blockrun/router-core": "https://codeload.github.com/BlockRunAI/router-core/tar.gz/6a790ebec60161825bbc8c4093fd221006b4e5fb",
     "@eslint/js": "^9.39.4",
     "@types/node": "^20.19.41",
     "eslint": "^9.39.4",
