@@ -247,11 +247,16 @@ const client = new LLMClient();
 const result = await client.smartChat('What is 2+2?');
 console.log(result.response);     // '4'
 console.log(result.model);        // 'moonshot/kimi-k2.5' (cheap, fast)
-console.log(`Saved ${(result.routing.savings * 100).toFixed(0)}%`); // 'Saved 87%'
+console.log(`Saved ${(result.routing.savings * 100).toFixed(0)}%`); // 'Saved 88%'
 
 // Complex reasoning task -> routes to reasoning model
 const complex = await client.smartChat('Prove the Riemann hypothesis step by step');
 console.log(complex.model);  // 'xai/grok-4-1-fast-reasoning'
+
+// Inspect how the request was classified and ranked (Router v3.4 portfolio).
+console.log(complex.routing.method);     // 'portfolio'
+console.log(complex.routing.taskType);   // 'reasoning'
+console.log(complex.routing.candidates); // ranked, capability-eligible models
 
 // Inspect the fallback chain SmartChat will walk on transient errors.
 console.log(complex.routing.fallbacks);  // ['anthropic/claude-opus-4.7', ...]
@@ -294,23 +299,26 @@ console.log(result.model);  // 'anthropic/claude-opus-4.7'
 
 ### How ClawRouter Works
 
-ClawRouter uses a 14-dimension rule-based classifier to analyze each request:
+Since ClawRouter v0.12.242, Auto uses the deterministic **Router v3.4 portfolio
+strategy**: it classifies the task shape locally across
+<!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions
+(token count, code presence, reasoning markers, technical/creative terms,
+agentic patterns, …), enforces tool / vision / structured-output / context
+constraints as **hard filters**, then ranks an ordered candidate portfolio.
+The winner becomes `routing.model`; the rest surface as `routing.candidates`
+and feed SmartChat's transient-error fallback chain. Routing stays 100% local
+and deterministic — <1ms, no extra model call, no network hop.
 
-- **Token count** - Short vs long prompts
-- **Code presence** - Programming keywords
-- **Reasoning markers** - "prove", "step by step", etc.
-- **Technical terms** - Architecture, optimization, etc.
-- **Creative markers** - Story, poem, brainstorm, etc.
-- **Agentic patterns** - Multi-step, tool use indicators
+Classification still maps to one of four tiers (`routing.tier`), which the
+rules strategy (`routing.method: 'rules'`, the rollback lever) routes with
+directly:
 
-The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
-
-| Tier | Example Tasks | Auto Profile Model |
-|------|---------------|-------------------|
-| SIMPLE | "What is 2+2?", definitions | moonshot/kimi-k2.5 |
-| MEDIUM | Code snippets, explanations | xai/grok-code-fast-1 |
-| COMPLEX | Architecture, long documents | google/gemini-3.1-pro |
-| REASONING | Proofs, multi-step reasoning | xai/grok-4-1-fast-reasoning |
+| Tier | Example Tasks |
+|------|---------------|
+| SIMPLE | "What is 2+2?", definitions |
+| MEDIUM | Code snippets, explanations |
+| COMPLEX | Architecture, long documents |
+| REASONING | Proofs, multi-step reasoning |
 
 ## Available Models
 
@@ -873,7 +881,7 @@ const response2 = await client.chat('anthropic/claude-sonnet-4', 'Write a haiku'
 
 ### Smart Routing (ClawRouter)
 
-Save up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% on inference costs with intelligent model routing. ClawRouter uses a <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions -->-dimension rule-based scoring algorithm to select the cheapest model that can handle your request (<1ms, 100% local).
+Save up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% on inference costs with intelligent model routing. ClawRouter's deterministic portfolio router (v3.4, default since ClawRouter v0.12.242) classifies each request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions, applies hard capability filters, and ranks the cheapest capable models (<1ms, 100% local).
 
 ```typescript
 import { LLMClient } from '@blockrun/llm';
@@ -885,7 +893,7 @@ const result = await client.smartChat('What is 2+2?');
 console.log(result.response);     // '4'
 console.log(result.model);        // 'google/gemini-2.5-flash'
 console.log(result.routing.tier); // 'SIMPLE'
-console.log(`Saved ${(result.routing.savings * 100).toFixed(0)}%`); // 'Saved 87%'
+console.log(`Saved ${(result.routing.savings * 100).toFixed(0)}%`); // 'Saved 88%'
 
 // Routing profiles
 const free = await client.smartChat('Hello!', { routingProfile: 'free' });     // Zero cost

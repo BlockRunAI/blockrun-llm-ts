@@ -2,6 +2,21 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.11.0] - 2026-08-10
+
+### Changed — smartChat() synced to ClawRouter's Router v3.4 portfolio strategy
+
+ClawRouter v0.12.242 made the deterministic portfolio router the Auto default and moved the routing engine into `BlockRunAI/router-core`. This release syncs the SDK to that surface:
+
+- **`RoutingDecision` carries the portfolio metadata.** `method` gains the `"portfolio"` value (it was typed `"rules" | "llm"`, so the value every default route now actually returns was unrepresentable), and the decision exposes `candidates` (the ordered, capability-eligible portfolio — first entry is the selected model), `taskType`, `routerVersion`, `candidateScores`, and `tierConfigs`. New exported types: `RoutingTaskType`, `RoutingTierConfig`.
+- **The fallback chain follows the portfolio ranking.** `smartChat()` now builds `routing.fallbacks` from `decision.candidates` when present, so transient-error failover walks the same capability-filtered order the router chose, instead of the static tier chain. Rules-mode decisions (`routing.strategy = "rules"`) and older routers still fall back to `getFallbackChain()` over the tier configs. The primary and unpriced models are excluded, as before.
+- **Typecheck no longer depends on ClawRouter's declaration files.** Since v0.12.242 the published `dist/index.d.ts` re-exports its routing types from `@blockrun/router-core` — a package that is inlined into ClawRouter's bundle at build time and never installed in consumer trees, so `typeof import("@blockrun/clawrouter")` resolves to `any` (and this SDK's own `tsc --noEmit` failed with TS7006 against 0.12.244). The dynamic import is now typed against a local structural interface (`route` / `DEFAULT_ROUTING_CONFIG` / `getFallbackChain`), verified live against the 0.12.244 runtime.
+- **Optional peer floor: `@blockrun/clawrouter` `^0.12.222` → `^0.12.242`.** Below 0.12.242 there are no `candidates` (functionally fine — the tier-chain path covers it), but 0.12.241/0.12.242 also removed retired free models from the fallback chains that the gateway server-redirects — routes that silently defeat `/exclude`. The floor keeps consumers off those chains.
+
+### Docs
+
+- README's routing sections describe the portfolio strategy (hard capability filters, ranked candidates, rules rollback) instead of the retired "14-dimension rule-based classifier" prose, and the stale 87% savings examples follow the published 88% number.
+
 ## [3.10.0] - 2026-08-08
 
 ### Changed — the Solana packages are optional PEER dependencies now

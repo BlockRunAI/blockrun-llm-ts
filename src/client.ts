@@ -30,6 +30,9 @@ import {
   type SmartChatOptions,
   type SmartChatResponse,
   type RoutingDecision,
+  type RoutingProfile,
+  type RoutingTier,
+  type RoutingTierConfig,
   type SearchResult,
   type SearchOptions,
   type ExaSearchOptions,
@@ -53,6 +56,34 @@ type ModelPricing = {
   inputPrice: number;  // per 1M tokens
   outputPrice: number; // per 1M tokens
 };
+
+// Structural view of the '@blockrun/clawrouter' surface smartChat() uses.
+// Since v0.12.242 the published package's .d.ts re-exports these from
+// '@blockrun/router-core', which is inlined into its bundle at build time and
+// never installed in consumer trees — so `typeof import("@blockrun/clawrouter")`
+// resolves to `any` here. Typing the dynamic import against this interface
+// keeps smartChat() type-safe independent of that declaration gap.
+interface ClawRouterRoutingModule {
+  route(
+    prompt: string,
+    systemPrompt: string | undefined,
+    maxOutputTokens: number,
+    options: {
+      config: ClawRouterRoutingConfig;
+      modelPricing: Map<string, ModelPricing>;
+      routingProfile?: RoutingProfile;
+    },
+  ): RoutingDecision;
+  DEFAULT_ROUTING_CONFIG: ClawRouterRoutingConfig;
+  getFallbackChain(
+    tier: RoutingTier,
+    tiers: Record<RoutingTier, RoutingTierConfig>,
+  ): string[];
+}
+
+interface ClawRouterRoutingConfig {
+  tiers: Record<RoutingTier, RoutingTierConfig>;
+}
 
 /**
  * Whether an error is the kind of transient failure that warrants trying
@@ -272,8 +303,11 @@ export class LLMClient {
   /**
    * Smart chat with automatic model routing.
    *
-   * Uses ClawRouter's 14-dimension rule-based scoring algorithm (<1ms, 100% local)
-   * to select the cheapest model that can handle your request.
+   * Uses ClawRouter's deterministic portfolio router (Router v3.4, the Auto
+   * default since v0.12.242): it classifies the task shape locally (<1ms, no
+   * extra model call), enforces capability constraints as hard filters, and
+   * ranks an ordered candidate portfolio — the cheapest model that can handle
+   * the request wins, and the rest become the transient-error fallback chain.
    *
    * @param prompt - User message
    * @param options - Optional chat and routing parameters
@@ -283,7 +317,8 @@ export class LLMClient {
    * ```ts
    * const result = await client.smartChat('What is 2+2?');
    * console.log(result.response); // '4'
-   * console.log(result.model); // 'google/gemini-2.5-flash-lite'
+   * console.log(result.model); // 'google/gemini-3.5-flash'
+   * console.log(result.routing.method); // 'portfolio'
    * console.log(result.routing.savings); // 0.78 (78% savings)
    * ```
    *
@@ -307,13 +342,13 @@ export class LLMClient {
     // the SDK's top-level import graph (see the note by the imports). Fail with
     // a clear message if the optional router dependency is missing or broken,
     // rather than a cryptic module-load error at import time.
-    let route: typeof import("@blockrun/clawrouter")["route"];
-    let DEFAULT_ROUTING_CONFIG: typeof import("@blockrun/clawrouter")["DEFAULT_ROUTING_CONFIG"];
-    let getFallbackChain: typeof import("@blockrun/clawrouter")["getFallbackChain"];
+    let route: ClawRouterRoutingModule["route"];
+    let DEFAULT_ROUTING_CONFIG: ClawRouterRoutingModule["DEFAULT_ROUTING_CONFIG"];
+    let getFallbackChain: ClawRouterRoutingModule["getFallbackChain"];
     try {
-      ({ route, DEFAULT_ROUTING_CONFIG, getFallbackChain } = await import(
+      ({ route, DEFAULT_ROUTING_CONFIG, getFallbackChain } = (await import(
         "@blockrun/clawrouter"
-      ));
+      )) as unknown as ClawRouterRoutingModule);
     } catch (err) {
       throw new Error(
         "smartChat() requires the optional '@blockrun/clawrouter' routing engine, " +
@@ -329,13 +364,18 @@ export class LLMClient {
       routingProfile: options?.routingProfile,
     });
 
-    // Compute fallback chain for the chosen tier — these are the models
-    // chat() will walk to if the primary returns a transient error (timeout,
-    // network, 5xx). Excludes the primary itself, and skips models the
-    // catalog doesn't price (so we don't end up calling something we can't
-    // estimate cost for).
+    // Compute the fallback chain — the models chat() will walk to if the
+    // primary returns a transient error (timeout, network, 5xx). The
+    // portfolio router (default since ClawRouter v0.12.242) already ranks an
+    // ordered, capability-eligible candidate list, so prefer that ordering;
+    // rules-mode decisions and older routers fall back to the tier chain.
+    // Either way: exclude the primary itself, and skip models the catalog
+    // doesn't price (so we don't end up calling something we can't estimate
+    // cost for).
     const tierConfigs = decision.tierConfigs ?? DEFAULT_ROUTING_CONFIG.tiers;
-    const fullChain = getFallbackChain(decision.tier, tierConfigs);
+    const fullChain = decision.candidates?.length
+      ? decision.candidates
+      : getFallbackChain(decision.tier, tierConfigs);
     const fallbacks = fullChain.filter(
       (id) => id !== decision.model && modelPricing.has(id),
     );
@@ -357,7 +397,7 @@ export class LLMClient {
     return {
       response,
       model: decision.model,
-      routing: { ...(decision as RoutingDecision), fallbacks },
+      routing: { ...decision, fallbacks },
     };
   }
 
