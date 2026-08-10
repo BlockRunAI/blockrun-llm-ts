@@ -2,6 +2,13 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [Unreleased]
+
+### Docs — retire the `routingProfile: 'free'` claim, refresh the free-model catalog
+
+- README (three places) and AGENTS.md advertised `routingProfile: 'free'`, but `SmartChatOptions.routingProfile` has only ever accepted `'eco' | 'auto' | 'premium'` — the examples did not even typecheck, and `route()` treats an unknown profile as `auto`, silently routing to **paid** models. The docs now teach the two paths that actually exist: pin a `nvidia/*` model for guaranteed $0, or use `eco`, whose portfolio ranks the free NVIDIA tier first (verified live in the v3.11.0 E2E run: `nvidia/deepseek-v4-flash`, $0, 100% reported savings). Each spot also states explicitly that `/model free` belongs to ClawRouter's proxy, not to this SDK's router options.
+- The free-model table was a 2026-06-07 snapshot listing three retired models (`llama-4-maverick`, `qwen3-coder-480b`, `mistral-small-4-119b`); it now mirrors the live `/v1/models` catalog (6 visible + the hidden gpt-oss pair), and the stale hand-written counts (README "7", AGENTS.md "9") follow the marker-managed 6.
+
 ## [3.11.0] - 2026-08-10
 
 ### Changed — smartChat() synced to ClawRouter's Router v3.4 portfolio strategy

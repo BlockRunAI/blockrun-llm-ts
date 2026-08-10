@@ -2,7 +2,7 @@
 
 > **@blockrun/llm** is a TypeScript/Node.js SDK for accessing <!-- br:models.chatVisible -->71<!-- /br:models.chatVisible --> large language models (GPT-5, Claude, Gemini, Grok, DeepSeek, Kimi, and more) with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required — your wallet signature is your authentication. Supports **streaming**, smart routing, Base and Solana chains.
 >
-> 🆓 **Includes 7 fully-free NVIDIA-hosted models** (5 visible in `/v1/models`, 2 hidden but directly callable) — DeepSeek V4 Flash (1M context), Nemotron Nano Omni (vision), Qwen3 Coder, Llama 4, Mistral, plus the gpt-oss pair. Zero USDC, no rate-limit gimmicks. Use `routingProfile: 'free'` or call any `nvidia/*` model directly.
+> 🆓 **Includes <!-- br:models.free -->6<!-- /br:models.free --> fully-free NVIDIA-hosted models** (plus the hidden gpt-oss pair, directly callable) — DeepSeek V4 Flash (1M context), Nemotron Nano Omni (multimodal), Mistral Nemotron, Step 3.7 Flash, and the Nemotron Nano pair. Zero USDC, no rate-limit gimmicks. Call any `nvidia/*` model directly, or use `routingProfile: 'eco'` — its portfolio ranks the free tier first.
 
 [![npm](https://img.shields.io/npm/v/@blockrun/llm.svg)](https://www.npmjs.com/package/@blockrun/llm)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -114,29 +114,32 @@ const client = new LLMClient();  // Wallet still required for signing, but $0 ch
 // Option 1: call a free model directly
 const reply = await client.chat('nvidia/deepseek-v4-flash', 'Explain x402 in 1 sentence');
 
-// Option 2: let the smart router pick the best free model per request
-const result = await client.smartChat('What is 2+2?', { routingProfile: 'free' });
-console.log(result.model);     // e.g. 'nvidia/deepseek-v4-flash' (cheapest capable for SIMPLE tier)
+// Option 2: let the smart router pick — 'eco' ranks the free NVIDIA tier first
+const result = await client.smartChat('What is 2+2?', { routingProfile: 'eco' });
+console.log(result.model);     // 'nvidia/deepseek-v4-flash' ($0 — verified live)
 console.log(result.response);  // '4'
+console.log(result.routing.savings); // 1 (100%)
 ```
 
-**Available free models** (input + output both $0, all NVIDIA-hosted, last refreshed 2026-06-07):
+There is no `free` routing profile in `smartChat()` — `routingProfile` accepts
+`'eco' | 'auto' | 'premium'`. (ClawRouter's `/model free` is a feature of its
+own proxy, not of this SDK's router options.) For guaranteed $0, pin a
+`nvidia/*` model; for smart-routed $0-first, use `eco`.
+
+**Available free models** (input + output both $0, all NVIDIA-hosted, from the live `/v1/models` catalog, last refreshed 2026-08-10):
 
 | Model ID | Context | Best For |
 |----------|---------|----------|
-| `nvidia/deepseek-v4-flash` | 1M | DeepSeek V4 Flash — 284B / 13B active MoE, ~5× faster than V4 Pro. Best free chat / summarization / light reasoning |
-| `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Only vision-capable free model — text + images + video (≤2 min) + audio (≤1 hr) |
-| `nvidia/llama-4-maverick` | 131K | Meta Llama 4 Maverick MoE |
-| `nvidia/qwen3-coder-480b` | 131K | Coding-optimised 480B MoE |
-| `nvidia/mistral-small-4-119b` | 131K | ⚠️ Upstream timing out as of 2026-06-07 — avoid until NVIDIA recovers it |
-| `nvidia/gpt-oss-120b` | 128K | OpenAI open-weight 120B — 123 tok/s. Hidden from `/v1/models` for privacy but direct calls still work |
-| `nvidia/gpt-oss-20b` | 128K | OpenAI open-weight 20B — 155 tok/s. Hidden from `/v1/models` but direct calls still work |
-
-> Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro` ($0.435/$0.87 — the 75% launch promo became the permanent list price after 2026-05-31) — `nvidia/deepseek-v4-pro` is currently hidden because NVIDIA's NIM deployment is hung; backend MODEL_REDIRECTS forwards calls to V4 Flash.
+| `nvidia/deepseek-v4-flash` | 1M | DeepSeek V4 Flash — 284B / 13B active MoE. Best free chat / summarization / light reasoning. Capacity-constrained: requests may be answered by an equivalent free model |
+| `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Multimodal reasoning — text + images + video + audio (ChartQA 90.3, DocVQA 95.6) |
+| `nvidia/mistral-nemotron` | 131K | Mistral × NVIDIA instruction model — fast (~0.2s), strong instruction following |
+| `nvidia/step-3.7-flash` | 131K | StepFun Step 3.7 Flash — fast lightweight reasoning |
+| `nvidia/nemotron-nano-9b-v2` | 131K | Compact + fast (~0.7s), good for high-volume light tasks |
+| `nvidia/nemotron-nano-12b-v2-vl` | 131K | Vision-language — accepts images, compact + fast |
+| `nvidia/gpt-oss-120b` | 128K | OpenAI open-weight 120B. Hidden from `/v1/models` for privacy but direct calls still work |
+| `nvidia/gpt-oss-20b` | 128K | OpenAI open-weight 20B. Hidden from `/v1/models` but direct calls still work |
 
 > Privacy note: `nvidia/gpt-oss-120b` and `nvidia/gpt-oss-20b` are hidden from `/v1/models` because NVIDIA's free build.nvidia.com tier reserves the right to use prompts/outputs for service improvement. Direct calls by full model ID still work — opt in only when your data isn't sensitive.
-
-> Retired: `nvidia/qwen3-next-80b-a3b-thinking` hit NVIDIA end-of-life 2026-05-21 (HTTP 410). The gateway auto-redirects pinned callers to `nvidia/llama-4-maverick`.
 
 ## Quick Start (Solana)
 
@@ -300,10 +303,13 @@ const reply = await client.chat('nvidia/deepseek-v4-flash', 'hello', {
 
 | Profile | Strategy | Savings vs Opus 5 | Best For |
 |---------|----------|-------------------|----------|
-| `free` | NVIDIA free tier — smart-routes across <!-- br:models.free -->6<!-- /br:models.free --> models (DeepSeek V4 Flash, Nemotron Nano Omni, Qwen3, Llama 4, Mistral, plus 2 hidden gpt-oss) | **100%** | Zero-cost testing, dev, prod |
-| `eco` | Cheapest capable model per tier | **<!-- br:savings.ecoVsBaselinePct -->98<!-- /br:savings.ecoVsBaselinePct -->%** | Cost-sensitive production |
+| `eco` | Cheapest capable model — ranks the <!-- br:models.free -->6<!-- /br:models.free -->-model free NVIDIA tier first | **<!-- br:savings.ecoVsBaselinePct -->98<!-- /br:savings.ecoVsBaselinePct -->%** | Cost-sensitive production, zero-cost testing |
 | `auto` | Best balance of cost/quality (default) | **<!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->%** | General use |
 | `premium` | Top-tier models (OpenAI, Anthropic) | 0% | Quality-critical tasks |
+
+For guaranteed $0, call a `nvidia/*` model directly with `chat()` — see
+[Try It Free](#try-it-free-no-usdc-required). ClawRouter's `/model free`
+profile belongs to its own proxy; `smartChat()`'s options are the three above.
 
 ```typescript
 // Use premium models for complex tasks
@@ -964,19 +970,20 @@ console.log(result.model);        // 'google/gemini-2.5-flash'
 console.log(result.routing.tier); // 'SIMPLE'
 console.log(`Saved ${(result.routing.savings * 100).toFixed(0)}%`); // 'Saved 88%'
 
-// Routing profiles
-const free = await client.smartChat('Hello!', { routingProfile: 'free' });     // Zero cost
-const eco = await client.smartChat('Explain AI', { routingProfile: 'eco' });   // Budget optimized
+// Routing profiles ('eco' | 'auto' | 'premium')
+const eco = await client.smartChat('Explain AI', { routingProfile: 'eco' });   // Free tier first, then cheapest paid
 const auto = await client.smartChat('Code review', { routingProfile: 'auto' }); // Balanced (default)
 const premium = await client.smartChat('Write a legal brief', { routingProfile: 'premium' }); // Best quality
+
+// Guaranteed $0: call a free NVIDIA model directly
+const free = await client.chat('nvidia/deepseek-v4-flash', 'Hello!');
 ```
 
 **Routing Profiles:**
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `free` | NVIDIA free tier (<!-- br:models.free -->6<!-- /br:models.free --> models, smart-routed) | Zero-cost testing, dev, prod |
-| `eco` | Budget-optimized | Cost-sensitive workloads |
+| `eco` | Budget-optimized — ranks the <!-- br:models.free -->6<!-- /br:models.free -->-model free NVIDIA tier first | Cost-sensitive workloads, zero-cost testing |
 | `auto` | Intelligent routing (default) | General use |
 | `premium` | Best quality models | Critical tasks |
 
