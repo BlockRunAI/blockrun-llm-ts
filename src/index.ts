@@ -131,6 +131,8 @@ export {
   // Smart routing types
   type RoutingProfile,
   type RoutingTier,
+  type RoutingTierConfig,
+  type RoutingTaskType,
   type RoutingDecision,
   type SmartChatOptions,
   type SmartChatResponse,

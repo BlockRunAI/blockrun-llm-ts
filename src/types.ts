@@ -359,11 +359,36 @@ export type RoutingProfile = "eco" | "auto" | "premium";
 
 export type RoutingTier = "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
 
+/**
+ * Request classification produced by the portfolio router (ClawRouter
+ * v0.12.242+, Router v3.4). Present on decisions with `method: "portfolio"`.
+ */
+export type RoutingTaskType =
+  | "chat"
+  | "extraction"
+  | "code_edit"
+  | "code_agent"
+  | "tool_agent"
+  | "tool_agent_parallel"
+  | "debug"
+  | "reasoning"
+  | "reasoning_mcq"
+  | "reasoning_math"
+  | "long_context"
+  | "vision";
+
+/** Primary model + ordered fallbacks for one routing tier. */
+export interface RoutingTierConfig {
+  primary: string;
+  fallback: string[];
+}
+
 export interface RoutingDecision {
   model: string;
   tier: RoutingTier;
   confidence: number;
-  method: "rules" | "llm";
+  /** "portfolio" is the Auto default since ClawRouter v0.12.242; "rules" is the rollback strategy. */
+  method: "rules" | "llm" | "portfolio";
   reasoning: string;
   costEstimate: number;
   baselineCost: number;
@@ -372,8 +397,29 @@ export interface RoutingDecision {
   profile?: RoutingProfile | "agentic";
   /** Score used when agentic routing is active. */
   agenticScore?: number;
+  /** Tier configs the decision was made against — avoids re-deriving them from config. */
+  tierConfigs?: Record<RoutingTier, RoutingTierConfig>;
   /**
-   * Remaining tier models with known pricing, in fallback order. `chat()`
+   * Ordered, capability-eligible candidates ranked by the portfolio router.
+   * The first entry is `model` itself. smartChat() prefers this ordering
+   * when building the fallback chain.
+   */
+  candidates?: string[];
+  /** Explainable request classification used by the portfolio router. */
+  taskType?: RoutingTaskType;
+  /** Router implementation that made the selection. */
+  routerVersion?: "v2-rules" | "v3-portfolio";
+  /** Explainable local portfolio score breakdown, ordered with `candidates`. */
+  candidateScores?: Array<{
+    model: string;
+    score: number;
+    quality: number;
+    cost: number;
+    speed: number;
+    reliability: number;
+  }>;
+  /**
+   * Remaining models with known pricing, in fallback order. `chat()`
    * walks this list when the primary model hits a transient error
    * (timeout, network, 5xx). Excludes the primary itself.
    */
