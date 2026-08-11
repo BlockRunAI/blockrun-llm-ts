@@ -10,11 +10,15 @@
  * shared kernel every BlockRun product reads. That is what guarantees this SDK,
  * the `blockrun` CLI, and clawrouter-codex all resolve the SAME wallet — the
  * behaviour is defined in one place instead of being re-implemented per product
- * and drifting. The funding/messaging surface below stays here because it is
- * specific to this SDK.
+ * and drifting. Kept SDK-local: the funding/messaging surface (SDK-specific),
+ * plus createWallet()/saveWallet() as thin persistence wrappers for API
+ * compatibility — they write to the same core-resolved path, per call.
  *
  * Because path resolution now comes from core, `BLOCKRUN_HOME` overrides the base
- * directory (previously this module always used the OS home directory).
+ * directory (previously this module always used the OS home directory). Treat
+ * that variable as security-sensitive: it redirects where the signing key is
+ * read from AND written to, so an environment that can set it controls the
+ * wallet as surely as one that can set BLOCKRUN_WALLET_KEY.
  */
 
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
@@ -33,8 +37,19 @@ export const USDC_BASE_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 export const BASE_CHAIN_ID = "8453";
 
 // Wallet storage location — resolved by core so every product agrees on it.
-const WALLET_DIR = corePaths().dir;
-const WALLET_FILE = corePaths().session;
+// Resolved PER CALL, never snapshotted at module load: core re-reads
+// BLOCKRUN_HOME on every resolution, so a load-time snapshot here would let
+// the read path (core) and the write path (saveWallet) disagree the moment
+// BLOCKRUN_HOME changes after import (e.g. dotenv.config() running after the
+// SDK import) — getOrCreateWallet() would then mint a fresh key and
+// saveWallet() would clobber the user's real, possibly funded ~/.blockrun/
+// .session with it, without a backup.
+function walletDir(): string {
+  return corePaths().dir;
+}
+function walletFile(): string {
+  return corePaths().session;
+}
 
 export interface WalletInfo {
   privateKey: string;
@@ -70,22 +85,27 @@ export function createWallet(): { address: string; privateKey: string } {
  * @returns Path to saved wallet file
  */
 export function saveWallet(privateKey: string): string {
-  if (!fs.existsSync(WALLET_DIR)) {
-    fs.mkdirSync(WALLET_DIR, { recursive: true });
+  const dir = walletDir();
+  const file = walletFile();
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
-  fs.writeFileSync(WALLET_FILE, privateKey, { mode: 0o600 });
-  return WALLET_FILE;
+  fs.writeFileSync(file, privateKey, { mode: 0o600 });
+  return file;
 }
 
 /**
  * Discover ~/.<dir>/wallet.json files from other providers.
  *
- * Each file should contain JSON with "privateKey" and "address" fields.
- * Results are sorted by modification time (most recent first). Discovery is
- * intentionally opt-in: a provider wallet must never replace the canonical
- * BlockRun wallet merely because it was written more recently.
+ * Each file should contain JSON with a "privateKey" field; the returned
+ * address is DERIVED from that key (any "address" field in the file is
+ * ignored, so a file cannot claim an address it holds no key for), and
+ * entries whose key does not parse are dropped. Results are sorted by
+ * modification time (most recent first). Discovery is intentionally opt-in:
+ * a provider wallet must never replace the canonical BlockRun wallet merely
+ * because it was written more recently.
  *
- * @returns Array of wallet objects with privateKey and address
+ * @returns Array of wallet objects with privateKey and derived address
  */
 export function scanWallets(): Array<{ privateKey: string; address: string; source: string }> {
   return coreScanWallets();
@@ -116,6 +136,12 @@ export function listDiscoveredWallets(): Array<{ address: string; source: string
  *
  * The current `~/.blockrun/.session` is backed up beside itself before being
  * overwritten, so adopting a wallet can't strand the funds in the old one.
+ *
+ * NOTE: this is NOT `@blockrun/core`'s `importWallet(rawPrivateKey)` — that
+ * one persists a raw key and refuses to overwrite without `force`. This SDK
+ * function adopts a DISCOVERED wallet by address and maps onto core's
+ * `adoptWallet()`. Same name, different operation; don't mix them up when
+ * importing from core directly.
  *
  * @param address Address to adopt, as shown by `listDiscoveredWallets()`
  * @returns The adopted address
@@ -330,6 +356,10 @@ export function formatFundingMessageCompact(address: string): string {
 Check my balance: ${links.basescan}`;
 }
 
-// Export constants
-export const WALLET_FILE_PATH = WALLET_FILE;
-export const WALLET_DIR_PATH = WALLET_DIR;
+// Exported path constants. NOTE: these are import-time snapshots kept for
+// API compatibility (they have been `string` since 1.x). All internal reads
+// and writes resolve paths per call via core; only these two exported values
+// freeze the location observed at import. If BLOCKRUN_HOME may change after
+// import, resolve paths yourself via @blockrun/core's paths().
+export const WALLET_FILE_PATH = walletFile();
+export const WALLET_DIR_PATH = walletDir();

@@ -13,9 +13,6 @@ importers:
 
   .:
     dependencies:
-      '@blockrun/core':
-        specifier: ^0.1.0
-        version: 0.1.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76)
       '@solana/spl-token':
         specifier: ^0.4.14
         version: 0.4.14(@solana/web3.js@1.98.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6)
@@ -33,6 +30,9 @@ importers:
         specifier: ^0.39.0
         version: 0.39.0
     devDependencies:
+      '@blockrun/core':
+        specifier: ^0.1.0
+        version: 0.1.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76)
       '@blockrun/router-core':
         specifier: https://codeload.github.com/BlockRunAI/router-core/tar.gz/d4308049348e11e17ed08a254676a34949be80f9
         version: https://codeload.github.com/BlockRunAI/router-core/tar.gz/d4308049348e11e17ed08a254676a34949be80f9

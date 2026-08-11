@@ -48,7 +48,6 @@
     "url": "https://github.com/BlockRunAI/blockrun-llm-ts/issues"
   },
   "dependencies": {
-    "@blockrun/core": "^0.1.0",
     "bs58": "^6.0.0",
     "viem": "^2.49.0"
   },
@@ -56,6 +55,7 @@
     "@anthropic-ai/sdk": "^0.39.0"
   },
   "devDependencies": {
+    "@blockrun/core": "^0.1.0",
     "@blockrun/router-core": "https://codeload.github.com/BlockRunAI/router-core/tar.gz/d4308049348e11e17ed08a254676a34949be80f9",
     "@eslint/js": "^9.39.4",
     "@types/node": "^20.19.41",

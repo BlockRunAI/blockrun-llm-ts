@@ -105,7 +105,8 @@ pnpm typecheck          # TypeScript check
 | `solana-client.ts` | `SolanaLLMClient` with the same routing/fallback surface, paid on Solana |
 | `tsup.config.ts` | Build config; `dts.resolve` inlines `@blockrun/router-core` types into the shipped `.d.ts` |
 | `x402.ts` | x402 payment protocol implementation |
-| `wallet.ts` | Multi-network wallet support (Base via viem, Solana via @solana/web3.js) |
+| `wallet.ts` | Base wallet: resolution/discovery/adoption delegated to `@blockrun/core` (bundled into dist); funding/messaging surface SDK-local |
+| `solana-wallet.ts` | Solana wallet — deliberately SDK-local (core has no Solana key store yet); does not honor `BLOCKRUN_HOME` |
 | `validation.ts` | Input validation for keys, URLs, parameters |
 | `types.ts` | TypeScript interfaces for API |
 | `openai-compat.ts` | OpenAI SDK compatible wrapper |

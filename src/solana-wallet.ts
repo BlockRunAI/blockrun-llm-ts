@@ -1,6 +1,12 @@
 /**
  * BlockRun Solana Wallet Management.
  * Stores keys as bs58-encoded strings at ~/.blockrun/.solana-session
+ *
+ * Deliberately SDK-local: `@blockrun/core` (which owns Base wallet
+ * resolution) has no Solana key store yet — migrate this module to core when
+ * it grows one. Until then Solana paths come from os.homedir() directly and
+ * do NOT honor BLOCKRUN_HOME; with that variable set, Base keys move but the
+ * Solana key stays under the real home directory.
  */
 import * as fs from "fs";
 import * as path from "path";
