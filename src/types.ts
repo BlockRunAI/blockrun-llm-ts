@@ -98,6 +98,8 @@ export interface ChatResponse {
     model?: string;
     settlementSkipped?: boolean;
   };
+  /** Present when a `blockrun/auto|eco|premium` alias selected the model locally. */
+  routing?: RoutingDecision;
 }
 
 export interface Model {
@@ -361,14 +363,13 @@ export interface ChatCompletionOptions {
   fallbackModels?: string[];
 }
 
-// Smart routing types (ClawRouter integration).
+// Smart routing types (shared product-neutral Router Core integration).
 //
-// Derived from '@blockrun/router-core' — the routing engine ClawRouter inlines
-// into its bundle, pinned here (devDependency) to the same immutable commit
-// its published build uses, so these types cannot drift from the runtime.
+// Derived from '@blockrun/router-core', pinned here to an immutable commit so
+// the SDK's runtime and public declarations cannot drift.
 // tsup's DTS bundling inlines the derived declarations into this package's
-// shipped .d.ts, so npm consumers install neither router-core nor clawrouter
-// to typecheck against this SDK. (`TierConfig` is not exported by router-core,
+// shipped .d.ts, so npm consumers install no separate routing package to
+// typecheck against this SDK. (`TierConfig` is not exported by router-core,
 // hence the indexed access.)
 export type RoutingProfile = "eco" | "auto" | "premium";
 
@@ -401,12 +402,28 @@ export interface SmartChatOptions extends ChatOptions {
   maxOutputTokens?: number;
 }
 
+export interface SmartChatCompletionOptions extends ChatCompletionOptions {
+  /** Routing profile: eco (budget), auto (balanced), premium (best quality) */
+  routingProfile?: RoutingProfile;
+  /** Maximum output tokens used for route cost/capacity estimation. */
+  maxOutputTokens?: number;
+}
+
 export interface SmartChatResponse {
   /** The AI response text */
   response: string;
   /** Which model was selected by smart routing */
   model: string;
   /** Routing decision metadata */
+  routing: RoutingDecision;
+}
+
+export interface SmartChatCompletionResponse {
+  /** Full OpenAI-compatible response, including tool calls. */
+  response: ChatResponse;
+  /** Model selected before any transient runtime fallback. */
+  model: string;
+  /** Local routing decision and ordered fallback candidates. */
   routing: RoutingDecision;
 }
 

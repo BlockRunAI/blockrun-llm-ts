@@ -68,29 +68,25 @@ pnpm typecheck          # TypeScript check
 - `LLMClient` - Main client class
 - `chat()` - Simple chat method
 - `chatCompletion()` - Full OpenAI-compatible response
-- `smartChat()` - Automatic model routing via ClawRouter (see below)
+- `smartChat()` / `smartChatCompletion()` - bundled Router Core V3 (see below)
 - Automatic x402 payment handling
 
 ## Smart Routing (smartChat)
 
 - `client.smartChat(prompt, { routingProfile? })` picks the cheapest capable
   model per request. Profiles: `'eco' | 'auto' | 'premium'` (default `auto`).
-- Requires the **optional peer** `@blockrun/clawrouter` (`npm install
-  @blockrun/clawrouter`). It is lazy-loaded inside `smartChat()` only — every
-  other API works without it, and a missing router throws an actionable error
-  instead of breaking the import.
-- The default strategy is ClawRouter's deterministic portfolio router
+- Router Core is bundled; consumers install no separate router package.
+- The default strategy is the deterministic portfolio router
   (`routing.method: 'portfolio'`): local classification, hard capability
   filters, ranked `routing.candidates`. The SDK builds `routing.fallbacks`
   from that ranking (primary excluded, unpriced models filtered) and `chat()`
   walks it automatically on transient errors (timeout / network / 5xx).
 - Routing types (`RoutingDecision`, `RoutingTier`, `RoutingTaskType`,
   `RoutingTierConfig`) are derived from `@blockrun/router-core` — a
-  devDependency pinned to the commit ClawRouter's published build inlines —
+  devDependency pinned to the reviewed Router Core commit —
   and ship inlined in the SDK's `.d.ts`, so consumers typecheck without
-  installing either package. Do not hand-edit these shapes; re-pin the
-  router-core commit whenever `@blockrun/clawrouter` is bumped (procedure in
-  CONTRIBUTING.md).
+  installing another package. Do not hand-edit these shapes; re-pin the
+  router-core commit when upgrading the engine (procedure in CONTRIBUTING.md).
 
 ## Key Files
 

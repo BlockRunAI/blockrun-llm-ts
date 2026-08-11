@@ -46,15 +46,15 @@ src/
 
 ## Key dependencies
 
-- `@blockrun/clawrouter` — Smart model routing (optional peer; only `smartChat()` needs it)
+- `@blockrun/router-core` — bundled, product-neutral smart model routing
 - `viem` — Ethereum interaction
 - `bs58` — Base58 encoding (Solana)
 - Optional: `@anthropic-ai/sdk`, `@solana/web3.js`, `@solana/spl-token`
 
-## Smart routing (smartChat / ClawRouter / router-core)
+## Smart routing (smartChat / router-core)
 
-- `smartChat()` lazy-loads `@blockrun/clawrouter` (optional peer) inside the method, so a missing or broken router can never break importing the SDK. Since ClawRouter v0.12.242 the default decision is the deterministic **portfolio** strategy: `routing.method: "portfolio"`, with an ordered `routing.candidates` list that the SDK turns into the transient-error fallback chain (primary excluded, unpriced models filtered). Rules-mode decisions fall back to `getFallbackChain()` over the tier configs. Behavior is pinned by `test/unit/smart-chat-fallbacks.test.ts`.
-- The routing types in `src/types.ts` are **derived from `@blockrun/router-core`**, a devDependency installed from a GitHub tarball (router-core is not on npm) pinned to the exact commit ClawRouter's published build inlines. Do not hand-edit these shapes — and when bumping `@blockrun/clawrouter`, re-pin the router-core URL to the commit in the new ClawRouter's `package.json` `devDependencies`. They move together.
+- `smartChat()`, `smartChatCompletion()`, and the `blockrun/auto|eco|premium` model aliases call the bundled Router Core V3 adapter. Its ordered, live-catalog-filtered candidates become the transient-error fallback chain.
+- The routing runtime and types are **derived directly from `@blockrun/router-core`**, pinned to an immutable GitHub commit. Do not hand-edit the upstream shapes; re-pin the reviewed router-core commit and rerun golden tests.
 - `tsup.config.ts` holds the build config (moved from CLI flags); its `dts.resolve` inlines the router-core declarations into the shipped `.d.ts`. After any routing-dependency bump, verify `grep -c router-core dist/index.d.ts` prints `0` — a leaked `import from '@blockrun/router-core'` is unresolvable in consumer trees and reproduces the declaration gap ClawRouter's own `.d.ts` has. The full procedure is in CONTRIBUTING.md.
 
 ## Supported chains
