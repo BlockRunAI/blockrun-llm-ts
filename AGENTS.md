@@ -4,7 +4,7 @@ Guidance for AI coding agents working with the BlockRun TypeScript SDK.
 
 ## Project Overview
 
-**@blockrun/llm** is a TypeScript SDK that **cuts LLM costs by up to 88%**: its built-in smart router (ClawRouter) picks the cheapest capable model for every request — locally, in <1ms — and pays per-request in USDC via x402 on Base or Solana. No API keys, no subscriptions. Use `smartChat()` for routed (cheapest) calls; `chat()` to pin a model. **Includes 6 fully-free NVIDIA-hosted models** — DeepSeek V4 Flash (1M ctx), Nemotron Nano Omni (multimodal), Mistral Nemotron, Step 3.7 Flash, and the Nemotron Nano pair — plus the hidden gpt-oss pair, directly callable. Access them by calling any `nvidia/*` model id directly, or via `routingProfile: 'eco'`, which ranks the free tier first. (There is no `'free'` routing profile — `routingProfile` accepts `'eco' | 'auto' | 'premium'`.)
+**@blockrun/llm** is a TypeScript SDK that **cuts LLM costs by up to 88%**: its bundled smart router (Router Core V3) picks the cheapest capable model for every request — locally, in <1ms — and pays per-request in USDC via x402 on Base or Solana. No API keys, no subscriptions. Use `smartChat()` for routed (cheapest) calls; `chat()` to pin a model. **Includes 6 fully-free NVIDIA-hosted models** — DeepSeek V4 Flash (1M ctx), Nemotron Nano Omni (multimodal), Mistral Nemotron, Step 3.7 Flash, and the Nemotron Nano pair — plus the hidden gpt-oss pair, directly callable. Access them by calling any `nvidia/*` model id directly, or via `routingProfile: 'eco'`, which ranks the free tier first. (There is no `'free'` routing profile — `routingProfile` accepts `'eco' | 'auto' | 'premium'`.)
 
 **Package:** `@blockrun/llm` (npm)
 **Node:** >=20
@@ -75,12 +75,20 @@ pnpm typecheck          # TypeScript check
 
 - `client.smartChat(prompt, { routingProfile? })` picks the cheapest capable
   model per request. Profiles: `'eco' | 'auto' | 'premium'` (default `auto`).
+  `smartChatCompletion(messages, options)` routes full agent/tool turns;
+  `route(prompt)` inspects a decision without paying. The
+  `blockrun/auto|eco|premium` aliases work in `chat()`, `chatCompletion()`,
+  and `chatCompletionStream()` on both chain clients and the OpenAI-compat
+  layer — NOT in the Anthropic-compat layer (it proxies `/v1/messages` raw).
 - Router Core is bundled; consumers install no separate router package.
 - The default strategy is the deterministic portfolio router
   (`routing.method: 'portfolio'`): local classification, hard capability
-  filters, ranked `routing.candidates`. The SDK builds `routing.fallbacks`
-  from that ranking (primary excluded, unpriced models filtered) and `chat()`
-  walks it automatically on transient errors (timeout / network / 5xx).
+  filters, ranked `routing.candidates`. Candidate policy: the ranking is
+  trusted as-is (including ids withheld from `/v1/models`); the `free/*`
+  proxy namespace is mapped to catalog-listed `nvidia/*` ids (dropped when
+  proxy-only). The SDK builds `routing.fallbacks` from that ranking and
+  `chat()` walks it automatically on transient errors (timeout / network /
+  429 / 5xx). Caller-supplied `fallbackModels` wins over the routed chain.
 - Routing types (`RoutingDecision`, `RoutingTier`, `RoutingTaskType`,
   `RoutingTierConfig`) are derived from `@blockrun/router-core` — a
   devDependency pinned to the reviewed Router Core commit —
@@ -92,7 +100,9 @@ pnpm typecheck          # TypeScript check
 
 | File | Purpose |
 |------|---------|
-| `client.ts` | Main `LLMClient` with `chat()`, `chatCompletion()`, `smartChat()`, `listModels()` |
+| `client.ts` | Main `LLMClient` with `chat()`, `chatCompletion()`, `smartChat()`, `smartChatCompletion()`, `route()`, `listModels()` |
+| `router-adapter.ts` | Bundled Router Core V3 adapter — candidate mapping (`free/*`→`nvidia/*`), capacity filter, shared transient-error logic |
+| `solana-client.ts` | `SolanaLLMClient` with the same routing/fallback surface, paid on Solana |
 | `tsup.config.ts` | Build config; `dts.resolve` inlines `@blockrun/router-core` types into the shipped `.d.ts` |
 | `x402.ts` | x402 payment protocol implementation |
 | `wallet.ts` | Multi-network wallet support (Base via viem, Solana via @solana/web3.js) |

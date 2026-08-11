@@ -46,43 +46,14 @@ import {
   RetiredEndpointError,
 } from "./types";
 import {
+  BASE_MINIMUM_PAYMENT_USD,
+  errSummary,
+  isTransientError,
   routeWithCatalog,
   routingProfileForModel,
   routingText,
   type ModelPricing,
 } from "./router-adapter";
-
-/**
- * Whether an error is the kind of transient failure that warrants trying
- * the next model in a fallback chain. True for: AbortError (timeout),
- * generic network/fetch errors, 429 (this upstream is saturated — the next
- * model in the chain is a different upstream), and APIError with 5xx status
- * codes typically associated with upstream availability problems.
- *
- * False for: other 4xx client errors (bad request, auth) and PaymentError —
- * those aren't "swap upstream and retry" situations.
- */
-function isTransientError(err: unknown): boolean {
-  if (err instanceof PaymentError) return false;
-  if (err instanceof APIError) {
-    return [429, 502, 503, 504, 522, 524].includes(err.statusCode);
-  }
-  // AbortError (timeout) or generic TypeError: failed to fetch
-  if (err instanceof Error) {
-    if (err.name === "AbortError") return true;
-    if (err.name === "TypeError" && /fetch|network/i.test(err.message)) return true;
-  }
-  return false;
-}
-
-function errSummary(err: unknown): string {
-  if (err instanceof APIError) return `APIError ${err.statusCode}`;
-  if (err instanceof Error) {
-    const msg = err.message.length > 80 ? err.message.slice(0, 80) : err.message;
-    return `${err.name}: ${msg}`;
-  }
-  return String(err).slice(0, 100);
-}
 
 /**
  * Normalise a raw `/v1/models` row into the SDK `Model` interface.
@@ -194,7 +165,7 @@ export class LLMClient {
 
   // Pre-auth cache: avoids the 402 round-trip on repeat requests to the same model.
   // Key = "endpoint:model", value = cached payment header + timestamp.
-  // TTL: 1 hour (mirrors ClawRouter's payment-preauth.ts approach).
+  // TTL: 1 hour — pre-auth quotes are stable server-side on that horizon.
   private preAuthCache: Map<string, { paymentHeader: string; cachedAt: number }> = new Map();
   private static readonly PRE_AUTH_TTL_MS = 3_600_000;
 
@@ -277,6 +248,8 @@ export class LLMClient {
       requiresStructuredOutput?: boolean;
       tools?: ChatCompletionOptions["tools"];
       toolChoice?: ChatCompletionOptions["toolChoice"];
+      conversationChars?: number;
+      hasVision?: boolean;
     } = {},
   ): Promise<RoutingDecision> {
     return routeWithCatalog(
@@ -284,7 +257,7 @@ export class LLMClient {
       systemPrompt,
       maxOutputTokens,
       await this.getModelPricing(),
-      { ...options, minimumPaymentUsd: 0.002 },
+      { ...options, minimumPaymentUsd: BASE_MINIMUM_PAYMENT_USD },
     );
   }
 
@@ -349,7 +322,8 @@ export class LLMClient {
       searchParameters: options?.searchParameters,
       responseFormat: options?.responseFormat,
       stop: options?.stop,
-      fallbackModels: decision.fallbacks,
+      // An explicit caller-supplied chain wins over the routed one.
+      fallbackModels: options?.fallbackModels ?? decision.fallbacks,
     });
 
     return {
@@ -364,7 +338,7 @@ export class LLMClient {
     messages: ChatMessage[],
     options: SmartChatCompletionOptions = {},
   ): Promise<SmartChatCompletionResponse> {
-    const { prompt, systemPrompt } = routingText(messages);
+    const { prompt, systemPrompt, conversationChars, hasVision } = routingText(messages);
     const decision = await this.makeRoutingDecision(
       prompt,
       systemPrompt,
@@ -374,6 +348,8 @@ export class LLMClient {
         requiresStructuredOutput: options.responseFormat !== undefined,
         tools: options.tools,
         toolChoice: options.toolChoice,
+        conversationChars,
+        hasVision,
       },
     );
     const response = await this.chatCompletion(decision.model, messages, {
@@ -386,7 +362,8 @@ export class LLMClient {
       toolChoice: options.toolChoice,
       responseFormat: options.responseFormat,
       stop: options.stop,
-      fallbackModels: decision.fallbacks,
+      // An explicit caller-supplied chain wins over the routed one.
+      fallbackModels: options.fallbackModels ?? decision.fallbacks,
     });
     response.routing = decision;
     return { response, model: decision.model, routing: decision };
@@ -423,17 +400,17 @@ export class LLMClient {
     const pricing = new Map<string, ModelPricing>();
 
     for (const model of models) {
-      if (model.billingMode === "flat" && model.flatPrice && model.flatPrice > 0) {
-        pricing.set(model.id, {
-          inputPrice: model.inputPrice,
-          outputPrice: model.outputPrice,
-          flatPrice: model.flatPrice,
-        });
+      // A model the catalog marks unavailable must not win routing — every
+      // smart call to it would fail with a non-transient error.
+      if (model.available === false) continue;
+      // Guard against malformed catalog rows: NaN survives `?? 0` and would
+      // silently poison route scoring and cost/savings metadata downstream.
+      const inputPrice = Number.isFinite(model.inputPrice) ? model.inputPrice : 0;
+      const outputPrice = Number.isFinite(model.outputPrice) ? model.outputPrice : 0;
+      if (model.billingMode === "flat" && Number.isFinite(model.flatPrice) && model.flatPrice! > 0) {
+        pricing.set(model.id, { inputPrice, outputPrice, flatPrice: model.flatPrice });
       } else {
-        pricing.set(model.id, {
-          inputPrice: model.inputPrice,
-          outputPrice: model.outputPrice,
-        });
+        pricing.set(model.id, { inputPrice, outputPrice });
       }
     }
 
@@ -785,7 +762,7 @@ export class LLMClient {
     let requestModel = model;
     const routingProfile = routingProfileForModel(model);
     if (routingProfile) {
-      const { prompt, systemPrompt } = routingText(messages);
+      const { prompt, systemPrompt, conversationChars, hasVision } = routingText(messages);
       const decision = await this.makeRoutingDecision(
         prompt,
         systemPrompt,
@@ -795,6 +772,8 @@ export class LLMClient {
           requiresStructuredOutput: options?.responseFormat !== undefined,
           tools: options?.tools,
           toolChoice: options?.toolChoice,
+          conversationChars,
+          hasVision,
         },
       );
       requestModel = decision.model;

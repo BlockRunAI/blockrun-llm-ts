@@ -2,7 +2,28 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
-## [Unreleased]
+## [3.12.0] - 2026-08-10
+
+### Added — Router Core V3 is bundled into both chain clients (PR #25, reviewed and hardened)
+
+The routing engine moves from an optional peer dependency into the SDK itself. Base work by @KillerQueen-Z (#25); merged after a seven-pass review (4 specialists + Claude/Codex adversarial + Codex structured) with the fixes below.
+
+- **The SDK bundles the product-neutral [`@blockrun/router-core`](https://github.com/BlockRunAI/router-core) V3 runtime**, pinned to a reviewed immutable commit and inlined into both the shipped JS and the declarations. `@blockrun/clawrouter` is no longer a peer dependency (optional or otherwise); users install nothing to route.
+- **`blockrun/auto`, `blockrun/eco`, and `blockrun/premium`** are accepted as model ids by `chat()`, `chatCompletion()`, and `chatCompletionStream()` on `LLMClient`, `SolanaLLMClient`, and the OpenAI-compat layer — resolved locally before the first x402 quote, no extra inference call. The Anthropic-compat layer proxies `/v1/messages` raw and does **not** resolve them; pass a concrete model id there.
+- **`smartChatCompletion(messages, options)`** routes a full OpenAI-compatible agent/tool conversation and returns the complete response with the local decision attached (`response.routing`). **`route(prompt, options)`** inspects a decision without making or paying for a model call.
+- **Solana reaches routing parity**: same portfolio strategy, catalog filtering, transient fallback walk (now with per-hop stderr logging, matching Base), and pricing cache.
+- Flat-billed models now route on their real `flatPrice` via router-core's `calculateModelCost` instead of a synthesized per-token rate.
+- `getBalance()` uses the valid PublicNode Base RPC hostname, honors `BASE_RPC_URL`, and fails over on malformed RPC responses instead of silently returning 0.
+
+### Fixed — review findings applied before merge
+
+- **eco stays $0.** The PR's strict catalog filter dropped the router's `free/*` candidates (a proxy namespace — the gateway's ids are `nvidia/*`), silently converting eco into a paid profile. v3.11.0's mapping is restored inside the bundled adapter: `free/<m>` resolves to the catalog-listed `nvidia/<m>`, proxy-only ids are dropped, and ids withheld from `/v1/models` but gateway-callable (e.g. `moonshot/kimi-k2.7`, premium's SIMPLE pick) are kept — the ranking is trusted, exactly as the v3.11.0 fix established. Verified live: eco answers from `nvidia/deepseek-v4-flash` at $0.
+- **429 stays transient on both chains.** `isTransientError` (now a single shared implementation in `router-adapter.ts`) walks the fallback chain on 429 alongside timeouts, network failures, and 5xx — the Solana client shipped without it and a naive conflict resolution would have dropped it from Base.
+- **Capacity checks see the whole conversation.** `smartChatCompletion()` routed a full agent transcript on the size of its last user message, so a 200k-token conversation could select a small-context model and die on a non-transient 400. The adapter now estimates against the full transcript (and detects image parts → `hasVision`) and filters candidates through router-core's capacity check; models unknown to the capability snapshot get the benefit of the doubt.
+- **Empty `candidates` arrays fall back to the tier chain** instead of throwing (`?.length` semantics restored, with the guard test back in the suite); when nothing survives resolution, the router's own pick is called as-is so the gateway's real error surfaces.
+- **Free models report $0 metadata.** The x402 payment floor (Base $0.002 / Solana $0.001, now named constants) no longer inflates `costEstimate` for catalog-$0 models — free calls settle without a payment and report `savings: 1`.
+- **Caller-supplied `fallbackModels` wins over the routed chain** on every smart/alias path instead of being silently discarded.
+- **Catalog robustness:** rows marked `available: false` are excluded from routing, and malformed price fields are clamped (previously `Number("abc")` → NaN could silently poison scoring and cost metadata).
 
 ### Docs — README rebuilt to flagship-repo standard
 

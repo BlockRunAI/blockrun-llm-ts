@@ -31,6 +31,9 @@ import type {
 } from "./types";
 import { APIError, PaymentError } from "./types";
 import {
+  SOLANA_MINIMUM_PAYMENT_USD,
+  errSummary,
+  isTransientError,
   routeWithCatalog,
   routingProfileForModel,
   routingText,
@@ -54,16 +57,6 @@ import { USER_AGENT } from "./version";
 const SOLANA_API_URL = "https://sol.blockrun.ai/api";
 const DEFAULT_MAX_TOKENS = 1024;
 const DEFAULT_TIMEOUT = 60000;
-
-function isTransientError(error: unknown): boolean {
-  if (error instanceof PaymentError) return false;
-  if (error instanceof APIError) return [502, 503, 504, 522, 524].includes(error.statusCode);
-  if (error instanceof Error) {
-    return error.name === "AbortError" ||
-      (error.name === "TypeError" && /fetch|network/i.test(error.message));
-  }
-  return false;
-}
 
 /**
  * Default Solana RPC URL — BlockRun's multi-region Tatum-backed JSON-RPC
@@ -241,6 +234,9 @@ export class SolanaLLMClient {
       } catch (error) {
         lastError = error;
         if (!isTransientError(error) || index === chain.length - 1) throw error;
+        // Same one-line hop visibility the Base client provides — a paid
+        // request must never switch models silently.
+        console.error(`[@blockrun/llm] ${candidate} -> ${chain[index + 1]} (${errSummary(error)})`);
       }
     }
     throw lastError;
@@ -260,9 +256,17 @@ export class SolanaLLMClient {
           billing_mode?: string;
           pricing?: { input?: number; output?: number; flat?: number };
         };
-        const inputPrice = Number(model.inputPrice ?? raw.input_price ?? raw.pricing?.input ?? 0);
-        const outputPrice = Number(model.outputPrice ?? raw.output_price ?? raw.pricing?.output ?? 0);
-        const flatPrice = Number(model.flatPrice ?? raw.flat_price ?? raw.pricing?.flat ?? 0);
+        // Skip catalog rows marked unavailable, and guard against malformed
+        // values: Number("abc") is NaN, which survives `?? 0` and would
+        // silently poison route scoring and cost metadata downstream.
+        if (model.available === false) continue;
+        const num = (value: unknown): number => {
+          const n = Number(value ?? 0);
+          return Number.isFinite(n) ? n : 0;
+        };
+        const inputPrice = num(model.inputPrice ?? raw.input_price ?? raw.pricing?.input);
+        const outputPrice = num(model.outputPrice ?? raw.output_price ?? raw.pricing?.output);
+        const flatPrice = num(model.flatPrice ?? raw.flat_price ?? raw.pricing?.flat);
         pricing.set(model.id, {
           inputPrice,
           outputPrice,
@@ -291,7 +295,7 @@ export class SolanaLLMClient {
       {
         routingProfile: options?.routingProfile,
         requiresStructuredOutput: options?.responseFormat !== undefined,
-        minimumPaymentUsd: 0.001,
+        minimumPaymentUsd: SOLANA_MINIMUM_PAYMENT_USD,
       },
     );
   }
@@ -301,7 +305,8 @@ export class SolanaLLMClient {
     const decision = await this.route(prompt, options);
     const response = await this.chat(decision.model, prompt, {
       ...options,
-      fallbackModels: decision.fallbacks,
+      // An explicit caller-supplied chain wins over the routed one.
+      fallbackModels: options?.fallbackModels ?? decision.fallbacks,
     });
     return { response, model: decision.model, routing: decision };
   }
@@ -311,7 +316,7 @@ export class SolanaLLMClient {
     messages: ChatMessage[],
     options: SmartChatCompletionOptions = {},
   ): Promise<SmartChatCompletionResponse> {
-    const { prompt, systemPrompt } = routingText(messages);
+    const { prompt, systemPrompt, conversationChars, hasVision } = routingText(messages);
     const decision = routeWithCatalog(
       prompt,
       systemPrompt,
@@ -322,7 +327,9 @@ export class SolanaLLMClient {
         requiresStructuredOutput: options.responseFormat !== undefined,
         tools: options.tools,
         toolChoice: options.toolChoice,
-        minimumPaymentUsd: 0.001,
+        conversationChars,
+        hasVision,
+        minimumPaymentUsd: SOLANA_MINIMUM_PAYMENT_USD,
       },
     );
     const response = await this.chatCompletion(decision.model, messages, {
@@ -335,7 +342,8 @@ export class SolanaLLMClient {
       toolChoice: options.toolChoice,
       responseFormat: options.responseFormat,
       stop: options.stop,
-      fallbackModels: decision.fallbacks,
+      // An explicit caller-supplied chain wins over the routed one.
+      fallbackModels: options.fallbackModels ?? decision.fallbacks,
     });
     response.routing = decision;
     return { response, model: decision.model, routing: decision };
