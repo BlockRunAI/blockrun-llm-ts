@@ -1536,6 +1536,25 @@ matches on that derived address — so a wallet file cannot claim an address it
 cannot sign for, nor be adopted by one. `listDiscoveredWallets()` never returns
 private keys.
 
+### One wallet across every BlockRun product
+
+Base wallet resolution, discovery, and adoption are implemented in
+[`@blockrun/core`](https://www.npmjs.com/package/@blockrun/core), the shared kernel
+this SDK, the `blockrun` CLI, and clawrouter-codex all read. Defining the canonical
+order in one place is what keeps them in agreement — when each product carried its
+own copy, they drifted, and a fix made here did not reach the CLI.
+
+The kernel is bundled into the SDK at build time (frozen, reviewed bytes — no
+floating dependency), so there is nothing extra to install. Set `BLOCKRUN_HOME`
+to override the base directory (`~` by default) for test isolation; unset,
+behaviour is unchanged. **Treat `BLOCKRUN_HOME` as security-sensitive**: it
+redirects where the signing key is read from and written to, so an environment
+that can set it controls the wallet as surely as one that can set
+`BLOCKRUN_WALLET_KEY`. Set it before importing the SDK — the exported
+`WALLET_FILE_PATH`/`WALLET_DIR_PATH` constants snapshot at import (all internal
+reads and writes resolve per call). Solana resolution is still SDK-local and
+does not honor `BLOCKRUN_HOME`.
+
 For a single run without changing anything, use
 `export BLOCKRUN_WALLET_KEY=<private-key>`.
 

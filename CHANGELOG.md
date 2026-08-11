@@ -2,6 +2,22 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **Wallet resolution now comes from `@blockrun/core`, so every BlockRun product reads the same wallet by construction.** `scanWallets`, `listDiscoveredWallets`, `importWallet`, `loadWallet`, `getOrCreateWallet`, and `getWalletAddress` delegate to the shared kernel instead of re-implementing the canonical order (`env → ~/.blockrun/.session → legacy wallet.key`) in this package. That duplication is what let the two drift: this SDK fixed provider-wallet takeover in 3.7.1 (#14) while core kept resolving provider `wallet.json` files first until `@blockrun/core@0.1.0`, so the `blockrun` CLI signed x402 payments with whatever key a planted `~/.<app>/wallet.json` supplied. Public signatures are unchanged and all ten canonical-selection regression tests pass against the delegated implementation — including the ones proving a discovered wallet is never adopted automatically and that a file cannot claim an address it holds no key for. `src/wallet.ts` drops 128 lines of duplicated logic.
+- **`BLOCKRUN_HOME` now overrides the wallet directory.** Path resolution comes from core, which supports this for test isolation and power users. Previously this module always used the OS home directory. Unset, behaviour is identical.
+
+### Notes
+
+- `@blockrun/core` is **bundled into the SDK at build time** (devDependency + tsup `noExternal`), not installed by consumers. Two reasons, both from the pre-merge review: core publishes ESM-only, so keeping it external made the CJS entry (`require('@blockrun/llm')`) throw `ERR_PACKAGE_PATH_NOT_EXPORTED` at load for every CommonJS consumer (reproduced; invisible to the all-ESM CI); and bundling freezes the reviewed kernel bytes into `dist`, so a compromised or regressed core patch release cannot reach users through a floating `^0.1.0` range. Core `>=0.1.0` remains the source floor — earlier versions carry the provider-takeover defect described above.
+- **Wallet paths are resolved per call, never snapshotted at import** — also from the review: core re-reads `BLOCKRUN_HOME` on every resolution, and a load-time snapshot in this package let the read path (core) and write path (`saveWallet`) disagree once `BLOCKRUN_HOME` changed after import (e.g. `dotenv.config()` after the SDK import). In that state `getOrCreateWallet()` minted a fresh key and wrote it over the user's real, possibly funded `~/.blockrun/.session` — with no backup. Reproduced, fixed, and pinned by a regression test. The exported `WALLET_FILE_PATH`/`WALLET_DIR_PATH` constants remain import-time snapshots for API compatibility and are documented as such.
+- `scanWallets()` semantics tightened by the delegation (documented): the returned address is now **derived from the discovered key** — the file's own `address` field is ignored, files without one are discoverable, and entries whose key does not parse are dropped. Keys stored without a `0x` prefix now resolve (core's `normalize`), matching the 3.9.0 key-format compatibility work.
+- `BLOCKRUN_HOME` is documented as security-sensitive: it redirects where the signing key is read from and written to, equivalent in power to `BLOCKRUN_WALLET_KEY`.
+- The security properties that moved into core are now pinned by tests on this side: env-beats-file precedence, `.session`-before-legacy ordering, derived-address adoption, backup-on-replace, no-backup on re-adopting the active wallet, and the post-import `BLOCKRUN_HOME` split-brain regression.
+- Solana wallet resolution is still SDK-local — core has no Solana key store yet — and does not honor `BLOCKRUN_HOME`.
+
 ## [3.12.0] - 2026-08-10
 
 ### Added — Router Core V3 is bundled into both chain clients (PR #25, reviewed and hardened)
