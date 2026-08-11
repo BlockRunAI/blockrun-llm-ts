@@ -2,7 +2,7 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
-## [Unreleased]
+## [3.13.0] - 2026-08-11
 
 ### Changed
 
