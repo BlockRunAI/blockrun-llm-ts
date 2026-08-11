@@ -5,20 +5,51 @@
  * - Auto-creates wallet if none exists
  * - Stores key securely at ~/.blockrun/.session
  * - Generates EIP-681 URIs for easy MetaMask funding
+ *
+ * Key resolution, discovery, and adoption are delegated to `@blockrun/core`, the
+ * shared kernel every BlockRun product reads. That is what guarantees this SDK,
+ * the `blockrun` CLI, and clawrouter-codex all resolve the SAME wallet — the
+ * behaviour is defined in one place instead of being re-implemented per product
+ * and drifting. Kept SDK-local: the funding/messaging surface (SDK-specific),
+ * plus createWallet()/saveWallet() as thin persistence wrappers for API
+ * compatibility — they write to the same core-resolved path, per call.
+ *
+ * Because path resolution now comes from core, `BLOCKRUN_HOME` overrides the base
+ * directory (previously this module always used the OS home directory). Treat
+ * that variable as security-sensitive: it redirects where the signing key is
+ * read from AND written to, so an environment that can set it controls the
+ * wallet as surely as one that can set BLOCKRUN_WALLET_KEY.
  */
 
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
+import {
+  paths as corePaths,
+  resolveFromFiles,
+  resolvePrivateKey,
+  listDiscoveredWallets as coreListDiscoveredWallets,
+  scanWallets as coreScanWallets,
+  adoptWallet as coreAdoptWallet,
+} from "@blockrun/core";
 import * as fs from "fs";
-import * as path from "path";
-import * as os from "os";
 
 // USDC on Base contract address
 export const USDC_BASE_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 export const BASE_CHAIN_ID = "8453";
 
-// Wallet storage location
-const WALLET_DIR = path.join(os.homedir(), ".blockrun");
-const WALLET_FILE = path.join(WALLET_DIR, ".session");
+// Wallet storage location — resolved by core so every product agrees on it.
+// Resolved PER CALL, never snapshotted at module load: core re-reads
+// BLOCKRUN_HOME on every resolution, so a load-time snapshot here would let
+// the read path (core) and the write path (saveWallet) disagree the moment
+// BLOCKRUN_HOME changes after import (e.g. dotenv.config() running after the
+// SDK import) — getOrCreateWallet() would then mint a fresh key and
+// saveWallet() would clobber the user's real, possibly funded ~/.blockrun/
+// .session with it, without a backup.
+function walletDir(): string {
+  return corePaths().dir;
+}
+function walletFile(): string {
+  return corePaths().session;
+}
 
 export interface WalletInfo {
   privateKey: string;
@@ -54,47 +85,30 @@ export function createWallet(): { address: string; privateKey: string } {
  * @returns Path to saved wallet file
  */
 export function saveWallet(privateKey: string): string {
-  if (!fs.existsSync(WALLET_DIR)) {
-    fs.mkdirSync(WALLET_DIR, { recursive: true });
+  const dir = walletDir();
+  const file = walletFile();
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
-  fs.writeFileSync(WALLET_FILE, privateKey, { mode: 0o600 });
-  return WALLET_FILE;
+  fs.writeFileSync(file, privateKey, { mode: 0o600 });
+  return file;
 }
 
 /**
  * Discover ~/.<dir>/wallet.json files from other providers.
  *
- * Each file should contain JSON with "privateKey" and "address" fields.
- * Results are sorted by modification time (most recent first). Discovery is
- * intentionally opt-in: a provider wallet must never replace the canonical
- * BlockRun wallet merely because it was written more recently.
+ * Each file should contain JSON with a "privateKey" field; the returned
+ * address is DERIVED from that key (any "address" field in the file is
+ * ignored, so a file cannot claim an address it holds no key for), and
+ * entries whose key does not parse are dropped. Results are sorted by
+ * modification time (most recent first). Discovery is intentionally opt-in:
+ * a provider wallet must never replace the canonical BlockRun wallet merely
+ * because it was written more recently.
  *
- * @returns Array of wallet objects with privateKey and address
+ * @returns Array of wallet objects with privateKey and derived address
  */
 export function scanWallets(): Array<{ privateKey: string; address: string; source: string }> {
-  const home = os.homedir();
-  const results: Array<{ mtime: number; privateKey: string; address: string; source: string }> = [];
-
-  try {
-    const entries = fs.readdirSync(home, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.name.startsWith(".") || !entry.isDirectory()) continue;
-      const walletFile = path.join(home, entry.name, "wallet.json");
-      if (!fs.existsSync(walletFile)) continue;
-      try {
-        const data = JSON.parse(fs.readFileSync(walletFile, "utf-8"));
-        const pk = data.privateKey || "";
-        const addr = data.address || "";
-        if (pk && addr) {
-          const mtime = fs.statSync(walletFile).mtimeMs;
-          results.push({ mtime, privateKey: pk, address: addr, source: walletFile });
-        }
-      } catch { continue; }
-    }
-  } catch { /* ignore */ }
-
-  results.sort((a, b) => b.mtime - a.mtime);
-  return results.map(({ privateKey, address, source }) => ({ privateKey, address, source }));
+  return coreScanWallets();
 }
 
 /**
@@ -109,18 +123,7 @@ export function scanWallets(): Array<{ privateKey: string; address: string; sour
  * @returns Discovered wallets as `{ address, source }`, most recent first
  */
 export function listDiscoveredWallets(): Array<{ address: string; source: string }> {
-  const listed: Array<{ address: string; source: string }> = [];
-  for (const entry of scanWallets()) {
-    try {
-      listed.push({
-        address: privateKeyToAccount(entry.privateKey as `0x${string}`).address,
-        source: entry.source,
-      });
-    } catch {
-      continue;
-    }
-  }
-  return listed;
+  return coreListDiscoveredWallets();
 }
 
 /**
@@ -134,41 +137,18 @@ export function listDiscoveredWallets(): Array<{ address: string; source: string
  * The current `~/.blockrun/.session` is backed up beside itself before being
  * overwritten, so adopting a wallet can't strand the funds in the old one.
  *
+ * NOTE: this is NOT `@blockrun/core`'s `importWallet(rawPrivateKey)` — that
+ * one persists a raw key and refuses to overwrite without `force`. This SDK
+ * function adopts a DISCOVERED wallet by address and maps onto core's
+ * `adoptWallet()`. Same name, different operation; don't mix them up when
+ * importing from core directly.
+ *
  * @param address Address to adopt, as shown by `listDiscoveredWallets()`
  * @returns The adopted address
  * @throws If no discovered wallet derives to that address
  */
 export function importWallet(address: string): string {
-  const wanted = address.trim().toLowerCase();
-
-  for (const entry of scanWallets()) {
-    let derived: string;
-    try {
-      derived = privateKeyToAccount(entry.privateKey as `0x${string}`).address;
-    } catch {
-      continue;
-    }
-
-    if (derived.toLowerCase() !== wanted) continue;
-
-    // Preserve the outgoing wallet — it may hold funds.
-    if (fs.existsSync(WALLET_FILE)) {
-      const current = fs.readFileSync(WALLET_FILE, "utf-8").trim();
-      if (current && current !== entry.privateKey) {
-        const backup = path.join(WALLET_DIR, `.session.backup-${Math.floor(Date.now() / 1000)}`);
-        fs.writeFileSync(backup, current, { mode: 0o600 });
-      }
-    }
-
-    saveWallet(entry.privateKey);
-    return derived;
-  }
-
-  const available = listDiscoveredWallets().map((w) => w.address);
-  throw new Error(
-    `No discovered wallet controls ${address}. ` +
-      `Available: ${available.length ? available.join(", ") : "none"}`
-  );
+  return coreAdoptWallet(address).address;
 }
 
 /**
@@ -181,21 +161,10 @@ export function importWallet(address: string): string {
  * @returns Private key string or null if not found
  */
 export function loadWallet(): string | null {
-  // The canonical BlockRun wallet always wins. Do not implicitly adopt a
-  // wallet discovered in another application's private storage.
-  if (fs.existsSync(WALLET_FILE)) {
-    const key = fs.readFileSync(WALLET_FILE, "utf-8").trim();
-    if (key) return key;
-  }
-
-  // Check legacy wallet.key
-  const legacyFile = path.join(WALLET_DIR, "wallet.key");
-  if (fs.existsSync(legacyFile)) {
-    const key = fs.readFileSync(legacyFile, "utf-8").trim();
-    if (key) return key;
-  }
-
-  return null;
+  // The canonical BlockRun wallet always wins. core's resolveFromFiles() reads
+  // .session then legacy and never adopts a wallet discovered in another
+  // application's private storage.
+  return resolveFromFiles()?.privateKey ?? null;
 }
 
 /**
@@ -215,20 +184,13 @@ export function loadWallet(): string | null {
  * @returns Formatted notice, or null if nothing was discovered
  */
 export function formatWalletMigrationNotice(newAddress: string): string | null {
-  let discovered: Array<{ privateKey: string; address: string }>;
+  let addresses: string[];
   try {
-    discovered = scanWallets();
+    // core derives each address from the discovered key, so a planted file cannot
+    // name an address it has no key for and trick the user into importing it.
+    addresses = coreListDiscoveredWallets().map((w) => w.address);
   } catch {
     return null;
-  }
-
-  const addresses: string[] = [];
-  for (const entry of discovered) {
-    try {
-      addresses.push(privateKeyToAccount(entry.privateKey as `0x${string}`).address);
-    } catch {
-      continue;
-    }
   }
 
   if (addresses.length === 0) return null;
@@ -270,23 +232,13 @@ BLOCKRUN_WALLET_KEY=<private-key> for a single run without changing anything.
  * @returns WalletInfo with address, privateKey, and isNew flag
  */
 export function getOrCreateWallet(): WalletInfo {
-  // Check environment variable first
-  const envKey =
-    typeof process !== "undefined" && process.env
-      ? process.env.BLOCKRUN_WALLET_KEY || process.env.BASE_CHAIN_WALLET_KEY
-      : undefined;
-
-  if (envKey) {
-    const account = privateKeyToAccount(envKey as `0x${string}`);
-    return { address: account.address, privateKey: envKey, isNew: false };
-  }
-
-  // Check the canonical BlockRun wallet. scanWallets() is exposed for an
-  // explicit migration flow only and must not affect automatic selection.
-  const fileKey = loadWallet();
-  if (fileKey) {
-    const account = privateKeyToAccount(fileKey as `0x${string}`);
-    return { address: account.address, privateKey: fileKey, isNew: false };
+  // core's canonical order: env (BLOCKRUN_WALLET_KEY|BASE_CHAIN_WALLET_KEY) →
+  // .session → legacy. Discovered provider wallets are deliberately excluded;
+  // scanWallets() is exposed for the explicit migration flow only.
+  const resolved = resolvePrivateKey();
+  if (resolved) {
+    const account = privateKeyToAccount(resolved.privateKey);
+    return { address: account.address, privateKey: resolved.privateKey, isNew: false };
   }
 
   // Create new wallet
@@ -301,21 +253,8 @@ export function getOrCreateWallet(): WalletInfo {
  * @returns Wallet address or null if no wallet configured
  */
 export function getWalletAddress(): string | null {
-  const envKey =
-    typeof process !== "undefined" && process.env
-      ? process.env.BLOCKRUN_WALLET_KEY || process.env.BASE_CHAIN_WALLET_KEY
-      : undefined;
-
-  if (envKey) {
-    return privateKeyToAccount(envKey as `0x${string}`).address;
-  }
-
-  const fileKey = loadWallet();
-  if (fileKey) {
-    return privateKeyToAccount(fileKey as `0x${string}`).address;
-  }
-
-  return null;
+  const resolved = resolvePrivateKey();
+  return resolved ? privateKeyToAccount(resolved.privateKey).address : null;
 }
 
 /**
@@ -417,6 +356,10 @@ export function formatFundingMessageCompact(address: string): string {
 Check my balance: ${links.basescan}`;
 }
 
-// Export constants
-export const WALLET_FILE_PATH = WALLET_FILE;
-export const WALLET_DIR_PATH = WALLET_DIR;
+// Exported path constants. NOTE: these are import-time snapshots kept for
+// API compatibility (they have been `string` since 1.x). All internal reads
+// and writes resolve paths per call via core; only these two exported values
+// freeze the location observed at import. If BLOCKRUN_HOME may change after
+// import, resolve paths yourself via @blockrun/core's paths().
+export const WALLET_FILE_PATH = walletFile();
+export const WALLET_DIR_PATH = walletDir();

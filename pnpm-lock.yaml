@@ -30,6 +30,9 @@ importers:
         specifier: ^0.39.0
         version: 0.39.0
     devDependencies:
+      '@blockrun/core':
+        specifier: ^0.1.0
+        version: 0.1.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76)
       '@blockrun/router-core':
         specifier: https://codeload.github.com/BlockRunAI/router-core/tar.gz/d4308049348e11e17ed08a254676a34949be80f9
         version: https://codeload.github.com/BlockRunAI/router-core/tar.gz/d4308049348e11e17ed08a254676a34949be80f9
@@ -66,6 +69,9 @@ packages:
   '@babel/runtime@7.29.2':
     resolution: {integrity: sha512-JiDShH45zKHWyGe4ZNVRrCjBz8Nh9TMmZG1kh4QTK8hCBTWBi8Da+i7s1fJw7/lYpM4ccepSNfqzZ/QvABBi5g==}
     engines: {node: '>=6.9.0'}
+
+  '@blockrun/core@0.1.1':
+    resolution: {integrity: sha512-mXeF/XCFc9z+2Mxq4zGrhrFkEjpYprnuHOp20naE6YhouBu2SwHuaWaYec4gb7yJ+uU8S7aqUf6UIXkD5xDTvA==}
 
   '@blockrun/router-core@https://codeload.github.com/BlockRunAI/router-core/tar.gz/d4308049348e11e17ed08a254676a34949be80f9':
     resolution: {tarball: https://codeload.github.com/BlockRunAI/router-core/tar.gz/d4308049348e11e17ed08a254676a34949be80f9}
@@ -1959,6 +1965,15 @@ snapshots:
     optional: true
 
   '@babel/runtime@7.29.2': {}
+
+  '@blockrun/core@0.1.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76)':
+    dependencies:
+      viem: 2.49.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76)
+    transitivePeerDependencies:
+      - bufferutil
+      - typescript
+      - utf-8-validate
+      - zod
 
   '@blockrun/router-core@https://codeload.github.com/BlockRunAI/router-core/tar.gz/d4308049348e11e17ed08a254676a34949be80f9': {}
 
