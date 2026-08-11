@@ -36,11 +36,11 @@ console.log(r.routing.savings);  // 0.96 — this exact request cost 96% less th
 console.log(r.response);         // the proof
 ```
 
-**<!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% cheaper than pinning Claude Opus 5** across a realistic workload on the default `auto` profile, **<!-- br:savings.ecoVsBaselinePct -->98<!-- /br:savings.ecoVsBaselinePct -->%** on `eco` — and eco's first stop is the free tier, so simple requests cost $0.00 outright. Not an "up to" figure: the baseline, workload mix, and token ratio are published in [`savings-mix.json`](https://github.com/BlockRunAI/blockrun/blob/main/src/brand/savings-mix.json) so anyone can recompute the claim. Details in [Smart Routing](#smart-routing-clawrouter).
+**<!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% cheaper than pinning Claude Opus 5** across a realistic workload on the default `auto` profile, **<!-- br:savings.ecoVsBaselinePct -->98<!-- /br:savings.ecoVsBaselinePct -->%** on `eco` — and eco's first stop is the free tier, so simple requests cost $0.00 outright. Not an "up to" figure: the baseline, workload mix, and token ratio are published in [`savings-mix.json`](https://github.com/BlockRunAI/blockrun/blob/main/src/brand/savings-mix.json) so anyone can recompute the claim. Details in [Smart Routing](#smart-routing-router-core-v3).
 
 ## Why This SDK
 
-- 🧠 **Smart routing that pays for itself** — [ClawRouter](https://github.com/BlockRunAI/ClawRouter) classifies every request locally in <1ms across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions and routes to the cheapest capable model. The main event.
+- 🧠 **Smart routing that pays for itself** — the bundled [Router Core V3](https://github.com/BlockRunAI/router-core) engine (shared with [ClawRouter](https://github.com/BlockRunAI/ClawRouter)) classifies every request locally in <1ms across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions and routes to the cheapest capable model. The main event.
 - 🆓 **<!-- br:models.free -->6<!-- /br:models.free --> genuinely free models** — NVIDIA-hosted, $0 in and out, incl. 1M-context DeepSeek V4 Flash and a multimodal Nemotron. No rate-limit gimmicks.
 - 🔐 **No API keys** — your wallet signature is your authentication. No accounts, no dashboards, no key rotation.
 - 💸 **Pay per request in USDC** — x402 micropayments on Base or Solana. $5 covers thousands of requests; agents can pay their own way.
@@ -62,8 +62,7 @@ console.log(r.response);         // the proof
 ## Installation
 
 ```bash
-npm install @blockrun/llm          # Base / EVM payments — nothing else needed
-npm install @blockrun/clawrouter   # optional: the smart router behind smartChat()
+npm install @blockrun/llm   # Base / EVM payments — smart routing included, nothing else needed
 ```
 
 <details>
@@ -111,8 +110,8 @@ const response = await client.chat('openai/gpt-4o', 'Hello!');
 ```
 
 That's it. The SDK handles x402 payment automatically — and `smartChat()`
-keeps the bill down on every request. (`smartChat()` needs the optional
-routing peer: `npm install @blockrun/clawrouter`.)
+keeps the bill down on every request. The router is bundled: no extra
+package to install.
 
 ### Try It Free (No USDC Required)
 
@@ -166,7 +165,7 @@ console.log(response);
 
 Set `SOLANA_WALLET_KEY` to your bs58-encoded Solana secret key. Payments are automatic via x402 — your key never leaves your machine.
 
-## Smart Routing (ClawRouter)
+## Smart Routing (Router Core V3)
 
 Let the SDK automatically pick the cheapest capable model for each request — **<!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% cheaper than pinning Claude Opus 5** for the same traffic on `auto`, **<!-- br:savings.ecoVsBaselinePct -->98<!-- /br:savings.ecoVsBaselinePct -->%** on `eco`.
 
@@ -175,17 +174,34 @@ published in [`savings-mix.json`](https://github.com/BlockRunAI/blockrun/blob/ma
 priced against the live catalog, so anyone can recompute the claim and get the
 same answer.
 
-Smart routing is powered by [ClawRouter](https://github.com/BlockRunAI/ClawRouter) —
-the open-source, agent-first LLM router: wallet signatures instead of API keys,
-USDC micropayments instead of credit cards, and <1ms fully-local routing with
-zero external calls. In this SDK it is an **optional peer dependency** —
-install it alongside the SDK:
+Smart routing is powered by the product-neutral
+[`@blockrun/router-core`](https://github.com/BlockRunAI/router-core) V3 engine —
+the same deterministic portfolio router that drives
+[ClawRouter](https://github.com/BlockRunAI/ClawRouter). It is **bundled into
+this SDK**: no separate router package to install, and routing runs 100%
+locally with zero external calls.
 
-```bash
-npm install @blockrun/clawrouter
+Three ways to use it:
+
+```typescript
+// 1. smartChat() — one-line routed chat
+const result = await client.smartChat('What is 2+2?');
+
+// 2. smartChatCompletion() — full agent/tool conversations, routed
+const agent = await client.smartChatCompletion(messages, { tools, toolChoice: 'auto' });
+
+// 3. blockrun/auto | blockrun/eco | blockrun/premium — model aliases accepted
+//    by chat(), chatCompletion(), and chatCompletionStream() on both chains
+const reply = await client.chatCompletion('blockrun/auto', messages);
+
+// Inspect a decision without paying for anything
+const decision = await client.route('Prove the Riemann hypothesis');
 ```
 
-Only `smartChat()` needs it: every other API works without it, and the package is loaded lazily, so a missing or broken router can never break `import '@blockrun/llm'`. Calling `smartChat()` without it throws an error naming the package instead of a cryptic module-load failure.
+The aliases are resolved locally by `LLMClient`, `SolanaLLMClient`, and the
+OpenAI-compat layer. The Anthropic-compat layer proxies straight to the
+gateway's `/v1/messages` and does **not** resolve them — pass a concrete
+model id there.
 
 ```typescript
 import { LLMClient } from '@blockrun/llm';
@@ -249,7 +265,7 @@ const result = await client.smartChat(
 console.log(result.model);  // 'anthropic/claude-opus-4.7'
 ```
 
-### How ClawRouter Works
+### How the Router Works
 
 ```mermaid
 flowchart LR
@@ -316,14 +332,14 @@ picked:
 
 ### TypeScript Types
 
-`RoutingDecision`, `RoutingProfile`, `RoutingTier`, `RoutingTaskType`, and
-`RoutingTierConfig` are exported from `@blockrun/llm`. They are derived from
-[`@blockrun/router-core`](https://github.com/BlockRunAI/router-core) — the
-routing engine ClawRouter bundles — pinned to the exact commit ClawRouter's
-published build inlines, and shipped **inlined in this SDK's declaration
-files**. You do not need to install `@blockrun/clawrouter` (or router-core,
-which is not on npm) for your project to typecheck against these types; the
-runtime package is only needed to actually call `smartChat()`.
+`RoutingDecision`, `RoutingProfile`, `RoutingTier`, `RoutingTaskType`,
+`RoutingTierConfig`, `SmartChatCompletionOptions`, and
+`SmartChatCompletionResponse` are exported from `@blockrun/llm`. They are
+derived from
+[`@blockrun/router-core`](https://github.com/BlockRunAI/router-core), pinned
+to a reviewed immutable commit, and shipped **inlined in this SDK's
+declaration files and runtime bundle** — you install nothing extra to route
+or to typecheck.
 
 ### Going Deeper
 
@@ -1023,9 +1039,9 @@ const response2 = await client.chat('anthropic/claude-sonnet-4', 'Write a haiku'
 });
 ```
 
-### Smart Routing (ClawRouter)
+### Smart Routing (Router Core V3)
 
-Save up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% on inference costs with intelligent model routing. ClawRouter's deterministic portfolio router (v3.4, default since ClawRouter v0.12.242) classifies each request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions, applies hard capability filters, and ranks the cheapest capable models (<1ms, 100% local). Requires the optional peer dependency: `npm install @blockrun/clawrouter`.
+Save up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% on inference costs with intelligent model routing. The bundled Router Core V3 engine classifies each request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions, applies hard capability filters, and ranks the cheapest capable models (<1ms, 100% local). Bundled — nothing extra to install.
 
 ```typescript
 import { LLMClient } from '@blockrun/llm';
@@ -1594,8 +1610,8 @@ The `AnthropicClient` wraps the official `@anthropic-ai/sdk` with a custom fetch
 ### How does payment work?
 When you make an API call, the SDK automatically handles x402 payment. It signs a USDC transaction locally using your wallet private key (which never leaves your machine), and includes the payment proof in the request header. Settlement is non-custodial and instant on Base or Solana.
 
-### What is smart routing / ClawRouter?
-ClawRouter is the SDK's smart routing engine, shipped as the optional `@blockrun/clawrouter` peer dependency (`npm install @blockrun/clawrouter` — only `smartChat()` needs it). It analyzes your request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions and automatically picks the cheapest model capable of handling it. Routing happens locally in under 1ms. It can save up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% on LLM costs compared to using premium models for every request.
+### What is smart routing?
+Router Core V3 is bundled into the SDK — the same deterministic routing engine that powers ClawRouter, with nothing extra to install. It analyzes your request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions and automatically picks the cheapest model capable of handling it. Routing happens locally in under 1ms. Use `smartChat()`, `smartChatCompletion()`, or the `blockrun/auto` model alias. It can save up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% on LLM costs compared to using premium models for every request.
 
 ### Does it support streaming?
 Yes — as of v1.6.1. Use `client.chatCompletionStream()` for native streaming or `stream: true` in the OpenAI-compatible client. Payment is handled automatically: the SDK signs USDC payment before streaming begins, and caches payment requirements per model so subsequent calls skip the 402 round-trip (~200ms faster).

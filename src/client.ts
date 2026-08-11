@@ -29,6 +29,10 @@ import {
   type Spending,
   type SmartChatOptions,
   type SmartChatResponse,
+  type SmartChatCompletionOptions,
+  type SmartChatCompletionResponse,
+  type RoutingDecision,
+  type RoutingProfile,
   type SearchResult,
   type SearchOptions,
   type ExaSearchOptions,
@@ -41,59 +45,15 @@ import {
   PaymentError,
   RetiredEndpointError,
 } from "./types";
-// NOTE: @blockrun/clawrouter is loaded lazily inside smartChat() (see below),
-// not imported at module top level. It is the model-routing engine and is only
-// needed by smartChat(); keeping it out of the eager import graph means a
-// consumer that uses only the wallet / payment / chat helpers never loads it,
-// so a broken or absent router build cannot break importing this SDK.
-
-// Model pricing rates per 1M tokens, in router-core's shape so the map we
-// build feeds route() directly.
-type ModelPricing = import("@blockrun/router-core").ModelPricing;
-
-// The '@blockrun/clawrouter' surface smartChat() uses, typed from
-// '@blockrun/router-core' — the engine ClawRouter inlines into its bundle,
-// which this repo pins (devDependency) to the same immutable commit its
-// published build uses. clawrouter's own .d.ts re-exports from router-core
-// without shipping it, so `typeof import("@blockrun/clawrouter")` resolves to
-// `any` in consumer trees; router-core is where the real declarations live.
-interface ClawRouterRoutingModule {
-  route: typeof import("@blockrun/router-core").route;
-  DEFAULT_ROUTING_CONFIG: typeof import("@blockrun/router-core").DEFAULT_ROUTING_CONFIG;
-  getFallbackChain: typeof import("@blockrun/router-core").getFallbackChain;
-}
-
-/**
- * Whether an error is the kind of transient failure that warrants trying
- * the next model in a fallback chain. True for: AbortError (timeout),
- * generic network/fetch errors, 429 (this upstream is saturated — the next
- * model in the chain is a different upstream), and APIError with 5xx status
- * codes typically associated with upstream availability problems.
- *
- * False for: other 4xx client errors (bad request, auth) and PaymentError —
- * those aren't "swap upstream and retry" situations.
- */
-function isTransientError(err: unknown): boolean {
-  if (err instanceof PaymentError) return false;
-  if (err instanceof APIError) {
-    return [429, 502, 503, 504, 522, 524].includes(err.statusCode);
-  }
-  // AbortError (timeout) or generic TypeError: failed to fetch
-  if (err instanceof Error) {
-    if (err.name === "AbortError") return true;
-    if (err.name === "TypeError" && /fetch|network/i.test(err.message)) return true;
-  }
-  return false;
-}
-
-function errSummary(err: unknown): string {
-  if (err instanceof APIError) return `APIError ${err.statusCode}`;
-  if (err instanceof Error) {
-    const msg = err.message.length > 80 ? err.message.slice(0, 80) : err.message;
-    return `${err.name}: ${msg}`;
-  }
-  return String(err).slice(0, 100);
-}
+import {
+  BASE_MINIMUM_PAYMENT_USD,
+  errSummary,
+  isTransientError,
+  routeWithCatalog,
+  routingProfileForModel,
+  routingText,
+  type ModelPricing,
+} from "./router-adapter";
 
 /**
  * Normalise a raw `/v1/models` row into the SDK `Model` interface.
@@ -205,7 +165,7 @@ export class LLMClient {
 
   // Pre-auth cache: avoids the 402 round-trip on repeat requests to the same model.
   // Key = "endpoint:model", value = cached payment header + timestamp.
-  // TTL: 1 hour (mirrors ClawRouter's payment-preauth.ts approach).
+  // TTL: 1 hour — pre-auth quotes are stable server-side on that horizon.
   private preAuthCache: Map<string, { paymentHeader: string; cachedAt: number }> = new Map();
   private static readonly PRE_AUTH_TTL_MS = 3_600_000;
 
@@ -279,11 +239,49 @@ export class LLMClient {
     return result.choices[0].message.content || "";
   }
 
+  private async makeRoutingDecision(
+    prompt: string,
+    systemPrompt: string | undefined,
+    maxOutputTokens: number,
+    options: {
+      routingProfile?: RoutingProfile;
+      requiresStructuredOutput?: boolean;
+      tools?: ChatCompletionOptions["tools"];
+      toolChoice?: ChatCompletionOptions["toolChoice"];
+      conversationChars?: number;
+      hasVision?: boolean;
+    } = {},
+  ): Promise<RoutingDecision> {
+    return routeWithCatalog(
+      prompt,
+      systemPrompt,
+      maxOutputTokens,
+      await this.getModelPricing(),
+      { ...options, minimumPaymentUsd: BASE_MINIMUM_PAYMENT_USD },
+    );
+  }
+
+  /**
+   * Inspect a local routing decision without making or paying for a model call.
+   * The first invocation may fetch the public model catalog for current prices.
+   */
+  async route(prompt: string, options?: SmartChatOptions): Promise<RoutingDecision> {
+    return this.makeRoutingDecision(
+      prompt,
+      options?.system,
+      options?.maxOutputTokens ?? options?.maxTokens ?? DEFAULT_MAX_TOKENS,
+      {
+        routingProfile: options?.routingProfile,
+        requiresStructuredOutput: options?.responseFormat !== undefined,
+      },
+    );
+  }
+
   /**
    * Smart chat with automatic model routing.
    *
-   * Uses ClawRouter's deterministic portfolio router (Router v3.4, the Auto
-   * default since v0.12.242): it classifies the task shape locally (<1ms, no
+   * Uses BlockRun's product-neutral Router Core portfolio strategy: it
+   * classifies the task shape locally (no
    * extra model call), enforces capability constraints as hard filters, and
    * ranks an ordered candidate portfolio — the cheapest model that can handle
    * the request wins, and the rest become the transient-error fallback chain.
@@ -311,76 +309,11 @@ export class LLMClient {
    * ```
    */
   async smartChat(prompt: string, options?: SmartChatOptions): Promise<SmartChatResponse> {
-    // Get model pricing (cached after first call)
-    const modelPricing = await this.getModelPricing();
-
-    // Determine max output tokens for cost estimation
-    const maxOutputTokens = options?.maxOutputTokens || options?.maxTokens || 1024;
-
-    // Load the router on demand. Only smartChat() needs it, so it stays out of
-    // the SDK's top-level import graph (see the note by the imports). Fail with
-    // a clear message if the optional router dependency is missing or broken,
-    // rather than a cryptic module-load error at import time.
-    let route: ClawRouterRoutingModule["route"];
-    let DEFAULT_ROUTING_CONFIG: ClawRouterRoutingModule["DEFAULT_ROUTING_CONFIG"];
-    let getFallbackChain: ClawRouterRoutingModule["getFallbackChain"];
-    try {
-      ({ route, DEFAULT_ROUTING_CONFIG, getFallbackChain } = (await import(
-        "@blockrun/clawrouter"
-      )) as unknown as ClawRouterRoutingModule);
-    } catch (err) {
-      throw new Error(
-        "smartChat() requires the optional '@blockrun/clawrouter' routing engine, " +
-          "which is not installed or failed to load. Install it, or call chat() " +
-          `with an explicit model instead. Cause: ${(err as Error).message}`,
-      );
-    }
-
-    // Route the request using ClawRouter
-    const decision = route(prompt, options?.system, maxOutputTokens, {
-      config: DEFAULT_ROUTING_CONFIG,
-      modelPricing,
-      routingProfile: options?.routingProfile,
-    });
-
-    // Turn the routing decision into a gateway-callable model list. The
-    // portfolio router (default since ClawRouter v0.12.242) ranks an ordered,
-    // capability-eligible candidate list, so prefer that ordering; rules-mode
-    // decisions and older routers fall back to the tier chain (which also
-    // leads with its primary).
-    //
-    // The ranking is trusted as-is — including ids withheld from /v1/models
-    // (e.g. moonshot/kimi-k2.7), which the gateway serves by direct id and
-    // the router prices from its own catalog snapshot — with one exception:
-    // ClawRouter names its free tier `free/<model>`, a namespace resolved by
-    // its own proxy. The gateway's ids are `nvidia/<model>`, and an unmapped
-    // `free/*` id draws a hard 400 — which is not a transient error, so the
-    // fallback chain would never engage. Map `free/*` to its catalog-listed
-    // `nvidia/*` id, and drop it when there is none (the withheld gpt-oss
-    // pair): those ids exist only behind ClawRouter's proxy.
-    // The first surviving entry is the model actually called; the rest become
-    // the transient-error fallback chain.
-    const tierConfigs = decision.tierConfigs ?? DEFAULT_ROUTING_CONFIG.tiers;
-    const ranked = decision.candidates?.length
-      ? decision.candidates
-      : [decision.model, ...getFallbackChain(decision.tier, tierConfigs)];
-    const callable: string[] = [];
-    for (const id of ranked) {
-      const resolved = !id.startsWith("free/")
-        ? id
-        : modelPricing.has(`nvidia/${id.slice(5)}`)
-          ? `nvidia/${id.slice(5)}`
-          : null;
-      if (resolved && !callable.includes(resolved)) callable.push(resolved);
-    }
-    // If nothing survived (a chain of proxy-only free ids), call the router's
-    // pick as-is so the gateway's error surfaces rather than an invented one.
-    const primary = callable[0] ?? decision.model;
-    const fallbacks = callable.slice(1);
+    const decision = await this.route(prompt, options);
 
     // Make the chat request with the selected model, passing the fallback
     // chain so transient failures fall over instead of bubbling up.
-    const response = await this.chat(primary, prompt, {
+    const response = await this.chat(decision.model, prompt, {
       system: options?.system,
       maxTokens: options?.maxTokens,
       temperature: options?.temperature,
@@ -389,14 +322,51 @@ export class LLMClient {
       searchParameters: options?.searchParameters,
       responseFormat: options?.responseFormat,
       stop: options?.stop,
-      fallbackModels: fallbacks,
+      // An explicit caller-supplied chain wins over the routed one.
+      fallbackModels: options?.fallbackModels ?? decision.fallbacks,
     });
 
     return {
       response,
-      model: primary,
-      routing: { ...decision, model: primary, fallbacks },
+      model: decision.model,
+      routing: decision,
     };
+  }
+
+  /** Route a full Agent/tool conversation while preserving its complete response. */
+  async smartChatCompletion(
+    messages: ChatMessage[],
+    options: SmartChatCompletionOptions = {},
+  ): Promise<SmartChatCompletionResponse> {
+    const { prompt, systemPrompt, conversationChars, hasVision } = routingText(messages);
+    const decision = await this.makeRoutingDecision(
+      prompt,
+      systemPrompt,
+      options.maxOutputTokens ?? options.maxTokens ?? DEFAULT_MAX_TOKENS,
+      {
+        routingProfile: options.routingProfile,
+        requiresStructuredOutput: options.responseFormat !== undefined,
+        tools: options.tools,
+        toolChoice: options.toolChoice,
+        conversationChars,
+        hasVision,
+      },
+    );
+    const response = await this.chatCompletion(decision.model, messages, {
+      maxTokens: options.maxTokens,
+      temperature: options.temperature,
+      topP: options.topP,
+      search: options.search,
+      searchParameters: options.searchParameters,
+      tools: options.tools,
+      toolChoice: options.toolChoice,
+      responseFormat: options.responseFormat,
+      stop: options.stop,
+      // An explicit caller-supplied chain wins over the routed one.
+      fallbackModels: options.fallbackModels ?? decision.fallbacks,
+    });
+    response.routing = decision;
+    return { response, model: decision.model, routing: decision };
   }
 
   /**
@@ -424,32 +394,23 @@ export class LLMClient {
     }
   }
 
-  /**
-   * Fetch model pricing from API.
-   *
-   * For flat-billed models (e.g. ZAI GLM-5 family at $0.001/call) the
-   * router still expects per-token rates, so we synthesise an equivalent
-   * per-token price assuming ~1500 total tokens per call. Without this,
-   * flat models would resolve to inputPrice=outputPrice=0 and the router
-   * would treat them as free, biasing routing decisions and reporting
-   * inflated savings %.
-   */
+  /** Fetch model pricing from the live catalog, preserving flat billing. */
   private async fetchModelPricing(): Promise<Map<string, ModelPricing>> {
     const models = await this.listModels();
     const pricing = new Map<string, ModelPricing>();
 
     for (const model of models) {
-      if (model.billingMode === "flat" && model.flatPrice && model.flatPrice > 0) {
-        const perDirection = (model.flatPrice * 1e6) / 1500 / 2;
-        pricing.set(model.id, {
-          inputPrice: perDirection,
-          outputPrice: perDirection,
-        });
+      // A model the catalog marks unavailable must not win routing — every
+      // smart call to it would fail with a non-transient error.
+      if (model.available === false) continue;
+      // Guard against malformed catalog rows: NaN survives `?? 0` and would
+      // silently poison route scoring and cost/savings metadata downstream.
+      const inputPrice = Number.isFinite(model.inputPrice) ? model.inputPrice : 0;
+      const outputPrice = Number.isFinite(model.outputPrice) ? model.outputPrice : 0;
+      if (model.billingMode === "flat" && Number.isFinite(model.flatPrice) && model.flatPrice! > 0) {
+        pricing.set(model.id, { inputPrice, outputPrice, flatPrice: model.flatPrice });
       } else {
-        pricing.set(model.id, {
-          inputPrice: model.inputPrice,
-          outputPrice: model.outputPrice,
-        });
+        pricing.set(model.id, { inputPrice, outputPrice });
       }
     }
 
@@ -475,6 +436,15 @@ export class LLMClient {
     messages: ChatMessage[],
     options?: ChatCompletionOptions
   ): Promise<ChatResponse> {
+    const routingProfile = routingProfileForModel(model);
+    if (routingProfile) {
+      return (
+        await this.smartChatCompletion(messages, {
+          ...options,
+          routingProfile,
+        })
+      ).response;
+    }
     validateMaxTokens(options?.maxTokens);
 
     const buildBody = (m: string): Record<string, unknown> => {
@@ -789,9 +759,29 @@ export class LLMClient {
   ): Promise<Response> {
     validateMaxTokens(options?.maxTokens);
 
+    let requestModel = model;
+    const routingProfile = routingProfileForModel(model);
+    if (routingProfile) {
+      const { prompt, systemPrompt, conversationChars, hasVision } = routingText(messages);
+      const decision = await this.makeRoutingDecision(
+        prompt,
+        systemPrompt,
+        options?.maxTokens ?? DEFAULT_MAX_TOKENS,
+        {
+          routingProfile,
+          requiresStructuredOutput: options?.responseFormat !== undefined,
+          tools: options?.tools,
+          toolChoice: options?.toolChoice,
+          conversationChars,
+          hasVision,
+        },
+      );
+      requestModel = decision.model;
+    }
+
     const url = `${this.apiUrl}/v1/chat/completions`;
     const body: Record<string, unknown> = {
-      model,
+      model: requestModel,
       messages,
       max_tokens: options?.maxTokens ?? DEFAULT_MAX_TOKENS,
       stream: true,
@@ -803,7 +793,7 @@ export class LLMClient {
     if (options?.responseFormat !== undefined) body.response_format = options.responseFormat;
     if (options?.stop !== undefined) body.stop = options.stop;
 
-    const cacheKey = `/v1/chat/completions:${model}`;
+    const cacheKey = `/v1/chat/completions:${requestModel}`;
     const cached = this.preAuthCache.get(cacheKey);
     const now = Date.now();
 
@@ -1476,7 +1466,14 @@ export class LLMClient {
    */
   async getBalance(): Promise<number> {
     const usdcContract = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-    const rpcs = ["https://base.publicnode.com", "https://mainnet.base.org", "https://base.meowrpc.com"];
+    const configuredRpc =
+      typeof process !== "undefined" && process.env ? process.env.BASE_RPC_URL : undefined;
+    const rpcs = [
+      configuredRpc,
+      "https://base-rpc.publicnode.com",
+      "https://mainnet.base.org",
+      "https://base.llamarpc.com",
+    ].filter((rpc): rpc is string => Boolean(rpc));
 
     const selector = "0x70a08231";
     const paddedAddress = this.account.address.slice(2).toLowerCase().padStart(64, "0");
@@ -1497,7 +1494,9 @@ export class LLMClient {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        const result = (await response.json()) as { result?: string };
+        if (!response.ok) throw new Error(`Base RPC returned ${response.status}`);
+        const result = (await response.json()) as { result?: string; error?: unknown };
+        if (!result.result || result.error) throw new Error("Base RPC returned no balance result");
         const balanceRaw = parseInt(result.result || "0x0", 16);
         return balanceRaw / 1_000_000;
       } catch (e) {

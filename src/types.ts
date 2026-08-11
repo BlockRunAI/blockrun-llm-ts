@@ -98,6 +98,8 @@ export interface ChatResponse {
     model?: string;
     settlementSkipped?: boolean;
   };
+  /** Present when a `blockrun/auto|eco|premium` alias selected the model locally. */
+  routing?: RoutingDecision;
 }
 
 export interface Model {
@@ -361,22 +363,21 @@ export interface ChatCompletionOptions {
   fallbackModels?: string[];
 }
 
-// Smart routing types (ClawRouter integration).
+// Smart routing types (shared product-neutral Router Core integration).
 //
-// Derived from '@blockrun/router-core' — the routing engine ClawRouter inlines
-// into its bundle, pinned here (devDependency) to the same immutable commit
-// its published build uses, so these types cannot drift from the runtime.
+// Derived from '@blockrun/router-core', pinned here to an immutable commit so
+// the SDK's runtime and public declarations cannot drift.
 // tsup's DTS bundling inlines the derived declarations into this package's
-// shipped .d.ts, so npm consumers install neither router-core nor clawrouter
-// to typecheck against this SDK. (`TierConfig` is not exported by router-core,
+// shipped .d.ts, so npm consumers install no separate routing package to
+// typecheck against this SDK. (`TierConfig` is not exported by router-core,
 // hence the indexed access.)
 export type RoutingProfile = "eco" | "auto" | "premium";
 
 export type RoutingTier = CoreTier;
 
 /**
- * Request classification produced by the portfolio router (ClawRouter
- * v0.12.242+, Router v3.4). Present on decisions with `method: "portfolio"`.
+ * Request classification produced by the bundled Router Core V3 portfolio
+ * router. Present on decisions with `method: "portfolio"`.
  */
 export type RoutingTaskType = CoreTaskType;
 
@@ -387,7 +388,7 @@ export interface RoutingDecision extends CoreRoutingDecision {
   /**
    * Remaining gateway-callable models, in the router's ranked order.
    * `chat()` walks this list when the primary model hits a transient error
-   * (timeout, network, 429, 5xx). Excludes the primary itself. ClawRouter's
+   * (timeout, network, 429, 5xx). Excludes the primary itself. The router's
    * proxy-namespace `free/*` ids appear here as their `nvidia/*` gateway
    * ids (or are dropped when the mapping is proxy-only).
    */
@@ -401,12 +402,28 @@ export interface SmartChatOptions extends ChatOptions {
   maxOutputTokens?: number;
 }
 
+export interface SmartChatCompletionOptions extends ChatCompletionOptions {
+  /** Routing profile: eco (budget), auto (balanced), premium (best quality) */
+  routingProfile?: RoutingProfile;
+  /** Maximum output tokens used for route cost/capacity estimation. */
+  maxOutputTokens?: number;
+}
+
 export interface SmartChatResponse {
   /** The AI response text */
   response: string;
   /** Which model was selected by smart routing */
   model: string;
   /** Routing decision metadata */
+  routing: RoutingDecision;
+}
+
+export interface SmartChatCompletionResponse {
+  /** Full OpenAI-compatible response, including tool calls. */
+  response: ChatResponse;
+  /** Model selected before any transient runtime fallback. */
+  model: string;
+  /** Local routing decision and ordered fallback candidates. */
   routing: RoutingDecision;
 }
 

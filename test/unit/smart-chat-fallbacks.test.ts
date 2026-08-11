@@ -1,203 +1,219 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { LLMClient } from "../../src/client";
 import { APIError } from "../../src/types";
-import type { Model, RoutingTier, RoutingTierConfig } from "../../src/types";
+import { routingText, routeWithCatalog } from "../../src/router-adapter";
+import { DEFAULT_MODEL_CAPABILITIES } from "@blockrun/router-core";
 import { TEST_PRIVATE_KEY, buildChatResponse } from "../helpers/testHelpers";
 
-// smartChat() loads '@blockrun/clawrouter' with a dynamic import; vitest
-// intercepts that the same as a static one.
-const routeMock = vi.fn();
-const getFallbackChainMock = vi.fn();
-
-const TIERS: Record<RoutingTier, RoutingTierConfig> = {
-  SIMPLE: { primary: "google/gemini-2.5-flash", fallback: ["openai/gpt-4o"] },
-  MEDIUM: { primary: "openai/gpt-4o", fallback: ["anthropic/claude-sonnet-4.5"] },
-  COMPLEX: { primary: "anthropic/claude-sonnet-4.5", fallback: ["openai/gpt-4o"] },
-  REASONING: { primary: "anthropic/claude-sonnet-4.5", fallback: ["openai/gpt-4o"] },
-};
-
-vi.mock("@blockrun/clawrouter", () => ({
-  route: (...args: unknown[]) => routeMock(...args),
-  DEFAULT_ROUTING_CONFIG: {
-    tiers: {
-      SIMPLE: { primary: "google/gemini-2.5-flash", fallback: ["openai/gpt-4o"] },
-      MEDIUM: { primary: "openai/gpt-4o", fallback: ["anthropic/claude-sonnet-4.5"] },
-      COMPLEX: { primary: "anthropic/claude-sonnet-4.5", fallback: ["openai/gpt-4o"] },
-      REASONING: { primary: "anthropic/claude-sonnet-4.5", fallback: ["openai/gpt-4o"] },
-    },
-  },
-  getFallbackChain: (...args: unknown[]) => getFallbackChainMock(...args),
-}));
-
-const PRICED_MODELS = [
-  { id: "google/gemini-2.5-flash", inputPrice: 0.15, outputPrice: 0.6 },
-  { id: "openai/gpt-4o", inputPrice: 2.5, outputPrice: 10.0 },
-  { id: "anthropic/claude-sonnet-4.5", inputPrice: 3.0, outputPrice: 15.0 },
-] as Model[];
-
-function baseDecision() {
-  return {
-    model: "google/gemini-2.5-flash",
-    tier: "SIMPLE" as const,
-    confidence: 0.9,
-    reasoning: "test",
-    costEstimate: 0.001,
-    baselineCost: 0.01,
-    savings: 0.9,
-    tierConfigs: TIERS,
-  };
+// The router runtime is bundled (@blockrun/router-core), so these tests run
+// the REAL portfolio router against synthetic catalog pricing maps — no
+// router mocks. What varies per test is the catalog.
+function routerPricing() {
+  return new Map([
+    ["openai/gpt-5.3-codex", { inputPrice: 1.75, outputPrice: 14 }],
+    ["anthropic/claude-sonnet-5", { inputPrice: 3, outputPrice: 15 }],
+    ["openai/gpt-5-mini", { inputPrice: 0.25, outputPrice: 2 }],
+    ["google/gemini-3.5-flash", { inputPrice: 0.5, outputPrice: 3 }],
+    ["moonshot/kimi-k3", { inputPrice: 3, outputPrice: 15 }],
+    ["moonshot/kimi-k2.7", { inputPrice: 0.5, outputPrice: 2 }],
+    ["deepseek/deepseek-v4-pro", { inputPrice: 0.435, outputPrice: 0.87 }],
+    ["deepseek/deepseek-chat", { inputPrice: 0.2, outputPrice: 0.4 }],
+    ["google/gemini-2.5-flash", { inputPrice: 0.3, outputPrice: 2.5 }],
+    ["anthropic/claude-opus-4.8", { inputPrice: 5, outputPrice: 25 }],
+  ]);
 }
 
-function makeClient() {
+function makeClient(pricing: Map<string, { inputPrice: number; outputPrice: number }> = routerPricing()) {
   const client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
-  vi.spyOn(client, "listModels").mockResolvedValue(PRICED_MODELS);
-  const chatSpy = vi.spyOn(client, "chat").mockResolvedValue("ok");
-  return { client, chatSpy };
+  vi.spyOn(client as never, "getModelPricing" as never).mockResolvedValue(pricing as never);
+  return client;
 }
 
-describe("smartChat fallback chain", () => {
-  beforeEach(() => {
-    routeMock.mockReset();
-    getFallbackChainMock.mockReset();
-  });
+describe("Router Core SDK integration", () => {
+  it("uses the V3 portfolio decision and ordered live-catalog fallbacks", async () => {
+    const client = makeClient();
+    const chatSpy = vi.spyOn(client, "chat").mockResolvedValue("fixed");
 
-  it("prefers the portfolio router's ranked candidates over the tier chain", async () => {
-    routeMock.mockReturnValue({
-      ...baseDecision(),
-      method: "portfolio",
-      routerVersion: "v3-portfolio",
-      candidates: [
-        "google/gemini-2.5-flash", // primary — must be excluded from fallbacks
-        "anthropic/claude-sonnet-4.5",
-        "moonshot/kimi-k2.7", // withheld from /v1/models — kept: the gateway serves it by direct id
-        "openai/gpt-4o",
-      ],
-    });
-
-    const { client, chatSpy } = makeClient();
-    const result = await client.smartChat("What is 2+2?");
-
-    expect(result.routing.fallbacks).toEqual([
-      "anthropic/claude-sonnet-4.5",
-      "moonshot/kimi-k2.7",
-      "openai/gpt-4o",
-    ]);
-    expect(chatSpy).toHaveBeenCalledWith(
-      "google/gemini-2.5-flash",
-      "What is 2+2?",
-      expect.objectContaining({
-        fallbackModels: [
-          "anthropic/claude-sonnet-4.5",
-          "moonshot/kimi-k2.7",
-          "openai/gpt-4o",
-        ],
-      }),
+    const result = await client.smartChat(
+      "Inspect the TypeScript repository, debug the failing tests, edit the files, and verify the fix.",
     );
-    // The candidate ordering is authoritative; the tier chain is not consulted.
-    expect(getFallbackChainMock).not.toHaveBeenCalled();
-  });
 
-  it("falls back to the tier chain for rules-mode decisions without candidates", async () => {
-    routeMock.mockReturnValue({ ...baseDecision(), method: "rules" });
-    getFallbackChainMock.mockReturnValue([
-      "google/gemini-2.5-flash",
-      "openai/gpt-4o",
-    ]);
-
-    const { client } = makeClient();
-    const result = await client.smartChat("What is 2+2?");
-
-    expect(getFallbackChainMock).toHaveBeenCalledWith("SIMPLE", TIERS);
-    expect(result.routing.fallbacks).toEqual(["openai/gpt-4o"]);
-  });
-
-  it("treats an empty candidates array like a missing one", async () => {
-    routeMock.mockReturnValue({
-      ...baseDecision(),
-      method: "portfolio",
-      candidates: [],
-    });
-    getFallbackChainMock.mockReturnValue(["openai/gpt-4o"]);
-
-    const { client } = makeClient();
-    const result = await client.smartChat("What is 2+2?");
-
-    expect(getFallbackChainMock).toHaveBeenCalled();
-    expect(result.routing.fallbacks).toEqual(["openai/gpt-4o"]);
-  });
-
-  it("maps ClawRouter's free/* ids to the gateway's nvidia/* ids", async () => {
-    routeMock.mockReturnValue({
-      ...baseDecision(),
-      model: "free/deepseek-v4-flash",
-      method: "portfolio",
-      candidates: ["free/deepseek-v4-flash", "openai/gpt-4o"],
-    });
-
-    const client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
-    vi.spyOn(client, "listModels").mockResolvedValue([
-      ...PRICED_MODELS,
-      { id: "nvidia/deepseek-v4-flash", inputPrice: 0, outputPrice: 0 },
-    ] as Model[]);
-    const chatSpy = vi.spyOn(client, "chat").mockResolvedValue("ok");
-
-    const result = await client.smartChat("hello");
-
-    // The proxy-namespace id resolves to the callable gateway id.
-    expect(chatSpy).toHaveBeenCalledWith(
-      "nvidia/deepseek-v4-flash",
-      "hello",
-      expect.objectContaining({ fallbackModels: ["openai/gpt-4o"] }),
-    );
-    expect(result.model).toBe("nvidia/deepseek-v4-flash");
-    expect(result.routing.model).toBe("nvidia/deepseek-v4-flash");
-  });
-
-  it("skips an un-callable primary in favor of the first callable candidate", async () => {
-    // free/gpt-oss-120b has no nvidia/* mapping in the catalog (withheld
-    // from /v1/models) — calling it draws a hard 400 from the gateway, so
-    // the SDK must not send it.
-    routeMock.mockReturnValue({
-      ...baseDecision(),
-      model: "free/gpt-oss-120b",
-      method: "portfolio",
-      candidates: [
-        "free/gpt-oss-120b",
-        "google/gemini-2.5-flash",
-        "openai/gpt-4o",
-      ],
-    });
-
-    const { client, chatSpy } = makeClient();
-    const result = await client.smartChat("hello");
-
-    expect(chatSpy).toHaveBeenCalledWith(
-      "google/gemini-2.5-flash",
-      "hello",
-      expect.objectContaining({ fallbackModels: ["openai/gpt-4o"] }),
-    );
-    expect(result.model).toBe("google/gemini-2.5-flash");
-  });
-
-  it("surfaces the portfolio metadata on the routing result", async () => {
-    routeMock.mockReturnValue({
-      ...baseDecision(),
-      method: "portfolio",
-      routerVersion: "v3-portfolio",
-      taskType: "chat",
-      candidates: ["google/gemini-2.5-flash", "openai/gpt-4o"],
-    });
-
-    const { client } = makeClient();
-    const result = await client.smartChat("hello");
-
-    expect(result.routing.method).toBe("portfolio");
+    expect(result.response).toBe("fixed");
     expect(result.routing.routerVersion).toBe("v3-portfolio");
-    expect(result.routing.taskType).toBe("chat");
-    expect(result.routing.candidates).toEqual([
-      "google/gemini-2.5-flash",
-      "openai/gpt-4o",
+    expect(result.routing.method).toBe("portfolio");
+    expect(result.routing.candidates?.[0]).toBe(result.model);
+    expect(chatSpy.mock.calls[0][0]).toBe(result.model);
+    expect(chatSpy.mock.calls[0][2]?.fallbackModels).toEqual(result.routing.fallbacks);
+  });
+
+  it("maps the router's free/* ids to the gateway's nvidia/* ids (eco stays $0)", async () => {
+    // The eco portfolio ranks the free tier first under router-core's own
+    // free/* namespace; the gateway serves those models as nvidia/*. The
+    // adapter must map — dropping them silently converts eco to a paid
+    // profile (the v3.11.0 regression this guards against).
+    const pricing = routerPricing();
+    pricing.set("nvidia/deepseek-v4-flash", { inputPrice: 0, outputPrice: 0 });
+
+    const decision = routeWithCatalog("Name the capital of France. One word.", undefined, 50, pricing, {
+      routingProfile: "eco",
+    });
+
+    expect(decision.model).toBe("nvidia/deepseek-v4-flash");
+    expect(decision.costEstimate).toBe(0); // free models settle at $0 — no payment floor
+    expect(decision.savings).toBe(1);
+  });
+
+  it("keeps router-ranked ids that are withheld from /v1/models", async () => {
+    // moonshot/kimi-k2.7 is hidden from the catalog but gateway-callable by
+    // direct id, and it is premium's SIMPLE primary. Filtering it out would
+    // silently swap the model the router chose.
+    const pricing = routerPricing();
+    pricing.delete("moonshot/kimi-k2.7");
+
+    const decision = routeWithCatalog("Hello there!", undefined, 50, pricing, {
+      routingProfile: "premium",
+    });
+
+    expect(decision.candidates).toContain("moonshot/kimi-k2.7");
+  });
+
+  it("drops proxy-only free ids that have no nvidia/* mapping in the catalog", async () => {
+    // free/gpt-oss-120b exists only behind ClawRouter's proxy; unmapped it
+    // draws a hard 400 (non-transient), so it must never be sent.
+    const decision = routeWithCatalog("Name the capital of France. One word.", undefined, 50, routerPricing(), {
+      routingProfile: "eco",
+    });
+
+    expect(decision.model.startsWith("free/")).toBe(false);
+    for (const id of decision.candidates ?? []) {
+      expect(id.startsWith("free/")).toBe(false);
+    }
+  });
+
+  it("routes full Agent messages with their required tools", async () => {
+    const client = makeClient();
+    const completionSpy = vi.spyOn(client, "chatCompletion").mockResolvedValue(buildChatResponse());
+    const tools = [{
+      type: "function" as const,
+      function: {
+        name: "get_weather",
+        description: "Get weather",
+        parameters: { type: "object", properties: {} },
+      },
+    }];
+
+    const result = await client.smartChatCompletion(
+      [{ role: "user", content: "Get the weather in Tokyo and report it." }],
+      { tools, toolChoice: "required" },
+    );
+
+    expect(result.routing.taskType).toBe("tool_agent");
+    expect(result.response.routing).toEqual(result.routing);
+    expect(completionSpy.mock.calls[0][2]?.tools).toEqual(tools);
+  });
+
+  it("honors caller-supplied fallbackModels over the routed chain", async () => {
+    const client = makeClient();
+    const completionSpy = vi.spyOn(client, "chatCompletion").mockResolvedValue(buildChatResponse());
+
+    await client.smartChatCompletion(
+      [{ role: "user", content: "Explain why the sky is blue." }],
+      { fallbackModels: ["deepseek/deepseek-chat"] },
+    );
+
+    expect(completionSpy.mock.calls[0][2]?.fallbackModels).toEqual(["deepseek/deepseek-chat"]);
+  });
+
+  it("resolves blockrun/auto before the paid gateway request", async () => {
+    const client = makeClient();
+    const requestSpy = vi
+      .spyOn(client as never, "requestWithPayment" as never)
+      .mockResolvedValue(buildChatResponse() as never);
+
+    const response = await client.chatCompletion(
+      "blockrun/auto",
+      [{ role: "user", content: "Explain why the sky is blue." }],
+    );
+
+    const body = requestSpy.mock.calls[0][1] as Record<string, unknown>;
+    expect(response.routing?.routerVersion).toBe("v3-portfolio");
+    expect(body.model).toBe(response.routing?.model);
+    expect(body.model).not.toBe("blockrun/auto");
+  });
+
+  it("resolves blockrun/auto for streaming requests", async () => {
+    const client = makeClient();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("data: [DONE]\n\n", { status: 200 }),
+    );
+
+    try {
+      await client.chatCompletionStream("blockrun/auto", [{ role: "user", content: "hi" }]);
+      const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string) as {
+        model: string;
+      };
+      expect(body.model).not.toBe("blockrun/auto");
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("floors paid route cost metadata at the Base minimum", async () => {
+    const client = makeClient();
+    const decision = await client.route("Hello", { maxOutputTokens: 8 });
+    expect(decision.costEstimate).toBe(0.002);
+  });
+
+  it("keeps ranked non-free ids even when the catalog omits them, but never free/*", async () => {
+    // Trust policy: withheld-but-callable ids stay routable (the router
+    // priced them from its own snapshot); only the free/* proxy namespace
+    // requires a catalog mapping to be callable.
+    const client = makeClient(
+      new Map([["deepseek/deepseek-chat", { inputPrice: 0.2, outputPrice: 0.4 }]]),
+    );
+
+    const decision = await client.route("Debug and fix the failing tests.");
+
+    expect(decision.candidates).toContain("deepseek/deepseek-chat");
+    for (const id of decision.candidates ?? []) {
+      expect(id.startsWith("free/")).toBe(false);
+    }
+  });
+
+  it("filters candidates that cannot fit the conversation in their context window", async () => {
+    // A ~600k-token conversation must knock out small-context models even
+    // though the routing prompt (the last user message) is tiny.
+    const conversationChars = 2_400_000;
+    const neededContext = (Math.ceil(conversationChars / 4) + 1024) * 1.1;
+
+    const decision = routeWithCatalog("Summarize our discussion.", undefined, 1024, routerPricing(), {
+      conversationChars,
+    });
+
+    expect(decision.candidates?.length).toBeGreaterThan(0);
+    for (const id of decision.candidates ?? []) {
+      const caps = DEFAULT_MODEL_CAPABILITIES[id];
+      if (caps) expect(caps.contextWindow).toBeGreaterThanOrEqual(neededContext);
+    }
+  });
+});
+
+describe("routingText", () => {
+  it("routes on the last user message plus joined system text", () => {
+    const { prompt, systemPrompt } = routingText([
+      { role: "system", content: "Be terse." },
+      { role: "user", content: "first question" },
+      { role: "assistant", content: "answer" },
+      { role: "user", content: "second question" },
     ]);
+    expect(prompt).toBe("second question");
+    expect(systemPrompt).toBe("Be terse.");
+  });
+
+  it("handles empty message arrays without throwing", () => {
+    const { prompt, systemPrompt } = routingText([]);
+    expect(prompt).toBe("");
+    expect(systemPrompt).toBeUndefined();
   });
 });
 
