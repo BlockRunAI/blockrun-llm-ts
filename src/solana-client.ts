@@ -18,6 +18,11 @@ import type {
   ChatOptions,
   ChatCompletionOptions,
   Model,
+  RoutingDecision,
+  SmartChatCompletionOptions,
+  SmartChatCompletionResponse,
+  SmartChatOptions,
+  SmartChatResponse,
   ImageResponse,
   ImageEditOptions,
   Spending,
@@ -25,6 +30,15 @@ import type {
   SearchOptions,
 } from "./types";
 import { APIError, PaymentError } from "./types";
+import {
+  SOLANA_MINIMUM_PAYMENT_USD,
+  errSummary,
+  isTransientError,
+  routeWithCatalog,
+  routingProfileForModel,
+  routingText,
+  type ModelPricing,
+} from "./router-adapter";
 import {
   createSolanaPaymentPayload,
   parsePaymentRequired,
@@ -125,6 +139,8 @@ export class SolanaLLMClient {
   private sessionTotalUsd = 0;
   private sessionCalls = 0;
   private addressCache: string | null = null;
+  private modelPricingCache: Map<string, ModelPricing> | null = null;
+  private modelPricingPromise: Promise<Map<string, ModelPricing>> | null = null;
 
   constructor(options: SolanaLLMClientOptions = {}) {
     const envKey = typeof process !== "undefined" && process.env
@@ -169,6 +185,9 @@ export class SolanaLLMClient {
       topP: options?.topP,
       search: options?.search,
       searchParameters: options?.searchParameters,
+      responseFormat: options?.responseFormat,
+      stop: options?.stop,
+      fallbackModels: options?.fallbackModels,
     });
     return result.choices[0].message.content || "";
   }
@@ -179,20 +198,155 @@ export class SolanaLLMClient {
     messages: ChatMessage[],
     options?: ChatCompletionOptions
   ): Promise<ChatResponse> {
+    const routingProfile = routingProfileForModel(model);
+    if (routingProfile) {
+      return (
+        await this.smartChatCompletion(messages, {
+          ...options,
+          routingProfile,
+        })
+      ).response;
+    }
     validateMaxTokens(options?.maxTokens);
 
-    const body: Record<string, unknown> = {
-      model,
-      messages,
-      max_tokens: options?.maxTokens || DEFAULT_MAX_TOKENS,
+    const buildBody = (candidate: string): Record<string, unknown> => {
+      const body: Record<string, unknown> = {
+        model: candidate,
+        messages,
+        max_tokens: options?.maxTokens || DEFAULT_MAX_TOKENS,
+      };
+      if (options?.temperature !== undefined) body.temperature = options.temperature;
+      if (options?.topP !== undefined) body.top_p = options.topP;
+      if (options?.searchParameters !== undefined) body.search_parameters = options.searchParameters;
+      else if (options?.search === true) body.search_parameters = { mode: "on" };
+      if (options?.tools !== undefined) body.tools = options.tools;
+      if (options?.toolChoice !== undefined) body.tool_choice = options.toolChoice;
+      if (options?.responseFormat !== undefined) body.response_format = options.responseFormat;
+      if (options?.stop !== undefined) body.stop = options.stop;
+      return body;
     };
-    if (options?.temperature !== undefined) body.temperature = options.temperature;
-    if (options?.topP !== undefined) body.top_p = options.topP;
-    if (options?.searchParameters !== undefined) body.search_parameters = options.searchParameters;
-    else if (options?.search === true) body.search_parameters = { mode: "on" };
-    if (options?.tools !== undefined) body.tools = options.tools;
-    if (options?.toolChoice !== undefined) body.tool_choice = options.toolChoice;
-    return this.requestWithPayment("/v1/chat/completions", body);
+    const chain = [model, ...(options?.fallbackModels ?? [])];
+    let lastError: unknown;
+    for (let index = 0; index < chain.length; index += 1) {
+      const candidate = chain[index];
+      try {
+        return await this.requestWithPayment("/v1/chat/completions", buildBody(candidate));
+      } catch (error) {
+        lastError = error;
+        if (!isTransientError(error) || index === chain.length - 1) throw error;
+        // Same one-line hop visibility the Base client provides — a paid
+        // request must never switch models silently.
+        console.error(`[@blockrun/llm] ${candidate} -> ${chain[index + 1]} (${errSummary(error)})`);
+      }
+    }
+    throw lastError;
+  }
+
+  private async getModelPricing(): Promise<Map<string, ModelPricing>> {
+    if (this.modelPricingCache) return this.modelPricingCache;
+    if (this.modelPricingPromise) return this.modelPricingPromise;
+    this.modelPricingPromise = (async () => {
+      const models = await this.listModels();
+      const pricing = new Map<string, ModelPricing>();
+      for (const model of models) {
+        const raw = model as Model & {
+          input_price?: number;
+          output_price?: number;
+          flat_price?: number;
+          billing_mode?: string;
+          pricing?: { input?: number; output?: number; flat?: number };
+        };
+        // Skip catalog rows marked unavailable, and guard against malformed
+        // values: Number("abc") is NaN, which survives `?? 0` and would
+        // silently poison route scoring and cost metadata downstream.
+        if (model.available === false) continue;
+        const num = (value: unknown): number => {
+          const n = Number(value ?? 0);
+          return Number.isFinite(n) ? n : 0;
+        };
+        const inputPrice = num(model.inputPrice ?? raw.input_price ?? raw.pricing?.input);
+        const outputPrice = num(model.outputPrice ?? raw.output_price ?? raw.pricing?.output);
+        const flatPrice = num(model.flatPrice ?? raw.flat_price ?? raw.pricing?.flat);
+        pricing.set(model.id, {
+          inputPrice,
+          outputPrice,
+          ...((model.billingMode ?? raw.billing_mode) === "flat" && flatPrice > 0
+            ? { flatPrice }
+            : {}),
+        });
+      }
+      return pricing;
+    })();
+    try {
+      this.modelPricingCache = await this.modelPricingPromise;
+      return this.modelPricingCache;
+    } finally {
+      this.modelPricingPromise = null;
+    }
+  }
+
+  /** Inspect a Solana route without making or paying for a model call. */
+  async route(prompt: string, options?: SmartChatOptions): Promise<RoutingDecision> {
+    return routeWithCatalog(
+      prompt,
+      options?.system,
+      options?.maxOutputTokens ?? options?.maxTokens ?? DEFAULT_MAX_TOKENS,
+      await this.getModelPricing(),
+      {
+        routingProfile: options?.routingProfile,
+        requiresStructuredOutput: options?.responseFormat !== undefined,
+        minimumPaymentUsd: SOLANA_MINIMUM_PAYMENT_USD,
+      },
+    );
+  }
+
+  /** Smart one-line chat paid on Solana. */
+  async smartChat(prompt: string, options?: SmartChatOptions): Promise<SmartChatResponse> {
+    const decision = await this.route(prompt, options);
+    const response = await this.chat(decision.model, prompt, {
+      ...options,
+      // An explicit caller-supplied chain wins over the routed one.
+      fallbackModels: options?.fallbackModels ?? decision.fallbacks,
+    });
+    return { response, model: decision.model, routing: decision };
+  }
+
+  /** Smart full message/tool completion paid on Solana. */
+  async smartChatCompletion(
+    messages: ChatMessage[],
+    options: SmartChatCompletionOptions = {},
+  ): Promise<SmartChatCompletionResponse> {
+    const { prompt, systemPrompt, conversationChars, hasVision } = routingText(messages);
+    const decision = routeWithCatalog(
+      prompt,
+      systemPrompt,
+      options.maxOutputTokens ?? options.maxTokens ?? DEFAULT_MAX_TOKENS,
+      await this.getModelPricing(),
+      {
+        routingProfile: options.routingProfile,
+        requiresStructuredOutput: options.responseFormat !== undefined,
+        tools: options.tools,
+        toolChoice: options.toolChoice,
+        conversationChars,
+        hasVision,
+        minimumPaymentUsd: SOLANA_MINIMUM_PAYMENT_USD,
+      },
+    );
+    const response = await this.chatCompletion(decision.model, messages, {
+      maxTokens: options.maxTokens,
+      temperature: options.temperature,
+      topP: options.topP,
+      search: options.search,
+      searchParameters: options.searchParameters,
+      tools: options.tools,
+      toolChoice: options.toolChoice,
+      responseFormat: options.responseFormat,
+      stop: options.stop,
+      // An explicit caller-supplied chain wins over the routed one.
+      fallbackModels: options.fallbackModels ?? decision.fallbacks,
+    });
+    response.routing = decision;
+    return { response, model: decision.model, routing: decision };
   }
 
   /** List available models. */

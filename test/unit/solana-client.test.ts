@@ -1,9 +1,69 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { SolanaLLMClient } from "../../src/solana-client";
+import { APIError } from "../../src/types";
+import { buildChatResponse } from "../helpers/testHelpers";
 
 const TEST_BS58_KEY = "5MaiiCavjCmn9Hs1o3eznqDEhRwxo7pXiAYez7keQUviQeRjpzKCY8trDwpvBMTKTpNFbCJsBZthJ4tCs6o62rr";
 
 describe("SolanaLLMClient", () => {
+  function routerPricing() {
+    return new Map([
+      ["moonshot/kimi-k2.7", { inputPrice: 0.5, outputPrice: 2 }],
+      ["google/gemini-2.5-flash", { inputPrice: 0.3, outputPrice: 2.5 }],
+      ["deepseek/deepseek-chat", { inputPrice: 0.2, outputPrice: 0.4 }],
+      ["anthropic/claude-opus-4.8", { inputPrice: 5, outputPrice: 25 }],
+    ]);
+  }
+
+  it("uses the shared V3 router and Solana minimum", async () => {
+    const client = new SolanaLLMClient({ privateKey: TEST_BS58_KEY });
+    vi.spyOn(client as any, "getModelPricing").mockResolvedValue(routerPricing());
+    const chatSpy = vi.spyOn(client, "chat").mockResolvedValue("hello");
+
+    const result = await client.smartChat("Hello there", { maxOutputTokens: 8 });
+
+    expect(result.routing.routerVersion).toBe("v3-portfolio");
+    expect(result.routing.costEstimate).toBe(0.001);
+    expect(chatSpy.mock.calls[0][0]).toBe(result.model);
+  });
+
+  it("resolves blockrun/auto before a Solana gateway request", async () => {
+    const client = new SolanaLLMClient({ privateKey: TEST_BS58_KEY });
+    vi.spyOn(client as any, "getModelPricing").mockResolvedValue(routerPricing());
+    const requestSpy = vi
+      .spyOn(client as any, "requestWithPayment")
+      .mockResolvedValue(buildChatResponse());
+
+    const response = await client.chatCompletion(
+      "blockrun/auto",
+      [{ role: "user", content: "Hello there" }],
+    );
+
+    const requestBody = requestSpy.mock.calls[0][1] as Record<string, unknown>;
+    expect(response.routing?.routerVersion).toBe("v3-portfolio");
+    expect(requestBody.model).toBe(response.routing?.model);
+  });
+
+  it("walks the ordered fallback chain after a transient Solana error", async () => {
+    const client = new SolanaLLMClient({ privateKey: TEST_BS58_KEY });
+    const requestSpy = vi
+      .spyOn(client as any, "requestWithPayment")
+      .mockRejectedValueOnce(new APIError("upstream unavailable", 503))
+      .mockResolvedValueOnce(buildChatResponse({ model: "fallback/model" }));
+
+    const response = await client.chatCompletion(
+      "primary/model",
+      [{ role: "user", content: "Hello there" }],
+      { fallbackModels: ["fallback/model"] },
+    );
+
+    expect(response.model).toBe("fallback/model");
+    expect(requestSpy.mock.calls.map((call) => call[1].model)).toEqual([
+      "primary/model",
+      "fallback/model",
+    ]);
+  });
+
   it("initializes with bs58 private key", () => {
     const client = new SolanaLLMClient({ privateKey: TEST_BS58_KEY });
     expect(client).toBeTruthy();
