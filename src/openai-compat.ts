@@ -20,7 +20,15 @@
  */
 
 import { LLMClient, DEFAULT_TIMEOUT } from "./client";
-import type { ChatMessage, ChatResponse, ResponseFormat, Tool, ToolCall, ToolChoice } from "./types";
+import type {
+  ChatMessage,
+  ChatResponse,
+  ResponseFormat,
+  RoutingDecision,
+  Tool,
+  ToolCall,
+  ToolChoice,
+} from "./types";
 
 // OpenAI-compatible types
 export interface OpenAIClientOptions {
@@ -78,6 +86,8 @@ export interface OpenAIChatCompletionResponse {
     completion_tokens: number;
     total_tokens: number;
   };
+  /** BlockRun extension present when a `blockrun/*` Auto alias was used. */
+  routing?: RoutingDecision;
 }
 
 // Streaming types
@@ -233,6 +243,7 @@ class ChatCompletions {
         finish_reason: choice.finish_reason || "stop",
       })),
       usage: response.usage,
+      routing: response.routing,
     };
   }
 }
