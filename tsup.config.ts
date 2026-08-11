@@ -14,6 +14,13 @@ export default defineConfig({
     resolve: ["@blockrun/router-core"],
   },
   clean: true,
+  // Bundle the wallet kernel into both output formats. @blockrun/core
+  // publishes ESM-only; leaving it external makes the CJS build emit
+  // require("@blockrun/core"), which throws ERR_PACKAGE_PATH_NOT_EXPORTED
+  // for every CommonJS consumer at load time. Inlining also freezes the
+  // reviewed kernel bytes into dist (no caret-range drift between review
+  // and what users run) — the same trade already made for router-core.
+  noExternal: ["@blockrun/core"],
   external: [
     "@anthropic-ai/sdk",
     "@solana/web3.js",

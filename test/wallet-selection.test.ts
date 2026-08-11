@@ -20,7 +20,13 @@ function temporaryHome(): string {
 async function importWalletModule(home: string) {
   vi.resetModules();
   process.env.BLOCKRUN_HOME = home;
-  return import("../src/wallet.js");
+  const mod = await import("../src/wallet.js");
+  // Guard: if core ever stops honoring BLOCKRUN_HOME (or starts caching paths
+  // at module scope), every test below would silently run against the
+  // developer's REAL home directory — and the adoption tests would overwrite
+  // a real ~/.blockrun/.session. Fail loudly instead.
+  expect(mod.WALLET_FILE_PATH.startsWith(home)).toBe(true);
+  return mod;
 }
 
 /** Solana resolution is still SDK-local, so it reads os.homedir() directly. */
@@ -33,12 +39,18 @@ async function importSolanaWalletModule(home: string) {
   return import("../src/solana-wallet.js");
 }
 
-const savedBlockrunHome = process.env.BLOCKRUN_HOME;
+const savedEnv: Record<string, string | undefined> = {
+  BLOCKRUN_HOME: process.env.BLOCKRUN_HOME,
+  BLOCKRUN_WALLET_KEY: process.env.BLOCKRUN_WALLET_KEY,
+  BASE_CHAIN_WALLET_KEY: process.env.BASE_CHAIN_WALLET_KEY,
+};
 
 afterEach(() => {
   vi.doUnmock("os");
-  if (savedBlockrunHome === undefined) delete process.env.BLOCKRUN_HOME;
-  else process.env.BLOCKRUN_HOME = savedBlockrunHome;
+  for (const [name, value] of Object.entries(savedEnv)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
   while (temporaryHomes.length > 0) {
     fs.rmSync(temporaryHomes.pop()!, { recursive: true, force: true });
   }
@@ -257,5 +269,109 @@ describe("wallet migration notice", () => {
     const { formatWalletMigrationNotice } = await importWalletModule(home);
 
     expect(formatWalletMigrationNotice("0xNewWalletAddress")).toBeNull();
+  });
+});
+
+describe("resolution order pinned against @blockrun/core", () => {
+  it("prefers BLOCKRUN_WALLET_KEY over the on-disk .session wallet", async () => {
+    const home = temporaryHome();
+    const blockrun = path.join(home, ".blockrun");
+    fs.mkdirSync(blockrun, { recursive: true });
+    fs.writeFileSync(path.join(blockrun, ".session"), `0x${"1".repeat(64)}`);
+    process.env.BLOCKRUN_WALLET_KEY = `0x${"4".repeat(64)}`;
+    delete process.env.BASE_CHAIN_WALLET_KEY;
+
+    const { getOrCreateWallet } = await importWalletModule(home);
+    const wallet = getOrCreateWallet();
+
+    expect(wallet.isNew).toBe(false);
+    expect(wallet.privateKey).toBe(`0x${"4".repeat(64)}`);
+  });
+
+  it("falls back to BASE_CHAIN_WALLET_KEY when BLOCKRUN_WALLET_KEY is unset", async () => {
+    const home = temporaryHome();
+    const blockrun = path.join(home, ".blockrun");
+    fs.mkdirSync(blockrun, { recursive: true });
+    fs.writeFileSync(path.join(blockrun, ".session"), `0x${"1".repeat(64)}`);
+    delete process.env.BLOCKRUN_WALLET_KEY;
+    process.env.BASE_CHAIN_WALLET_KEY = `0x${"5".repeat(64)}`;
+
+    const { getOrCreateWallet } = await importWalletModule(home);
+
+    expect(getOrCreateWallet().privateKey).toBe(`0x${"5".repeat(64)}`);
+  });
+
+  it("prefers .session over legacy wallet.key when both exist", async () => {
+    const home = temporaryHome();
+    const blockrun = path.join(home, ".blockrun");
+    fs.mkdirSync(blockrun, { recursive: true });
+    fs.writeFileSync(path.join(blockrun, ".session"), `0x${"1".repeat(64)}`);
+    fs.writeFileSync(path.join(blockrun, "wallet.key"), `0x${"3".repeat(64)}`);
+    delete process.env.BLOCKRUN_WALLET_KEY;
+    delete process.env.BASE_CHAIN_WALLET_KEY;
+
+    const { loadWallet } = await importWalletModule(home);
+
+    expect(loadWallet()).toBe(`0x${"1".repeat(64)}`);
+  });
+
+  it("normalizes an un-prefixed .session key to 0x form", async () => {
+    const home = temporaryHome();
+    const blockrun = path.join(home, ".blockrun");
+    fs.mkdirSync(blockrun, { recursive: true });
+    fs.writeFileSync(path.join(blockrun, ".session"), "1".repeat(64));
+    delete process.env.BLOCKRUN_WALLET_KEY;
+    delete process.env.BASE_CHAIN_WALLET_KEY;
+
+    const { loadWallet, getWalletAddress } = await importWalletModule(home);
+
+    expect(loadWallet()).toBe(`0x${"1".repeat(64)}`);
+    expect(getWalletAddress()).toBeTruthy();
+  });
+
+  it("writes the minted key to the home it resolved from, even if BLOCKRUN_HOME changed after import", async () => {
+    // Regression guard for the read/write split-brain: core resolves paths
+    // per call, so saveWallet must too — a load-time snapshot would write
+    // the fresh key into the OLD home, clobbering a possibly funded
+    // .session there without a backup.
+    const homeA = temporaryHome();
+    delete process.env.BLOCKRUN_WALLET_KEY;
+    delete process.env.BASE_CHAIN_WALLET_KEY;
+    const mod = await importWalletModule(homeA);
+    const fundedKey = `0x${"6".repeat(64)}`;
+    fs.mkdirSync(path.join(homeA, ".blockrun"), { recursive: true });
+    fs.writeFileSync(path.join(homeA, ".blockrun", ".session"), fundedKey);
+
+    const homeB = temporaryHome();
+    process.env.BLOCKRUN_HOME = homeB; // changed after import — no re-import
+
+    const created = mod.getOrCreateWallet();
+    expect(created.isNew).toBe(true);
+    // The new key landed where resolution looked, not the stale snapshot...
+    expect(fs.readFileSync(path.join(homeB, ".blockrun", ".session"), "utf-8"))
+      .toBe(created.privateKey);
+    // ...and the funded wallet in the original home is untouched.
+    expect(fs.readFileSync(path.join(homeA, ".blockrun", ".session"), "utf-8"))
+      .toBe(fundedKey);
+    // A second call finds the wallet it just created.
+    expect(mod.getOrCreateWallet().isNew).toBe(false);
+  });
+
+  it("re-adopting the already-active wallet does not create a backup", async () => {
+    const home = temporaryHome();
+    const blockrun = path.join(home, ".blockrun");
+    const provider = path.join(home, ".agentcash");
+    const key = `0x${"2".repeat(64)}`;
+    fs.mkdirSync(blockrun, { recursive: true });
+    fs.mkdirSync(provider, { recursive: true });
+    fs.writeFileSync(path.join(blockrun, ".session"), key);
+    fs.writeFileSync(path.join(provider, "wallet.json"), JSON.stringify({ privateKey: key }));
+
+    const { importWallet } = await importWalletModule(home);
+    const { privateKeyToAccount } = await import("viem/accounts");
+    importWallet(privateKeyToAccount(key as `0x${string}`).address);
+
+    const backups = fs.readdirSync(blockrun).filter((f) => f.startsWith(".session.backup-"));
+    expect(backups).toHaveLength(0);
   });
 });
