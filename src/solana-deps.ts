@@ -10,9 +10,9 @@
  * optionalDependency it landed in the lockfile of every consumer, including the
  * ones that only ever make Base/EVM payments and never touch this code path.
  *
- * Callers that never use Solana now carry nothing. Callers that do install the
- * two packages explicitly, exactly as they already do for `@blockrun/clawrouter`
- * (moved to an optional peer in 3.6.0 for the same reason).
+ * Callers that never use Solana now carry nothing. Callers that do install
+ * the two packages explicitly — optional peers keep a vulnerable transitive
+ * chain (`bigint-buffer`, no fixed release) out of Base-only consumers.
  *
  * Without this module the failure surfaces as a bare ERR_MODULE_NOT_FOUND from
  * somewhere inside a payment call, which reads like a bug in this SDK rather

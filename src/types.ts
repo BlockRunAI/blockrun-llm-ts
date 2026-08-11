@@ -376,8 +376,8 @@ export type RoutingProfile = "eco" | "auto" | "premium";
 export type RoutingTier = CoreTier;
 
 /**
- * Request classification produced by the portfolio router (ClawRouter
- * v0.12.242+, Router v3.4). Present on decisions with `method: "portfolio"`.
+ * Request classification produced by the bundled Router Core V3 portfolio
+ * router. Present on decisions with `method: "portfolio"`.
  */
 export type RoutingTaskType = CoreTaskType;
 
@@ -388,7 +388,7 @@ export interface RoutingDecision extends CoreRoutingDecision {
   /**
    * Remaining gateway-callable models, in the router's ranked order.
    * `chat()` walks this list when the primary model hits a transient error
-   * (timeout, network, 429, 5xx). Excludes the primary itself. ClawRouter's
+   * (timeout, network, 429, 5xx). Excludes the primary itself. The router's
    * proxy-namespace `free/*` ids appear here as their `nvidia/*` gateway
    * ids (or are dropped when the mapping is proxy-only).
    */

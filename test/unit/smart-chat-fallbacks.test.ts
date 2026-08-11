@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { LLMClient } from "../../src/client";
 import { APIError } from "../../src/types";
 import { routingText, routeWithCatalog } from "../../src/router-adapter";
+import { DEFAULT_MODEL_CAPABILITIES } from "@blockrun/router-core";
 import { TEST_PRIVATE_KEY, buildChatResponse } from "../helpers/testHelpers";
 
 // The router runtime is bundled (@blockrun/router-core), so these tests run
@@ -163,29 +164,37 @@ describe("Router Core SDK integration", () => {
     expect(decision.costEstimate).toBe(0.002);
   });
 
-  it("never calls a candidate missing from the current catalog (free namespace)", async () => {
+  it("keeps ranked non-free ids even when the catalog omits them, but never free/*", async () => {
+    // Trust policy: withheld-but-callable ids stay routable (the router
+    // priced them from its own snapshot); only the free/* proxy namespace
+    // requires a catalog mapping to be callable.
     const client = makeClient(
       new Map([["deepseek/deepseek-chat", { inputPrice: 0.2, outputPrice: 0.4 }]]),
     );
 
     const decision = await client.route("Debug and fix the failing tests.");
 
-    expect(decision.model).toBe("deepseek/deepseek-chat");
-    expect(decision.candidates).toEqual(["deepseek/deepseek-chat"]);
+    expect(decision.candidates).toContain("deepseek/deepseek-chat");
+    for (const id of decision.candidates ?? []) {
+      expect(id.startsWith("free/")).toBe(false);
+    }
   });
 
   it("filters candidates that cannot fit the conversation in their context window", async () => {
     // A ~600k-token conversation must knock out small-context models even
     // though the routing prompt (the last user message) is tiny.
-    const pricing = routerPricing();
-    const bigConversation = "x".repeat(2_400_000);
+    const conversationChars = 2_400_000;
+    const neededContext = (Math.ceil(conversationChars / 4) + 1024) * 1.1;
 
-    const decision = routeWithCatalog("Summarize our discussion.", undefined, 1024, pricing, {
-      conversationChars: bigConversation.length,
+    const decision = routeWithCatalog("Summarize our discussion.", undefined, 1024, routerPricing(), {
+      conversationChars,
     });
 
-    // deepseek-chat (128k ctx in router-core's snapshot) cannot hold it.
-    expect(decision.candidates).not.toContain("deepseek/deepseek-chat");
+    expect(decision.candidates?.length).toBeGreaterThan(0);
+    for (const id of decision.candidates ?? []) {
+      const caps = DEFAULT_MODEL_CAPABILITIES[id];
+      if (caps) expect(caps.contextWindow).toBeGreaterThanOrEqual(neededContext);
+    }
   });
 });
 
