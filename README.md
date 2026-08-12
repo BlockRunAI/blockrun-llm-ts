@@ -4,7 +4,7 @@
 
 ### Cut your LLM bill by <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->%. One line of TypeScript.
 
-The smart-routing SDK for <!-- br:models.chatVisible -->71<!-- /br:models.chatVisible --> models — every request goes to the cheapest model that can handle it,
+The smart-routing SDK for <!-- br:models.chatVisible -->70<!-- /br:models.chatVisible --> models — every request goes to the cheapest model that can handle it,
 paid per-request in USDC. No API keys. No subscriptions. No vendor lock-in.
 
 [![npm](https://img.shields.io/npm/v/@blockrun/llm.svg?style=flat-square)](https://www.npmjs.com/package/@blockrun/llm)
@@ -41,7 +41,7 @@ console.log(r.response);         // the proof
 ## Why This SDK
 
 - 🧠 **Smart routing that pays for itself** — the bundled [Router Core V3](https://github.com/BlockRunAI/router-core) engine (shared with [ClawRouter](https://github.com/BlockRunAI/ClawRouter)) classifies every request locally in <1ms across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions and routes to the cheapest capable model. The main event.
-- 🆓 **<!-- br:models.free -->6<!-- /br:models.free --> genuinely free models** — NVIDIA-hosted, $0 in and out, incl. 1M-context DeepSeek V4 Flash and a multimodal Nemotron. No rate-limit gimmicks.
+- 🆓 **<!-- br:models.free -->5<!-- /br:models.free --> genuinely free models** — NVIDIA-hosted, $0 in and out, incl. 1M-context DeepSeek V4 Flash and a multimodal Nemotron. No rate-limit gimmicks.
 - 🔐 **No API keys** — your wallet signature is your authentication. No accounts, no dashboards, no key rotation.
 - 💸 **Pay per request in USDC** — x402 micropayments on Base or Solana. $5 covers thousands of requests; agents can pay their own way.
 - 🛡️ **Automatic failover** — transient errors (timeouts, 429, 5xx) walk the router's ranked fallback chain instead of failing your request.
@@ -53,8 +53,8 @@ console.log(r.response);         // the proof
 |                    | OpenAI SDK     | OpenRouter        | LiteLLM          | **@blockrun/llm**                                                       |
 | ------------------ | -------------- | ----------------- | ---------------- | ----------------------------------------------------------------------- |
 | **Cost routing**   | ✗ one vendor   | Manual selection  | Manual selection | **Automatic — <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% cheaper** |
-| **Models**         | GPT only       | 200+              | 100+ (BYO keys)  | **<!-- br:models.chatVisible -->71<!-- /br:models.chatVisible -->, one wallet** |
-| **Free tier**      | ✗              | Rate-limited      | ✗                | **<!-- br:models.free -->6<!-- /br:models.free --> models, no signup**  |
+| **Models**         | GPT only       | 200+              | 100+ (BYO keys)  | **<!-- br:models.chatVisible -->70<!-- /br:models.chatVisible -->, one wallet** |
+| **Free tier**      | ✗              | Rate-limited      | ✗                | **<!-- br:models.free -->5<!-- /br:models.free --> models, no signup**  |
 | **Auth**           | API key        | Account + API key | Your API keys    | **Wallet signature**                                                    |
 | **Payment**        | Card + invoice | Credit card       | BYO keys         | **USDC per-request**                                                    |
 | **Agent-ready**    | ✗              | ✗                 | ✗                | **✓ — agents fund their own wallet**                                    |
@@ -247,7 +247,7 @@ const reply = await client.chat('nvidia/step-3.7-flash', 'hello', {
 
 | Profile | Strategy | Savings vs Opus 5 | Best For |
 |---------|----------|-------------------|----------|
-| `eco` | Cheapest capable model — ranks the <!-- br:models.free -->6<!-- /br:models.free -->-model free NVIDIA tier first | **<!-- br:savings.ecoVsBaselinePct -->98<!-- /br:savings.ecoVsBaselinePct -->%** | Cost-sensitive production, zero-cost testing |
+| `eco` | Cheapest capable model — ranks the <!-- br:models.free -->5<!-- /br:models.free -->-model free NVIDIA tier first | **<!-- br:savings.ecoVsBaselinePct -->98<!-- /br:savings.ecoVsBaselinePct -->%** | Cost-sensitive production, zero-cost testing |
 | `auto` | Best balance of cost/quality (default) | **<!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->%** | General use |
 | `premium` | Top-tier models (OpenAI, Anthropic) | 0% | Quality-critical tasks |
 
@@ -1064,7 +1064,7 @@ const free = await client.chat('nvidia/step-3.7-flash', 'Hello!');
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `eco` | Budget-optimized — ranks the <!-- br:models.free -->6<!-- /br:models.free -->-model free NVIDIA tier first | Cost-sensitive workloads, zero-cost testing |
+| `eco` | Budget-optimized — ranks the <!-- br:models.free -->5<!-- /br:models.free -->-model free NVIDIA tier first | Cost-sensitive workloads, zero-cost testing |
 | `auto` | Intelligent routing (default) | General use |
 | `premium` | Best quality models | Critical tasks |
 
@@ -1620,7 +1620,7 @@ The `AnthropicClient` wraps the official `@anthropic-ai/sdk` with a custom fetch
 ## Frequently Asked Questions
 
 ### What is @blockrun/llm?
-@blockrun/llm is a TypeScript SDK that cuts LLM costs by up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% with built-in smart routing: every request is routed to the cheapest of <!-- br:models.chatVisible -->71<!-- /br:models.chatVisible --> models (OpenAI, Anthropic, Google, xAI, DeepSeek, Moonshot, and more) that can handle it, then paid per-request in USDC via the x402 protocol — no API keys, no subscriptions, no vendor lock-in.
+@blockrun/llm is a TypeScript SDK that cuts LLM costs by up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% with built-in smart routing: every request is routed to the cheapest of <!-- br:models.chatVisible -->70<!-- /br:models.chatVisible --> models (OpenAI, Anthropic, Google, xAI, DeepSeek, Moonshot, and more) that can handle it, then paid per-request in USDC via the x402 protocol — no API keys, no subscriptions, no vendor lock-in.
 
 ### How does payment work?
 When you make an API call, the SDK automatically handles x402 payment. It signs a USDC transaction locally using your wallet private key (which never leaves your machine), and includes the payment proof in the request header. Settlement is non-custodial and instant on Base or Solana.
