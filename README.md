@@ -123,11 +123,11 @@ import { LLMClient } from '@blockrun/llm';
 const client = new LLMClient();  // Wallet still required for signing, but $0 charged
 
 // Option 1: call a free model directly
-const reply = await client.chat('nvidia/deepseek-v4-flash', 'Explain x402 in 1 sentence');
+const reply = await client.chat('nvidia/step-3.7-flash', 'Explain x402 in 1 sentence');
 
 // Option 2: let the smart router pick — 'eco' ranks the free NVIDIA tier first
 const result = await client.smartChat('What is 2+2?', { routingProfile: 'eco' });
-console.log(result.model);     // 'nvidia/deepseek-v4-flash' ($0 — verified live)
+console.log(result.model);     // 'nvidia/step-3.7-flash' ($0 — verified live)
 console.log(result.response);  // '4'
 console.log(result.routing.savings); // 1 (100%)
 ```
@@ -137,11 +137,10 @@ There is no `free` routing profile in `smartChat()` — `routingProfile` accepts
 own proxy, not of this SDK's router options.) For guaranteed $0, pin a
 `nvidia/*` model; for smart-routed $0-first, use `eco`.
 
-**Available free models** (input + output both $0, all NVIDIA-hosted, from the live `/v1/models` catalog, last refreshed 2026-08-10):
+**Available free models** (input + output both $0, all NVIDIA-hosted, from the live `/v1/models` catalog, last refreshed 2026-08-12):
 
 | Model ID | Context | Best For |
 |----------|---------|----------|
-| `nvidia/deepseek-v4-flash` | 1M | DeepSeek V4 Flash — 284B / 13B active MoE. Best free chat / summarization / light reasoning. Capacity-constrained: requests may be answered by an equivalent free model |
 | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Multimodal reasoning — text + images + video + audio (ChartQA 90.3, DocVQA 95.6) |
 | `nvidia/mistral-nemotron` | 131K | Mistral × NVIDIA instruction model — fast (~0.2s), strong instruction following |
 | `nvidia/step-3.7-flash` | 131K | StepFun Step 3.7 Flash — fast lightweight reasoning |
@@ -237,10 +236,10 @@ propagate immediately so wallet / auth issues surface fast.
 
 ```typescript
 // Manually pass a fallback chain to chat() / chatCompletion()
-const reply = await client.chat('nvidia/deepseek-v4-flash', 'hello', {
-  fallbackModels: ['nvidia/llama-4-maverick', 'nvidia/mistral-small-4-119b'],
+const reply = await client.chat('nvidia/step-3.7-flash', 'hello', {
+  fallbackModels: ['nvidia/mistral-nemotron', 'nvidia/gpt-oss-120b'],
 });
-// If deepseek-v4-flash times out, the SDK retries against the next model
+// If step-3.7-flash times out, the SDK retries against the next model
 // and logs each hop to stderr: "[@blockrun/llm] <from> -> <to> (...)".
 ```
 
@@ -396,7 +395,7 @@ You only do this when your balance runs low. Three ways to get USDC into your wa
 
 - **(b) Transfer existing USDC.** Send USDC you already hold to your wallet address (`client.getWalletAddress()`). On Base, send Base USDC; on Solana (`SolanaLLMClient`), send Solana SPL USDC.
 
-- **(c) Skip funding entirely.** Use the free NVIDIA models (e.g. `nvidia/deepseek-v4-flash`) — every call is **$0**, no balance required.
+- **(c) Skip funding entirely.** Use the free NVIDIA models (e.g. `nvidia/step-3.7-flash`) — every call is **$0**, no balance required.
 
 $5 of USDC covers thousands of paid requests. Check your balance any time:
 
@@ -556,7 +555,7 @@ thinking modes. V4 Pro is the new flagship paid SKU — 1.6T MoE / 49B active,
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
 | `deepseek/deepseek-v4-pro` | $0.435/M | $0.87/M | 1M | V4 flagship — strongest open-weight reasoner. The 75% launch promo became the permanent list price after 2026-05-31 |
-| `deepseek/deepseek-chat` | $0.20/M | $0.40/M | 1M | V4 Flash non-thinking (paid endpoint with 5MB request bodies; same upstream as `nvidia/deepseek-v4-flash`) |
+| `deepseek/deepseek-chat` | $0.14/M | $0.28/M | 1M | V4 Flash non-thinking (paid endpoint with 5MB request bodies) |
 | `deepseek/deepseek-reasoner` | $0.20/M | $0.40/M | 1M | V4 Flash thinking (same upstream as `deepseek-chat`, thinking enabled by default) |
 
 ### xAI Grok
@@ -587,25 +586,22 @@ auto-pick them.
 
 ### NVIDIA (Free) + Moonshot
 
-Free tier refreshed 2026-04-28: added `nvidia/deepseek-v4-flash` (1M context)
-and Nemotron Nano Omni (vision). `nvidia/gpt-oss-120b` and
-`nvidia/gpt-oss-20b` were briefly delisted over privacy concerns then
-**re-enabled 2026-04-30** with `available: true` + `hidden: true` — they
-no longer appear in `/v1/models` (so SmartChat won't auto-pick them) but
-direct calls by full ID still return HTTP 200. `nvidia/deepseek-v4-pro`,
-`nvidia/deepseek-v3.2`, and `nvidia/glm-4.7` are hidden because NVIDIA's
-NIM deployment is hung — backend MODEL_REDIRECTS forwards calls to V4
-Flash / qwen3-coder. `nvidia/qwen3-next-80b-a3b-thinking` hit NVIDIA
-end-of-life 2026-05-21 (HTTP 410) and is auto-redirected to
-`nvidia/llama-4-maverick`.
+Free tier refreshed 2026-08-12. NVIDIA has retired (HTTP 410 end-of-life)
+the entire free DeepSeek family — `nvidia/deepseek-v4-flash` was the last
+to go — along with `llama-4-maverick`, the qwen3 SKUs, and the free
+Mistral small/large SKUs. Retired IDs stay callable: the gateway
+auto-redirects them to a healthy free model, so pinned callers still get
+a 200. `nvidia/gpt-oss-120b` and `nvidia/gpt-oss-20b` remain callable by
+direct ID but are hidden from `/v1/models` over the NVIDIA free tier's
+prompt-retention terms (so SmartChat won't auto-pick them).
 
 | Model | Input Price | Output Price | Notes |
 |-------|-------------|--------------|-------|
-| `nvidia/deepseek-v4-flash` | **FREE** | **FREE** | 284B / 13B active MoE, 1M context — best free chat / summarization / light reasoning |
+| `nvidia/step-3.7-flash` | **FREE** | **FREE** | Fast general-purpose chat + reasoning, 131K |
+| `nvidia/mistral-nemotron` | **FREE** | **FREE** | Fast free Mistral, 131K |
 | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | **FREE** | **FREE** | 31B / 3.2B active MoE, 256K — only vision-capable free model |
-| `nvidia/mistral-small-4-119b` | **FREE** | **FREE** | ⚠️ Upstream timing out as of 2026-06-07 |
-| `nvidia/llama-4-maverick` | **FREE** | **FREE** | Meta Llama 4 Maverick MoE |
-| `nvidia/qwen3-coder-480b` | **FREE** | **FREE** | Coding-optimised 480B MoE |
+| `nvidia/nemotron-nano-9b-v2` | **FREE** | **FREE** | Compact fast chat, 131K |
+| `nvidia/nemotron-nano-12b-v2-vl` | **FREE** | **FREE** | Compact vision, 131K |
 | `nvidia/gpt-oss-120b` | **FREE** | **FREE** | Hidden from `/v1/models` for privacy but direct calls still work — 123 tok/s |
 | `nvidia/gpt-oss-20b` | **FREE** | **FREE** | Hidden from `/v1/models` but direct calls still work — 155 tok/s |
 | `moonshot/kimi-k2.5` | $0.60/M | $3.00/M | Direct from Moonshot — replaces `nvidia/kimi-k2.5` |
@@ -1061,7 +1057,7 @@ const auto = await client.smartChat('Code review', { routingProfile: 'auto' }); 
 const premium = await client.smartChat('Write a legal brief', { routingProfile: 'premium' }); // Best quality
 
 // Guaranteed $0: call a free NVIDIA model directly
-const free = await client.chat('nvidia/deepseek-v4-flash', 'Hello!');
+const free = await client.chat('nvidia/step-3.7-flash', 'Hello!');
 ```
 
 **Routing Profiles:**
