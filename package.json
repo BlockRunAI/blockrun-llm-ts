@@ -1,6 +1,6 @@
 {
   "name": "@blockrun/llm",
-  "version": "3.13.1",
+  "version": "3.13.2",
   "type": "module",
   "description": "BlockRun SDK - Pay-per-request AI (LLM, Image, Video, Music, Voice) via x402 on Base and Solana",
   "main": "dist/index.cjs",
@@ -56,7 +56,7 @@
   },
   "devDependencies": {
     "@blockrun/core": "^0.1.0",
-    "@blockrun/router-core": "https://codeload.github.com/BlockRunAI/router-core/tar.gz/d4308049348e11e17ed08a254676a34949be80f9",
+    "@blockrun/router-core": "https://codeload.github.com/BlockRunAI/router-core/tar.gz/18bf4abc7e34599e51595b90703c385f53d4f4a6",
     "@eslint/js": "^9.39.4",
     "@types/node": "^20.19.41",
     "eslint": "^9.39.4",
