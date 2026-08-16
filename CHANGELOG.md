@@ -2,6 +2,24 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.13.2] - 2026-08-16
+
+### Changed
+
+- **`@blockrun/router-core` pinned forward to `18bf4ab`** (was `d430804`). Upstream retired `free/deepseek-v4-flash` from the eco SIMPLE fallback chain after NVIDIA EOL'd it (HTTP 410, 2026-08-12), alongside `seed-oss-36b` which went the same way on 2026-08-03. `free/gpt-oss-120b` and `-20b` already headed that chain, so the rungs are dropped rather than retargeted and eco routing is unchanged for every request that was already being served. Before this, an eco SIMPLE request that fell past the two gpt-oss entries walked into a dead model and burned a hop.
+
+  This is also the commit the Python SDK's Router Core port tracks (`blockrun-llm` 1.11.0), so both SDKs and the gateway now route from the same configuration. Verified: 24 request shapes (chat, reasoning, MCQ, math, code edit, tool/code agent, terminal, retail, airline, web research, long context, vision, structured output, and the eco/premium profiles) produce identical model, tier, task type and full candidate chain across both SDKs against the live catalog.
+
+### Fixed
+
+- **`VERSION` was left at 3.13.0 when 3.13.1 shipped**, and 3.13.1 was never recorded in this changelog — so `main` has been failing the version-consistency guard since 2026-08-12. The release workflow publishes on a GitHub Release and does not run the test suite, so the red was only visible on the push-triggered CI run, after the fact. Both files are corrected here; the 3.13.1 entry below is written retroactively.
+
+## [3.13.1] - 2026-08-12
+
+### Changed
+
+- Docs-only patch: the README's free-tier section was refreshed after NVIDIA EOL'd `deepseek-v4-flash` (HTTP 410, 2026-08-12) and the brand markers were re-synced to the live catalog (70 chat / 93 total / 5 free). No runtime change — recorded here after the fact, see the note in 3.13.2.
+
 ## [3.13.0] - 2026-08-11
 
 ### Changed

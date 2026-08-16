@@ -51,14 +51,19 @@ describe("Router Core SDK integration", () => {
     // free/* namespace; the gateway serves those models as nvidia/*. The
     // adapter must map — dropping them silently converts eco to a paid
     // profile (the v3.11.0 regression this guards against).
+    //
+    // The vehicle used to be free/deepseek-v4-flash; router-core dropped it
+    // from this chain in 18bf4ab after NVIDIA EOL'd it (410, 2026-08-12), so
+    // the mapping is now exercised through the gpt-oss pair that heads the
+    // chain. The assertion is about the namespace mapping, not the model.
     const pricing = routerPricing();
-    pricing.set("nvidia/deepseek-v4-flash", { inputPrice: 0, outputPrice: 0 });
+    pricing.set("nvidia/gpt-oss-120b", { inputPrice: 0, outputPrice: 0 });
 
     const decision = routeWithCatalog("Name the capital of France. One word.", undefined, 50, pricing, {
       routingProfile: "eco",
     });
 
-    expect(decision.model).toBe("nvidia/deepseek-v4-flash");
+    expect(decision.model).toBe("nvidia/gpt-oss-120b");
     expect(decision.costEstimate).toBe(0); // free models settle at $0 — no payment floor
     expect(decision.savings).toBe(1);
   });
