@@ -28,6 +28,48 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      # ── Release gate ──────────────────────────────────────────────────────
+      # Everything below this line runs before anything is published, because
+      # npm (like PyPI) will not let you replace a published version.
+      #
+      # 3.13.1 is why this exists. It bumped package.json and src/version.ts but
+      # left VERSION on 3.13.0 and never recorded the release in the changelog.
+      # The version-consistency suite catches both — but this workflow triggers
+      # on a GitHub Release and ran none of it, so the broken tree went to npm
+      # and the failure only surfaced on the push-triggered CI run afterwards.
+      #
+      # This is the 22 leg of ci.yml, not full CI: 20 and 24 still run only on
+      # push, so a version-incompatible API is caught there, not here. The
+      # brand-numbers check is deliberately NOT a release gate — it compares
+      # marketing counts in the docs, and a stale model number is not a reason
+      # to block a bugfix or security release.
+
+      # A release tag that disagrees with the package version means the wrong
+      # tree is being published. The "already published" check below would stop
+      # a duplicate, but only after the release is cut; fail here instead.
+      - name: Verify the release tag matches VERSION
+        run: |
+          tag="${{ github.event.release.tag_name }}"
+          declared="v$(tr -d '[:space:]' < VERSION)"
+          if [ "$tag" != "$declared" ]; then
+            echo "Release tag $tag does not match VERSION ($declared)." >&2
+            exit 1
+          fi
+          echo "Release tag $tag matches VERSION."
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      # Covers VERSION <-> package.json <-> src/version.ts and the changelog
+      # entry, via test/unit/version-consistency.test.ts.
+      - name: Test
+        run: pnpm run test --run
+      # ──────────────────────────────────────────────────────────────────────
+
       - run: pnpm run build
 
       # pack/publish stay on npm: they read package.json, not a lockfile, and
