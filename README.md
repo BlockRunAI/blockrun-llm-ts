@@ -4,7 +4,7 @@
 
 ### Cut your LLM bill by <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->%. One line of TypeScript.
 
-The smart-routing SDK for <!-- br:models.chatVisible -->70<!-- /br:models.chatVisible --> models — every request goes to the cheapest model that can handle it,
+The smart-routing SDK for <!-- br:models.chatVisible -->71<!-- /br:models.chatVisible --> models — every request goes to the cheapest model that can handle it,
 paid per-request in USDC. No API keys. No subscriptions. No vendor lock-in.
 
 [![npm](https://img.shields.io/npm/v/@blockrun/llm.svg?style=flat-square)](https://www.npmjs.com/package/@blockrun/llm)
@@ -53,7 +53,7 @@ console.log(r.response);         // the proof
 |                    | OpenAI SDK     | OpenRouter        | LiteLLM          | **@blockrun/llm**                                                       |
 | ------------------ | -------------- | ----------------- | ---------------- | ----------------------------------------------------------------------- |
 | **Cost routing**   | ✗ one vendor   | Manual selection  | Manual selection | **Automatic — <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% cheaper** |
-| **Models**         | GPT only       | 200+              | 100+ (BYO keys)  | **<!-- br:models.chatVisible -->70<!-- /br:models.chatVisible -->, one wallet** |
+| **Models**         | GPT only       | 200+              | 100+ (BYO keys)  | **<!-- br:models.chatVisible -->71<!-- /br:models.chatVisible -->, one wallet** |
 | **Free tier**      | ✗              | Rate-limited      | ✗                | **<!-- br:models.free -->5<!-- /br:models.free --> models, no signup**  |
 | **Auth**           | API key        | Account + API key | Your API keys    | **Wallet signature**                                                    |
 | **Payment**        | Card + invoice | Credit card       | BYO keys         | **USDC per-request**                                                    |
@@ -1620,7 +1620,7 @@ The `AnthropicClient` wraps the official `@anthropic-ai/sdk` with a custom fetch
 ## Frequently Asked Questions
 
 ### What is @blockrun/llm?
-@blockrun/llm is a TypeScript SDK that cuts LLM costs by up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% with built-in smart routing: every request is routed to the cheapest of <!-- br:models.chatVisible -->70<!-- /br:models.chatVisible --> models (OpenAI, Anthropic, Google, xAI, DeepSeek, Moonshot, and more) that can handle it, then paid per-request in USDC via the x402 protocol — no API keys, no subscriptions, no vendor lock-in.
+@blockrun/llm is a TypeScript SDK that cuts LLM costs by up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% with built-in smart routing: every request is routed to the cheapest of <!-- br:models.chatVisible -->71<!-- /br:models.chatVisible --> models (OpenAI, Anthropic, Google, xAI, DeepSeek, Moonshot, and more) that can handle it, then paid per-request in USDC via the x402 protocol — no API keys, no subscriptions, no vendor lock-in.
 
 ### How does payment work?
 When you make an API call, the SDK automatically handles x402 payment. It signs a USDC transaction locally using your wallet private key (which never leaves your machine), and includes the payment proof in the request header. Settlement is non-custodial and instant on Base or Solana.
