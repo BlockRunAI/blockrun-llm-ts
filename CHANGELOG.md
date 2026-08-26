@@ -2,6 +2,18 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.13.3] - 2026-08-26
+
+### Fixed
+
+- **Solana payments now recover from an expired blockhash instead of failing the call.** A Solana payment is pinned to a blockhash valid for ~150 slots (~60s). When one aged out mid-flight the caller got a flat `Payment was rejected. Check your Solana USDC balance.` — wrong advice for a funded wallet, and a dead end for an agent that only had to re-sign. `SolanaLLMClient` now makes at most two bounded re-sign attempts (500ms, 2000ms backoff) across the chat, raw POST and raw GET payment paths.
+
+  Retries are deliberately narrow. A re-sign fires only on an explicitly verification-phase stale signal; settlement failures, phase-ambiguous 402s, insufficient funds, malformed bodies and bare simulation failures all stay terminal. Verification runs strictly before settlement on the gateway, so a caller that sees the retryable signal has provably had no transaction broadcast and cannot be double-charged.
+
+  Requires the gateway change in `BlockRunAI/blockrun@7e26ea1`, which gives payment-verification 402s a machine-readable `code` (`PAYMENT_BLOCKHASH_STALE`). Before it, no gateway response carried any field this classifier could match, on any endpoint.
+
+- **The re-sign was reusing the same expired blockhash**, which made it incapable of succeeding. `createSolanaPaymentPayload` read the client blockhash cache with `forceRefresh: false`, and the 10s TTL outlives the 2.5s retry window — so a re-sign was handed back the hash the facilitator had just rejected. The fee-nonce duplicate guard then nudged the priority fee, so the transaction bytes differed while staying pinned to the dead blockhash: the retry looked productive and failed identically. New `forceFreshBlockhash` option on `CreateSolanaPaymentOptions`, set only on a re-sign, so the first attempt keeps the cached fast path.
+
 ## [3.13.2] - 2026-08-16
 
 ### Changed
