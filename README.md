@@ -232,7 +232,9 @@ console.log(complex.routing.fallbacks);  // ['anthropic/claude-opus-4.7', ...]
 `chat()` / `chatCompletion()` walk it automatically when the primary model
 returns a transient error — timeouts, network failures, 429 rate limits, or
 5xx responses (502/503/504/522/524). Other 4xx errors and `PaymentError`
-propagate immediately so wallet / auth issues surface fast.
+propagate immediately so wallet / auth issues surface fast. (Solana's internal
+stale-blockhash re-sign is a separate, lower-level retry inside the payment
+step — see [How Payment Works](#phase-2--every-request-pays-itself-automatic-x402).)
 
 ```typescript
 // Manually pass a fallback chain to chat() / chatCompletion()
@@ -415,6 +417,18 @@ You just call e.g. `client.chat(...)` — the payment is invisible:
 5. The gateway settles on-chain and returns the AI response.
 
 One call, no separate pay step. Free NVIDIA models settle at **$0** (no payment signed).
+
+On **Solana**, step 3 pins the payment to a recent blockhash that is valid for
+roughly 60 seconds. If one expires between signing and verification,
+`SolanaLLMClient` re-signs against a fresh blockhash and retries — up to twice,
+with a short backoff — rather than surfacing a payment error you would only
+have to retry by hand.
+
+The retry is deliberately narrow. It fires only when the gateway explicitly
+reports a *verification-phase* stale blockhash. Settlement failures, ambiguous
+rejections, insufficient funds and malformed responses all fail immediately.
+Verification runs strictly before settlement, so a retryable rejection means no
+transaction was broadcast and you cannot be charged twice.
 
 ### Track spend and verify settlements
 
