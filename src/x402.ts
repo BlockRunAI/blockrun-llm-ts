@@ -302,6 +302,22 @@ export interface CreateSolanaPaymentOptions {
    * (e.g. `{ "x-api-key": "..." }` for Tatum / header-auth gateways).
    */
   rpcHeaders?: Record<string, string>;
+  /**
+   * Skip the client blockhash cache and ask the RPC for a current one.
+   *
+   * Set this ONLY when the previous attempt was rejected for a stale
+   * blockhash. The cache TTL (10s) is longer than any sane retry backoff, so a
+   * re-sign that leaves this false gets the SAME expired hash back, and the
+   * duplicate guard then nudges the priority fee — producing fresh transaction
+   * bytes pinned to the very blockhash the server just rejected. The retry
+   * looks like it did something and is guaranteed to fail identically.
+   *
+   * Not a guarantee of a different hash: the default RPC caches
+   * `getLatestBlockhash` for 30s server-side and may hand back the same value.
+   * It is the strongest thing a client can do, and the guard below still
+   * ensures the bytes differ.
+   */
+  forceFreshBlockhash?: boolean;
 }
 
 /**
@@ -412,7 +428,7 @@ export async function createSolanaPaymentPayload(
     return null;
   };
 
-  let entry = await getBlockhashEntry(connection, rpcUrl, false);
+  let entry = await getBlockhashEntry(connection, rpcUrl, options.forceFreshBlockhash ?? false);
   let serializedTx = findDistinctTx(entry);
 
   if (serializedTx === null) {
