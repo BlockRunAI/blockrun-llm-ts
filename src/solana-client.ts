@@ -754,7 +754,7 @@ export class SolanaLLMClient {
 
       if (response.status === 402) {
         try {
-          return await this.handlePaymentAndRetry(url, body, response);
+          return await this.handlePaymentAndRetry(url, body, response, staleRetries > 0);
         } catch (error) {
           if (
             !(error instanceof SafeStaleBlockhashError) ||
@@ -778,7 +778,8 @@ export class SolanaLLMClient {
   private async handlePaymentAndRetry(
     url: string,
     body: Record<string, unknown>,
-    response: Response
+    response: Response,
+    forceFreshBlockhash = false
   ): Promise<ChatResponse> {
     let paymentHeader = response.headers.get("payment-required");
 
@@ -828,6 +829,7 @@ export class SolanaLLMClient {
         extensions,
         rpcUrl: this.rpcUrl,
         rpcHeaders: this.rpcHeaders,
+        forceFreshBlockhash,
       }
     );
 
@@ -875,7 +877,7 @@ export class SolanaLLMClient {
 
       if (response.status === 402) {
         try {
-          return await this.handlePaymentAndRetryRaw(url, body, response);
+          return await this.handlePaymentAndRetryRaw(url, body, response, staleRetries > 0);
         } catch (error) {
           if (
             !(error instanceof SafeStaleBlockhashError) ||
@@ -899,7 +901,8 @@ export class SolanaLLMClient {
   private async handlePaymentAndRetryRaw(
     url: string,
     body: Record<string, unknown>,
-    response: Response
+    response: Response,
+    forceFreshBlockhash = false
   ): Promise<Record<string, unknown>> {
     let paymentHeader = response.headers.get("payment-required");
 
@@ -949,6 +952,7 @@ export class SolanaLLMClient {
         extensions,
         rpcUrl: this.rpcUrl,
         rpcHeaders: this.rpcHeaders,
+        forceFreshBlockhash,
       }
     );
 
@@ -997,7 +1001,7 @@ export class SolanaLLMClient {
 
       if (response.status === 402) {
         try {
-          return await this.handleGetPaymentAndRetryRaw(url, endpoint, params, response);
+          return await this.handleGetPaymentAndRetryRaw(url, endpoint, params, response, staleRetries > 0);
         } catch (error) {
           if (
             !(error instanceof SafeStaleBlockhashError) ||
@@ -1022,7 +1026,8 @@ export class SolanaLLMClient {
     url: string,
     endpoint: string,
     params: Record<string, string> | undefined,
-    response: Response
+    response: Response,
+    forceFreshBlockhash = false
   ): Promise<Record<string, unknown>> {
     let paymentHeader = response.headers.get("payment-required");
 
@@ -1072,6 +1077,7 @@ export class SolanaLLMClient {
         extensions,
         rpcUrl: this.rpcUrl,
         rpcHeaders: this.rpcHeaders,
+        forceFreshBlockhash,
       }
     );
 
