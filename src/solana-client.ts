@@ -57,6 +57,106 @@ import { USER_AGENT } from "./version";
 const SOLANA_API_URL = "https://sol.blockrun.ai/api";
 const DEFAULT_MAX_TOKENS = 1024;
 const DEFAULT_TIMEOUT = 60000;
+const STALE_BLOCKHASH_RETRY_BACKOFFS_MS = [500, 2000] as const;
+const MAX_PAYMENT_FAILURE_BYTES = 64 * 1024;
+
+class SafeStaleBlockhashError extends PaymentError {
+  constructor() {
+    super("Payment verification used an expired Solana blockhash; retrying with a fresh quote.");
+    this.name = "SafeStaleBlockhashError";
+  }
+}
+
+function normalizePaymentSignal(value: unknown): string {
+  return typeof value === "string"
+    ? value.toLowerCase().replace(/[_\-\s:]/g, "")
+    : "";
+}
+
+async function readPaymentFailureBody(response: Response): Promise<string | null> {
+  // The paid 402 is terminal or converted into an internal retry signal; it is
+  // never returned to callers, so consume the original body. Cloning would tee
+  // the stream, and cancelling one oversized tee branch can wait forever for
+  // the unread sibling branch.
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return text + decoder.decode();
+      total += value.byteLength;
+      if (total > MAX_PAYMENT_FAILURE_BYTES) {
+        void reader.cancel();
+        return null;
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Recognize only explicitly verification-phase stale-blockhash failures.
+ * Settlement may already have broadcast a transaction, so any settlement or
+ * phase-ambiguous 402 is terminal even when it mentions blockhash expiry.
+ * @internal Exported for the payment safety regression tests.
+ */
+export async function isSafeStaleBlockhashResponse(response: Response): Promise<boolean> {
+  const length = Number(response.headers.get("content-length") || "0");
+  if (Number.isFinite(length) && length > MAX_PAYMENT_FAILURE_BYTES) return false;
+
+  const text = await readPaymentFailureBody(response);
+  if (text === null) return false;
+
+  let body: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    body = parsed as Record<string, unknown>;
+  } catch {
+    return false;
+  }
+
+  const nested = body.error && typeof body.error === "object" && !Array.isArray(body.error)
+    ? body.error as Record<string, unknown>
+    : undefined;
+  const errorLabel = typeof body.error === "string" ? body.error : "";
+  const code = normalizePaymentSignal(body.code ?? nested?.code);
+  const reason = normalizePaymentSignal(body.reason);
+  const detail = normalizePaymentSignal(body.invalidMessage);
+  const message = normalizePaymentSignal(nested?.message ?? body.message);
+  const label = normalizePaymentSignal(errorLabel);
+
+  if (
+    code.includes("settlementfailed") ||
+    label.includes("settlementfailed") ||
+    message.includes("settlementfailed")
+  ) return false;
+
+  const verifyPhase =
+    code === "paymentinvalid" ||
+    label.includes("verificationfailed") ||
+    message.includes("verificationfailed");
+  if (!verifyPhase) return false;
+
+  return (
+    code === "paymentblockhashstale" ||
+    detail.includes("blockhashnotfound") ||
+    detail.includes("blockheightexceeded") ||
+    reason === "expiredsignature" ||
+    message.includes("expiredsignature")
+  );
+}
+
+async function waitForStaleRetry(attempt: number): Promise<void> {
+  await new Promise<void>((resolve) =>
+    setTimeout(resolve, STALE_BLOCKHASH_RETRY_BACKOFFS_MS[attempt])
+  );
+}
 
 /**
  * Default Solana RPC URL — BlockRun's multi-region Tatum-backed JSON-RPC
@@ -645,23 +745,34 @@ export class SolanaLLMClient {
     body: Record<string, unknown>
   ): Promise<ChatResponse> {
     const url = `${this.apiUrl}${endpoint}`;
-    const response = await this.fetchWithTimeout(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
-      body: JSON.stringify(body),
-    });
+    for (let staleRetries = 0; ; ) {
+      const response = await this.fetchWithTimeout(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
+        body: JSON.stringify(body),
+      });
 
-    if (response.status === 402) {
-      return this.handlePaymentAndRetry(url, body, response);
+      if (response.status === 402) {
+        try {
+          return await this.handlePaymentAndRetry(url, body, response);
+        } catch (error) {
+          if (
+            !(error instanceof SafeStaleBlockhashError) ||
+            staleRetries >= STALE_BLOCKHASH_RETRY_BACKOFFS_MS.length
+          ) throw error;
+          await waitForStaleRetry(staleRetries++);
+          continue;
+        }
+      }
+
+      if (!response.ok) {
+        let errorBody: unknown;
+        try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
+        throw new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(errorBody));
+      }
+
+      return response.json() as Promise<ChatResponse>;
     }
-
-    if (!response.ok) {
-      let errorBody: unknown;
-      try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
-      throw new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(errorBody));
-    }
-
-    return response.json() as Promise<ChatResponse>;
   }
 
   private async handlePaymentAndRetry(
@@ -731,6 +842,9 @@ export class SolanaLLMClient {
     });
 
     if (retryResponse.status === 402) {
+      if (await isSafeStaleBlockhashResponse(retryResponse)) {
+        throw new SafeStaleBlockhashError();
+      }
       throw new PaymentError("Payment was rejected. Check your Solana USDC balance.");
     }
 
@@ -752,23 +866,34 @@ export class SolanaLLMClient {
     body: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     const url = `${this.apiUrl}${endpoint}`;
-    const response = await this.fetchWithTimeout(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
-      body: JSON.stringify(body),
-    });
+    for (let staleRetries = 0; ; ) {
+      const response = await this.fetchWithTimeout(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
+        body: JSON.stringify(body),
+      });
 
-    if (response.status === 402) {
-      return this.handlePaymentAndRetryRaw(url, body, response);
+      if (response.status === 402) {
+        try {
+          return await this.handlePaymentAndRetryRaw(url, body, response);
+        } catch (error) {
+          if (
+            !(error instanceof SafeStaleBlockhashError) ||
+            staleRetries >= STALE_BLOCKHASH_RETRY_BACKOFFS_MS.length
+          ) throw error;
+          await waitForStaleRetry(staleRetries++);
+          continue;
+        }
+      }
+
+      if (!response.ok) {
+        let errorBody: unknown;
+        try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
+        throw new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(errorBody));
+      }
+
+      return response.json() as Promise<Record<string, unknown>>;
     }
-
-    if (!response.ok) {
-      let errorBody: unknown;
-      try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
-      throw new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(errorBody));
-    }
-
-    return response.json() as Promise<Record<string, unknown>>;
   }
 
   private async handlePaymentAndRetryRaw(
@@ -838,6 +963,9 @@ export class SolanaLLMClient {
     });
 
     if (retryResponse.status === 402) {
+      if (await isSafeStaleBlockhashResponse(retryResponse)) {
+        throw new SafeStaleBlockhashError();
+      }
       throw new PaymentError("Payment was rejected. Check your Solana USDC balance.");
     }
 
@@ -861,22 +989,33 @@ export class SolanaLLMClient {
     const query = params ? "?" + new URLSearchParams(params).toString() : "";
     const url = `${this.apiUrl}${endpoint}${query}`;
 
-    const response = await this.fetchWithTimeout(url, {
-      method: "GET",
-      headers: { "User-Agent": USER_AGENT },
-    });
+    for (let staleRetries = 0; ; ) {
+      const response = await this.fetchWithTimeout(url, {
+        method: "GET",
+        headers: { "User-Agent": USER_AGENT },
+      });
 
-    if (response.status === 402) {
-      return this.handleGetPaymentAndRetryRaw(url, endpoint, params, response);
+      if (response.status === 402) {
+        try {
+          return await this.handleGetPaymentAndRetryRaw(url, endpoint, params, response);
+        } catch (error) {
+          if (
+            !(error instanceof SafeStaleBlockhashError) ||
+            staleRetries >= STALE_BLOCKHASH_RETRY_BACKOFFS_MS.length
+          ) throw error;
+          await waitForStaleRetry(staleRetries++);
+          continue;
+        }
+      }
+
+      if (!response.ok) {
+        let errorBody: unknown;
+        try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
+        throw new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(errorBody));
+      }
+
+      return response.json() as Promise<Record<string, unknown>>;
     }
-
-    if (!response.ok) {
-      let errorBody: unknown;
-      try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
-      throw new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(errorBody));
-    }
-
-    return response.json() as Promise<Record<string, unknown>>;
   }
 
   private async handleGetPaymentAndRetryRaw(
@@ -947,6 +1086,9 @@ export class SolanaLLMClient {
     });
 
     if (retryResponse.status === 402) {
+      if (await isSafeStaleBlockhashResponse(retryResponse)) {
+        throw new SafeStaleBlockhashError();
+      }
       throw new PaymentError("Payment was rejected. Check your Solana USDC balance.");
     }
 
