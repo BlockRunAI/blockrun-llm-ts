@@ -57,14 +57,18 @@ const PAYER = Keypair.generate();
 const HASH_A = Keypair.generate().publicKey.toBase58();
 const HASH_B = Keypair.generate().publicKey.toBase58();
 
-async function pay(amount: string, rpcUrl?: string): Promise<string> {
+async function pay(
+  amount: string,
+  rpcUrl?: string,
+  forceFreshBlockhash?: boolean,
+): Promise<string> {
   const raw = await createSolanaPaymentPayload(
     PAYER.secretKey,
     PAYER.publicKey.toBase58(),
     RECIPIENT,
     amount,
     FEE_PAYER,
-    rpcUrl ? { rpcUrl } : {},
+    { ...(rpcUrl ? { rpcUrl } : {}), ...(forceFreshBlockhash ? { forceFreshBlockhash } : {}) },
   );
   return JSON.parse(atob(raw)).payload.transaction as string;
 }
@@ -98,6 +102,42 @@ describe("Solana payment payload caching", () => {
     const first = await pay("11500");
     const second = await pay("11500");
     expect(second).not.toBe(first);
+  });
+
+  // A stale-blockhash rejection means the hash this client signed against has
+  // expired. The client cache TTL is 10s and the SDK's retry backoffs total
+  // 2.5s, so a re-sign that does NOT force a refresh is served the same expired
+  // hash — and the duplicate guard nudges the priority fee, so the bytes differ
+  // and the retry looks productive while being pinned to the very blockhash the
+  // server just rejected. `forceFreshBlockhash` is what makes it real.
+  describe("forceFreshBlockhash (stale-blockhash re-sign)", () => {
+    it("without it, a re-sign is served the same expired blockhash from cache", async () => {
+      rpc.hashes = [HASH_A, HASH_B];
+      const first = await pay("11500");
+      const second = await pay("11500");
+      expect(rpc.blockhashCalls).toBe(1);
+      // Different bytes, same blockhash — the failure mode this pins.
+      expect(second).not.toBe(first);
+    });
+
+    it("with it, the client asks the RPC for a current blockhash", async () => {
+      rpc.hashes = [HASH_A, HASH_B];
+      await pay("11500");
+      await pay("11500", undefined, true);
+      expect(rpc.blockhashCalls).toBe(2);
+    });
+
+    it("still emits distinct bytes when the forced refresh returns the same hash", async () => {
+      // The RPC caches getLatestBlockhash 30s server-side, so a forced refresh
+      // can legitimately hand back the value that just failed. The duplicate
+      // guard must still hold, or the re-sign is rejected as already-processed
+      // instead of as stale.
+      rpc.hashes = [HASH_A];
+      const first = await pay("11500");
+      const second = await pay("11500", undefined, true);
+      expect(rpc.blockhashCalls).toBe(2);
+      expect(second).not.toBe(first);
+    });
   });
 
   it("stays distinct even when the RPC keeps returning the same blockhash", async () => {
