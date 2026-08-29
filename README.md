@@ -295,14 +295,14 @@ anchors the portfolio's candidate pool):
 
 | Tier | Example Tasks | ECO | AUTO | PREMIUM |
 |------|---------------|-----|------|---------|
-| SIMPLE | "What is 2+2?", definitions | free/gpt-oss-120b † (**FREE**) | gemini-2.5-flash ($0.30/$2.50) | kimi-k2.7 † ($0.95/$4.00) |
-| MEDIUM | Code snippets, explanations | gemini-3.1-flash-lite ($0.25/$1.50) | kimi-k2.7 ($0.95/$4.00) | gpt-5.3-codex ($1.75/$14.00) |
-| COMPLEX | Architecture, long documents | gemini-3.1-flash-lite ($0.25/$1.50) | gemini-3.1-pro ($2/$12) | claude-fable-5 ($10/$50) |
-| REASONING | Proofs, multi-step reasoning | grok-4-1-fast-reasoning † ($0.20/$0.50) | grok-4-1-fast-reasoning † ($0.20/$0.50) | claude-sonnet-4.6 ($3/$15) |
+| SIMPLE | "What is 2+2?", definitions | step-3.7-flash (**FREE**) | gemini-2.5-flash ($0.30/$2.50) | gemini-3.5-flash ($1.50/$9) |
+| MEDIUM | Code snippets, explanations | glm-5.3-flash ($0.15/$0.50) | gemini-3.5-flash ($1.50/$9) | gpt-5.3-codex ($1.75/$14.00) |
+| COMPLEX | Architecture, long documents | glm-5.3-flash ($0.15/$0.50) | gemini-3.1-pro ($2/$12) | claude-fable-5 ($10/$50) |
+| REASONING | Proofs, multi-step reasoning | deepseek-reasoner ($0.14/$0.28) | deepseek-reasoner ($0.14/$0.28) | claude-sonnet-5 ($3/$15) |
 
-† Withheld from `/v1/models` — the router still calls it by direct ID, but you
-will not find it on the public pricing page. The published savings claim is
-priced on visible models only.
+Since Router Core V3.5 every primary and every fallback rung is a model listed
+on `/v1/models` — nothing the router picks is withheld from the public pricing
+page, and the published savings claim is priced on those same visible models.
 
 This table mirrors ClawRouter's tier configs at the version this SDK pins;
 the [ClawRouter README](https://github.com/BlockRunAI/ClawRouter#how-it-works)
