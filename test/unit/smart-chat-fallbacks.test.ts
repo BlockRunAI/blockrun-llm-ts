@@ -68,18 +68,20 @@ describe("Router Core SDK integration", () => {
     expect(decision.savings).toBe(1);
   });
 
-  it("keeps router-ranked ids that are withheld from /v1/models", async () => {
-    // moonshot/kimi-k2.7 is hidden from the catalog but gateway-callable by
-    // direct id, and it is premium's SIMPLE primary. Filtering it out would
-    // silently swap the model the router chose.
+  it("keeps router-ranked ids that are absent from the catalog pricing", async () => {
+    // The adapter must not filter the ranking by catalog presence: a model the
+    // gateway serves by direct id but withholds from /v1/models (kimi-k2.7 was
+    // the standing example until router-core V3.5 stopped naming hidden ids)
+    // would otherwise be silently swapped for a model the router did not
+    // choose. Simulate the withheld case by deleting a chain rung's pricing.
     const pricing = routerPricing();
-    pricing.delete("moonshot/kimi-k2.7");
+    pricing.delete("google/gemini-3.6-flash");
 
     const decision = routeWithCatalog("Hello there!", undefined, 50, pricing, {
       routingProfile: "premium",
     });
 
-    expect(decision.candidates).toContain("moonshot/kimi-k2.7");
+    expect(decision.candidates).toContain("google/gemini-3.6-flash");
   });
 
   it("drops proxy-only free ids that have no nvidia/* mapping in the catalog", async () => {
