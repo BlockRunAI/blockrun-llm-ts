@@ -13,6 +13,12 @@
     "rootDir": "src",
     "resolveJsonModule": true,
     "isolatedModules": true,
+    // Not our deprecation: tsup's dts step synthesizes its own compilerOptions
+    // with `baseUrl`, which TS 6 errors on (TS5101) and TS 7 will drop. Without
+    // this the declaration build fails outright and the package ships no types.
+    // Remove it once tsup stops injecting baseUrl — and note it pins this repo
+    // to TS >= 6, since 5.x rejects the "6.0" value.
+    "ignoreDeprecations": "6.0",
     "noEmit": true
   },
   "include": ["src/**/*"],
