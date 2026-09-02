@@ -58,6 +58,30 @@ jobs:
           fi
           echo "Release tag $tag matches VERSION."
 
+      # A Release cut from an old tag would otherwise publish backwards: npm's
+      # "already published" check below only asks whether THIS version exists,
+      # so v3.13.3 — tagged 2026-08-26, never released, still on the remote —
+      # would install cleanly over 3.13.6 and move `latest` back to a build
+      # without the Solana blockhash fix or the eco routing fix. Refuse any
+      # version that is not strictly ahead of what npm already serves.
+      - name: Refuse to publish backwards
+        run: |
+          set -euo pipefail
+          name="$(node -p "require('./package.json').name")"
+          declared="$(node -p "require('./package.json').version")"
+          current="$(npm view "$name" version 2>/dev/null || echo '0.0.0')"
+          highest="$(printf '%s\n%s\n' "$declared" "$current" | sort -V | tail -1)"
+          if [ "$declared" = "$current" ]; then
+            echo "$declared is already the published version; the idempotency check below will skip the publish."
+            exit 0
+          fi
+          if [ "$highest" != "$declared" ]; then
+            echo "Refusing to publish $name@$declared over the published $current." >&2
+            echo "This tag is behind npm — publishing it would move 'latest' backwards." >&2
+            exit 1
+          fi
+          echo "$declared is ahead of the published $current."
+
       - name: Lint
         run: pnpm run lint
 
