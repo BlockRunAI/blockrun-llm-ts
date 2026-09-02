@@ -2,6 +2,18 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [Unreleased]
+
+### Security
+
+- **19 of the 20 advisories `pnpm audit` reported are gone.** Seventeen fell out with the toolchain bumps below — `eslint` 9.39.5, `typescript-eslint` 8.69.0 and `vitest` 3.2.7 pull fixed `brace-expansion`, `js-yaml`, `nanoid`, `postcss` and `vite` transitively. The other two needed overrides: `uuid@<11.1.1` (bounds check in v3/v5/v6, reached through `jayson` under `@solana/web3.js` v1) and `esbuild@<0.28.1` (arbitrary file read from the dev server on Windows, reached through `tsup` > `bundle-require`).
+
+- **`bigint-buffer` (high, GHSA-3gc7-fjrx-p6mg) is left in place because no fixed version exists.** 1.1.5 is the latest release, `@solana/buffer-layout-utils@0.3.0` — also the latest — still requires `^1.1.5`, and the advisory's patched range is empty. It is reached only through `@solana/spl-token`, an **optional** peer dependency, so it enters a consumer's tree only if they opt into Solana support. Escaping it means moving off `@solana/web3.js` v1 to `@solana/kit`, which changes the Solana public surface and does not belong in a dependency patch. Note that the `pnpm.overrides` above bind this repo's own install tree; they are not inherited by consumers of the published package.
+
+### Changed
+
+- Dependency bumps: `viem` 2.49.0 -> 2.56.3 (the only runtime dependency here), `@solana/spl-token` peer range `^0.4.14` -> `^0.4.15`, and dev: `eslint` + `@eslint/js` 9.39.5, `typescript-eslint` 8.69.0, `vitest` 3.2.7, `@types/node` 20.19.43. Full CI green on all of them — lint, typecheck, 282 tests, build, and `dist/index.d.ts` still carries no `router-core` import.
+
 ## [3.13.4] - 2026-09-02
 
 ### Fixed
