@@ -218,7 +218,7 @@ console.log(`Saved ${(result.routing.savings * 100).toFixed(0)}%`); // this requ
 const complex = await client.smartChat('Prove the Riemann hypothesis step by step');
 console.log(complex.model);  // 'xai/grok-4.3'
 
-// Inspect how the request was classified and ranked (Router v3.4 portfolio).
+// Inspect how the request was classified and ranked (Router Core V3.5 portfolio).
 console.log(complex.routing.method);     // 'portfolio'
 console.log(complex.routing.taskType);   // 'reasoning'
 console.log(complex.routing.candidates); // ranked, capability-eligible models
@@ -279,8 +279,8 @@ flowchart LR
     F --> G["response<br/>+ full routing metadata"]
 ```
 
-Since ClawRouter v0.12.242, Auto uses the deterministic **Router v3.4 portfolio
-strategy**: it classifies the task shape locally across
+Auto uses the deterministic **Router Core V3.5 portfolio strategy**
+(`DEFAULT_ROUTING_CONFIG.version` in the pinned engine): it classifies the task shape locally across
 <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions
 (token count, code presence, reasoning markers, technical/creative terms,
 agentic patterns, …), enforces tool / vision / structured-output / context
@@ -296,7 +296,7 @@ anchors the portfolio's candidate pool):
 
 | Tier | Example Tasks | ECO | AUTO | PREMIUM |
 |------|---------------|-----|------|---------|
-| SIMPLE | "What is 2+2?", definitions | step-3.7-flash (**FREE**) | gemini-2.5-flash ($0.30/$2.50) | gemini-3.5-flash ($1.50/$9) |
+| SIMPLE | "What is 2+2?", definitions | nemotron-3.5-lightning (**FREE**) | gemini-2.5-flash ($0.30/$2.50) | gemini-3.5-flash ($1.50/$9) |
 | MEDIUM | Code snippets, explanations | glm-5.3-flash ($0.15/$0.50) | gemini-3.5-flash ($1.50/$9) | gpt-5.3-codex ($1.75/$14.00) |
 | COMPLEX | Architecture, long documents | glm-5.3-flash ($0.15/$0.50) | gemini-3.1-pro ($2/$12) | claude-fable-5 ($10/$50) |
 | REASONING | Proofs, multi-step reasoning | deepseek-reasoner ($0.14/$0.28) | deepseek-reasoner ($0.14/$0.28) | claude-sonnet-5 ($3/$15) |

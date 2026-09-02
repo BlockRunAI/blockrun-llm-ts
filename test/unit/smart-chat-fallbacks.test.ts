@@ -51,19 +51,25 @@ describe("Router Core SDK integration", () => {
     // silently become a paid profile. The vehicle has migrated with the free
     // tier itself — free/deepseek-v4-flash until 18bf4ab (NVIDIA 410), the
     // gpt-oss pair until 9386c53 retired it (gateway 400, probed
-    // 2026-08-21). Since 9386c53 the chains carry the gateway-native
-    // nvidia/* ids directly, so the adapter's free/*→nvidia/* mapping branch
-    // is dormant with the current pin — it stays in the adapter because pins
-    // move independently, and the "drops proxy-only free ids" test below
-    // keeps the drop path honest.
+    // 2026-08-21), then step-3.7-flash until router-core 5ee7c23, when NVIDIA
+    // 410'd four of the five visible free models at once (2026-08-30). Since
+    // 9386c53 the chains carry the gateway-native nvidia/* ids directly, so
+    // the adapter's free/*→nvidia/* mapping branch is dormant with the current
+    // pin — it stays in the adapter because pins move independently, and the
+    // "drops proxy-only free ids" test below keeps the drop path honest.
+    //
+    // The id is asserted deliberately. blockrun server-redirects retired free
+    // ids, so a stale head keeps returning answers — from a model the router
+    // did not name. Failing here on the exact id is what forces a human to
+    // look when the free tier moves under the pin.
     const pricing = routerPricing();
-    pricing.set("nvidia/step-3.7-flash", { inputPrice: 0, outputPrice: 0 });
+    pricing.set("nvidia/nemotron-3.5-lightning", { inputPrice: 0, outputPrice: 0 });
 
     const decision = routeWithCatalog("Name the capital of France. One word.", undefined, 50, pricing, {
       routingProfile: "eco",
     });
 
-    expect(decision.model).toBe("nvidia/step-3.7-flash");
+    expect(decision.model).toBe("nvidia/nemotron-3.5-lightning");
     expect(decision.costEstimate).toBe(0); // free models settle at $0 — no payment floor
     expect(decision.savings).toBe(1);
   });
