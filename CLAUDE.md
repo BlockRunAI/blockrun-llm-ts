@@ -33,6 +33,8 @@ src/
 ├── price.ts             # PriceClient — Pyth market data
 ├── surf.ts              # SurfClient — /v1/surf/* crypto data catalog
 ├── rpc.ts               # RpcClient — multi-chain JSON-RPC (Tatum, 40+ chains)
+├── solana-deps.ts       # Lazy loader for the optional Solana peer deps
+├── version.ts           # Single source of SDK_VERSION / USER_AGENT
 ├── wallet.ts            # EVM wallet management
 ├── solana-wallet.ts     # Solana wallet management
 ├── x402.ts              # x402 payment protocol

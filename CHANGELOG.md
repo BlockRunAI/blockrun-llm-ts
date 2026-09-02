@@ -2,6 +2,18 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **`eco` was routing every SIMPLE request to a model that no longer exists.** `nvidia/step-3.7-flash` was `ecoTiers.SIMPLE.primary` in the pinned engine, and NVIDIA published 410 Gone for it on 2026-08-30 along with three of the other four visible free models. Nothing looked broken because blockrun server-redirects retired free ids: calls kept returning answers, from a model the router had not named, while `result.model` reported an id absent from `/v1/models` and from the pricing page. Verified before the fix — `route('What is the capital of France?', { routingProfile: 'eco' })` returned `nvidia/step-3.7-flash`; after, `nvidia/nemotron-3.5-lightning`, with `nvidia/nemotron-3-nano-30b` as the free fallback rung.
+
+  The fix is upstream and was already reviewed there: `@blockrun/router-core` re-pinned `5d91187` -> `814fd3b`, which carries `5ee7c23` ("retarget the eco free rungs"). All 38 model ids the routing config names are now present in the live catalog, so the README's V3.5 guarantee — every primary and every fallback rung is a model listed on `/v1/models` — holds again; it did not while this repo sat on the older pin.
+
+- **`README.md` described the pinned engine as "Router v3.4"** in two places while `DEFAULT_ROUTING_CONFIG.version` reads `3.5`, and the routing-profile table still named `step-3.7-flash` as eco's SIMPLE primary.
+
+- **`CLAUDE.md`'s source tree omitted `version.ts` and `solana-deps.ts`.**
+
 ## [3.13.5] - 2026-09-02
 
 ### Security
