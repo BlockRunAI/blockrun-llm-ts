@@ -1,0 +1,74 @@
+name: Release drift
+
+# Catches the failure that let 3.13.3 sit unpublished for ten days: the tag was
+# pushed but no GitHub Release was cut, and publish.yml triggers on
+# `release: published`, not on a tag. Nothing was red — main, the changelog and
+# the tag all agreed on 3.13.3 while npm served 3.13.2, so every installed copy
+# was missing the Solana stale-blockhash fix and no signal said so.
+#
+# A push-triggered check cannot do this job: bumping VERSION and cutting the
+# Release are two steps, and between them a newer VERSION than npm is correct,
+# not broken. So this runs on a schedule and forgives a release still in flight
+# (GRACE_HOURS), which turns a silent ten-day gap into a next-day failure.
+
+on:
+  schedule:
+    # 08:00 UTC daily — a stalled release is found the following morning.
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GRACE_HOURS: 24
+
+jobs:
+  npm-has-main:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # git log over VERSION needs history, not a shallow checkout.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: VERSION on main must exist on npm
+        run: |
+          set -euo pipefail
+          declared="$(tr -d '[:space:]' < VERSION)"
+          name="$(node -p "require('./package.json').name")"
+          echo "main declares $name@$declared"
+
+          if npm view "$name@$declared" version >/dev/null 2>&1; then
+            echo "Published. Nothing to report."
+            exit 0
+          fi
+
+          # A bump that landed minutes ago is a release in progress, not a
+          # stalled one. Only complain once it has had a full day to finish.
+          bumped_at="$(git log -1 --format=%ct -- VERSION)"
+          age_hours=$(( ( $(date +%s) - bumped_at ) / 3600 ))
+          if [ "$age_hours" -lt "${GRACE_HOURS}" ]; then
+            echo "VERSION was bumped ${age_hours}h ago — inside the ${GRACE_HOURS}h release window, not flagging."
+            exit 0
+          fi
+
+          latest="$(npm view "$name" version 2>/dev/null || echo '<none>')"
+          {
+            echo ""
+            echo "$name@$declared is not on npm. It was declared ${age_hours}h ago"
+            echo "and npm still serves $latest, so whatever landed on main since is"
+            echo "not reaching anyone who installs this package."
+            echo ""
+            echo "publish.yml triggers on 'release: published'. A pushed tag alone"
+            echo "publishes nothing — check whether the GitHub Release for v$declared"
+            echo "was ever created, and whether its run succeeded:"
+            echo ""
+            echo "  gh release view v$declared"
+            echo "  gh run list --workflow=publish.yml --limit 5"
+          } >&2
+          exit 1
