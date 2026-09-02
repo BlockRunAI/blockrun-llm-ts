@@ -2,6 +2,26 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.13.4] - 2026-09-02
+
+### Fixed
+
+- **3.13.3 never reached npm, so this release is what actually ships the Solana stale-blockhash re-sign.** `v3.13.3` was tagged and pushed on 2026-08-26, but no GitHub Release was cut — and `publish.yml` triggers on `release: published`, not on a tag. npm therefore sat on 3.13.2 while `main`, the changelog and the tag all read 3.13.3, and every installed copy of the SDK still failed a funded Solana wallet with `Payment was rejected. Check your Solana USDC balance.` when a blockhash aged out mid-flight. See the 3.13.3 entry below for what that fix does; nothing about it changed here.
+
+- **`AGENTS.md` documented the wrong Solana environment variable.** It named `BLOCKRUN_SOLANA_KEY`, while `src/solana-wallet.ts` reads `SOLANA_WALLET_KEY` — so an agent following the file it was written for would set a variable nothing reads and get "private key required".
+
+### Changed
+
+- **The README's model catalog is regenerated from the live `GET /v1/models`.** It had drifted past staleness into being wrong: the free tier listed five models that no longer exist and none of the seven that do; the tier is no longer NVIDIA-only (`cohere/north-mini-code` and `poolside/laguna-xs-2.1` are free), so "pin an `nvidia/*` id for guaranteed $0" was bad advice, not just an old name. Prices were wrong on the models that survived (`deepseek/deepseek-v4-pro` $0.435 -> $1.32 in, `google/gemini-3.5-flash` $3.00 -> $9.00 out, `deepseek/deepseek-reasoner` $0.20 -> $0.14). `anthropic/claude-opus-5` and `claude-sonnet-5` were absent from the Anthropic table even though opus-5 is the baseline the savings claim is measured against, and the GPT-5.6, Qwen, Z.ai GLM, Tencent and Xiaomi families were missing outright, as were `seedream-5-pro`, `nano-banana-2`, `sora-2`, the Seedance 2.x SKUs and `seed-audio-1.0`.
+
+  Nothing failed while this rotted: the gateway redirects retired ids, so every example pinning `kimi-k2.5`, `grok-3-mini` or `claude-sonnet-4` kept returning 200 while naming a model no caller can select. The `br:` markers do not cover this — they sync counts and percentages, not the tables.
+
+- **The "E2E Verified Models" table is removed rather than refreshed.** It asserted a Feb 2026 end-to-end run over models that have since left the catalog, and no job kept it honest. `client.listModels()` answers the same question from the live catalog.
+
+- **Brand numbers re-synced to the published artifact**: 74 chat models (was 76), 98 visible (100), 259 router aliases (229), and the fallback counts moved with the Router Core V3.5 repin — 37 models with a fallback chain (48), 76 chain entries (89). `AGENTS.md`'s savings and free-model counts are now `br:` markers, so they stay current instead of rotting unnoticed.
+
+- **`scripts/sync-brand-numbers.mjs` re-vendored from `BlockRunAI/blockrun`** (#34). Markers inside fenced blocks can now opt in with `@live` and any that silently disagree with the artifact are reported; fence offsets are recomputed per marker (a badge expands 2 characters into ~150 and shifted every later fence test); an unterminated fence runs to EOF instead of un-fencing the tail; and the walk is filtered through `git ls-files`, which the header always claimed but never implemented.
+
 ## [3.13.3] - 2026-08-26
 
 ### Fixed
