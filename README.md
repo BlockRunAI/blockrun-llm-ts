@@ -41,7 +41,7 @@ console.log(r.response);         // the proof
 ## Why This SDK
 
 - 🧠 **Smart routing that pays for itself** — the bundled [Router Core V3](https://github.com/BlockRunAI/router-core) engine (shared with [ClawRouter](https://github.com/BlockRunAI/ClawRouter)) classifies every request locally in <1ms across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions and routes to the cheapest capable model. The main event.
-- 🆓 **<!-- br:models.free -->7<!-- /br:models.free --> genuinely free models** — NVIDIA-hosted, $0 in and out, incl. 1M-context DeepSeek V4 Flash and a multimodal Nemotron. No rate-limit gimmicks.
+- 🆓 **<!-- br:models.free -->7<!-- /br:models.free --> genuinely free models** — $0 in and out, incl. two 1M-context Nemotrons, a multimodal one, and free coding models from Cohere and Poolside. No rate-limit gimmicks.
 - 🔐 **No API keys** — your wallet signature is your authentication. No accounts, no dashboards, no key rotation.
 - 💸 **Pay per request in USDC** — x402 micropayments on Base or Solana. $5 covers thousands of requests; agents can pay their own way.
 - 🛡️ **Automatic failover** — transient errors (timeouts, 429, 5xx) walk the router's ranked fallback chain instead of failing your request.
@@ -115,7 +115,7 @@ package to install.
 
 ### Try It Free (No USDC Required)
 
-Want to kick the tires before funding a wallet? Route to BlockRun's free NVIDIA tier:
+Want to kick the tires before funding a wallet? Route to BlockRun's free tier:
 
 ```typescript
 import { LLMClient } from '@blockrun/llm';
@@ -123,33 +123,34 @@ import { LLMClient } from '@blockrun/llm';
 const client = new LLMClient();  // Wallet still required for signing, but $0 charged
 
 // Option 1: call a free model directly
-const reply = await client.chat('nvidia/step-3.7-flash', 'Explain x402 in 1 sentence');
+const reply = await client.chat('nvidia/nemotron-3.5-lightning', 'Explain x402 in 1 sentence');
 
-// Option 2: let the smart router pick — 'eco' ranks the free NVIDIA tier first
+// Option 2: let the smart router pick — 'eco' ranks the free tier first
 const result = await client.smartChat('What is 2+2?', { routingProfile: 'eco' });
-console.log(result.model);     // 'nvidia/step-3.7-flash' ($0 — verified live)
+console.log(result.model);     // a free-tier model — $0 in and out
 console.log(result.response);  // '4'
 console.log(result.routing.savings); // 1 (100%)
 ```
 
 There is no `free` routing profile in `smartChat()` — `routingProfile` accepts
 `'eco' | 'auto' | 'premium'`. (ClawRouter's `/model free` is a feature of its
-own proxy, not of this SDK's router options.) For guaranteed $0, pin a
-`nvidia/*` model; for smart-routed $0-first, use `eco`.
+own proxy, not of this SDK's router options.) For guaranteed $0, pin one of
+the free model ids below; for smart-routed $0-first, use `eco`.
 
-**Available free models** (input + output both $0, all NVIDIA-hosted, from the live `/v1/models` catalog, last refreshed 2026-08-12):
+**Available free models** — input and output both $0. The free tier is **no
+longer NVIDIA-only**, so pin these by full model id rather than by an
+`nvidia/*` prefix. Full contexts and notes in [Free Tier](#free-tier);
+`client.listModels()` returns the live catalog at runtime.
 
 | Model ID | Context | Best For |
 |----------|---------|----------|
-| `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Multimodal reasoning — text + images + video + audio (ChartQA 90.3, DocVQA 95.6) |
-| `nvidia/mistral-nemotron` | 131K | Mistral × NVIDIA instruction model — fast (~0.2s), strong instruction following |
-| `nvidia/step-3.7-flash` | 131K | StepFun Step 3.7 Flash — fast lightweight reasoning |
-| `nvidia/nemotron-nano-9b-v2` | 131K | Compact + fast (~0.7s), good for high-volume light tasks |
-| `nvidia/nemotron-nano-12b-v2-vl` | 131K | Vision-language — accepts images, compact + fast |
-| `nvidia/gpt-oss-120b` | 128K | OpenAI open-weight 120B. Hidden from `/v1/models` for privacy but direct calls still work |
-| `nvidia/gpt-oss-20b` | 128K | OpenAI open-weight 20B. Hidden from `/v1/models` but direct calls still work |
-
-> Privacy note: `nvidia/gpt-oss-120b` and `nvidia/gpt-oss-20b` are hidden from `/v1/models` because NVIDIA's free build.nvidia.com tier reserves the right to use prompts/outputs for service improvement. Direct calls by full model ID still work — opt in only when your data isn't sensitive.
+| `nvidia/nemotron-3.5-lightning` | 1M | Thinking-mode reasoning at 1M context |
+| `nvidia/nemotron-3-ultra-550b` | 1M | Largest free model — 550B |
+| `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Multimodal reasoning — text + images |
+| `nvidia/nemotron-3-nano-30b` | 128K | Compact + fast, good for high-volume light tasks |
+| `nvidia/llama-3.2-11b-vision` | 128K | Vision-language — accepts images |
+| `cohere/north-mini-code` | 256K | Compact coding model, sub-second responses |
+| `poolside/laguna-xs-2.1` | 128K | Coding model |
 
 ## Quick Start (Solana)
 
@@ -210,12 +211,12 @@ const client = new LLMClient();
 // Auto-routes to cheapest capable model
 const result = await client.smartChat('What is 2+2?');
 console.log(result.response);     // '4'
-console.log(result.model);        // 'moonshot/kimi-k2.5' (cheap, fast)
-console.log(`Saved ${(result.routing.savings * 100).toFixed(0)}%`); // 'Saved 88%'
+console.log(result.model);        // 'qwen/qwen3.7-flash' (cheap, fast)
+console.log(`Saved ${(result.routing.savings * 100).toFixed(0)}%`); // this request, vs the Opus 5 baseline
 
 // Complex reasoning task -> routes to reasoning model
 const complex = await client.smartChat('Prove the Riemann hypothesis step by step');
-console.log(complex.model);  // 'xai/grok-4-1-fast-reasoning'
+console.log(complex.model);  // 'xai/grok-4.3'
 
 // Inspect how the request was classified and ranked (Router v3.4 portfolio).
 console.log(complex.routing.method);     // 'portfolio'
@@ -238,10 +239,10 @@ step — see [How Payment Works](#phase-2--every-request-pays-itself-automatic-x
 
 ```typescript
 // Manually pass a fallback chain to chat() / chatCompletion()
-const reply = await client.chat('nvidia/step-3.7-flash', 'hello', {
-  fallbackModels: ['nvidia/mistral-nemotron', 'nvidia/gpt-oss-120b'],
+const reply = await client.chat('nvidia/nemotron-3.5-lightning', 'hello', {
+  fallbackModels: ['nvidia/nemotron-3-nano-30b', 'cohere/north-mini-code'],
 });
-// If step-3.7-flash times out, the SDK retries against the next model
+// If nemotron-3.5-lightning times out, the SDK retries against the next model
 // and logs each hop to stderr: "[@blockrun/llm] <from> -> <to> (...)".
 ```
 
@@ -249,11 +250,11 @@ const reply = await client.chat('nvidia/step-3.7-flash', 'hello', {
 
 | Profile | Strategy | Savings vs Opus 5 | Best For |
 |---------|----------|-------------------|----------|
-| `eco` | Cheapest capable model — ranks the <!-- br:models.free -->7<!-- /br:models.free -->-model free NVIDIA tier first | **<!-- br:savings.ecoVsBaselinePct -->98<!-- /br:savings.ecoVsBaselinePct -->%** | Cost-sensitive production, zero-cost testing |
+| `eco` | Cheapest capable model — ranks the <!-- br:models.free -->7<!-- /br:models.free -->-model free tier first | **<!-- br:savings.ecoVsBaselinePct -->98<!-- /br:savings.ecoVsBaselinePct -->%** | Cost-sensitive production, zero-cost testing |
 | `auto` | Best balance of cost/quality (default) | **<!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->%** | General use |
 | `premium` | Top-tier models (OpenAI, Anthropic) | 0% | Quality-critical tasks |
 
-For guaranteed $0, call a `nvidia/*` model directly with `chat()` — see
+For guaranteed $0, call a free model directly with `chat()` — see
 [Try It Free](#try-it-free-no-usdc-required). ClawRouter's `/model free`
 profile belongs to its own proxy; `smartChat()`'s options are the three above.
 
@@ -369,7 +370,7 @@ const response = await client.chat('openai/gpt-4o', 'gm Solana');
 console.log(response);
 
 // Live Search with Grok (Solana payment)
-const tweet = await client.chat('xai/grok-3-mini', 'What is trending on X?', { search: true });
+const tweet = await client.chat('xai/grok-4.5', 'What is trending on X?', { search: true });
 ```
 
 **Setup:**
@@ -397,7 +398,7 @@ You only do this when your balance runs low. Three ways to get USDC into your wa
 
 - **(b) Transfer existing USDC.** Send USDC you already hold to your wallet address (`client.getWalletAddress()`). On Base, send Base USDC; on Solana (`SolanaLLMClient`), send Solana SPL USDC.
 
-- **(c) Skip funding entirely.** Use the free NVIDIA models (e.g. `nvidia/step-3.7-flash`) — every call is **$0**, no balance required.
+- **(c) Skip funding entirely.** Use the free models (e.g. `nvidia/nemotron-3.5-lightning`) — every call is **$0**, no balance required.
 
 $5 of USDC covers thousands of paid requests. Check your balance any time:
 
@@ -416,7 +417,7 @@ You just call e.g. `client.chat(...)` — the payment is invisible:
 4. The request is retried automatically with the payment proof.
 5. The gateway settles on-chain and returns the AI response.
 
-One call, no separate pay step. Free NVIDIA models settle at **$0** (no payment signed).
+One call, no separate pay step. Free-tier models settle at **$0** (no payment signed).
 
 On **Solana**, step 3 pins the payment to a recent blockhash that is valid for
 roughly 60 seconds. If one expires between signing and verification,
@@ -474,7 +475,7 @@ const video = await br.poll('/v1/videos/generations', {
 
 // Streaming SSE — chat completions
 for await (const chunk of br.stream('/v1/chat/completions', {
-  model: 'anthropic/claude-sonnet-4-6',
+  model: 'anthropic/claude-sonnet-5',
   messages: [{ role: 'user', content: 'Hi' }],
   stream: true,
 })) {
@@ -495,157 +496,169 @@ shims over `BlockrunClient`) and removed in 3.0.
 
 ## Available Models
 
-### OpenAI GPT-5.5 Family
-Released 2026-04-23 — first fully retrained base since GPT-4.5. 1M context, 128K output, native agent + computer use.
+Prices below are the live gateway rates, regenerated from `GET /v1/models`
+(the same catalog `client.listModels()` returns). Chat models are billed per
+token; image, video, music and speech are billed per unit as noted in their
+own sections.
 
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `openai/gpt-5.5` | $5.00/M | $30.00/M |
+### OpenAI GPT-5.6 Family
 
-### OpenAI GPT-5.4 Family
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `openai/gpt-5.4` | $2.50/M | $15.00/M |
-| `openai/gpt-5.4-pro` | $30.00/M | $180.00/M |
-| `openai/gpt-5.4-nano` | $0.20/M | $1.25/M |
+Three tiers on one 1.05M-context base — Sol (deepest reasoning), Terra
+(balanced), Luna (cheap and fast). Each has a `-pro` sibling that thinks
+longer at the same token price.
 
-### OpenAI GPT-5 Family
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `openai/gpt-5.3` | $1.75/M | $14.00/M |
-| `openai/gpt-5.2` | $1.75/M | $14.00/M |
-| `openai/gpt-5-mini` | $0.25/M | $2.00/M |
-| `openai/gpt-5.2-pro` | $21.00/M | $168.00/M |
-| `openai/gpt-5.2-codex` | $1.75/M | $14.00/M |
+| Model | Input Price | Output Price | Context |
+|-------|-------------|--------------|---------|
+| `openai/gpt-5.6-sol` | $5.00/M | $30.00/M | 1.05M |
+| `openai/gpt-5.6-sol-pro` | $5.00/M | $30.00/M | 1.05M |
+| `openai/gpt-5.6-terra` | $2.00/M | $12.00/M | 1.05M |
+| `openai/gpt-5.6-terra-pro` | $2.00/M | $12.00/M | 1.05M |
+| `openai/gpt-5.6-luna` | $0.20/M | $1.20/M | 1.05M |
+| `openai/gpt-5.6-luna-pro` | $0.20/M | $1.20/M | 1.05M |
 
-### OpenAI GPT-4 Family
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `openai/gpt-4.1` | $2.00/M | $8.00/M |
-| `openai/gpt-4.1-mini` | $0.40/M | $1.60/M |
-| `openai/gpt-4.1-nano` | $0.10/M | $0.40/M |
-| `openai/gpt-4o` | $2.50/M | $10.00/M |
-| `openai/gpt-4o-mini` | $0.15/M | $0.60/M |
+### OpenAI GPT-5.5 / 5.4 / 5.2 Families
 
-### OpenAI O-Series (Reasoning)
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `openai/o1` | $15.00/M | $60.00/M |
-| `openai/o3` | $2.00/M | $8.00/M |
-| `openai/o3-mini` | $1.10/M | $4.40/M |
-| `openai/o4-mini` | $1.10/M | $4.40/M |
-
-### Anthropic Claude
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
-| `anthropic/claude-fable-5` | $10.00/M | $50.00/M | **1M** | Mythos-class flagship above Opus — always-on thinking, 128K output, fallback `claude-opus-4.8`. Alias: `claude-fable-5` |
-| `anthropic/claude-opus-4.8` | $5.00/M | $25.00/M | **1M** | Flagship — agentic coding + adaptive thinking, 128K output |
-| `anthropic/claude-opus-4.7` | $5.00/M | $25.00/M | **1M** | Agentic coding + adaptive thinking, 128K output |
-| `anthropic/claude-opus-4.6` | $5.00/M | $25.00/M | 200K | Hidden but still callable — kept as in-family hot-swap fallback |
-| `anthropic/claude-opus-4.5` | $5.00/M | $25.00/M | 200K | |
-| `anthropic/claude-opus-4` | $15.00/M | $75.00/M | 200K | |
-| `anthropic/claude-sonnet-4.6` | $3.00/M | $15.00/M | 200K | Best for reasoning/instructions |
-| `anthropic/claude-sonnet-4` | $3.00/M | $15.00/M | 200K | |
-| `anthropic/claude-haiku-4.5` | $1.00/M | $5.00/M | 200K | |
+| `openai/gpt-5.5` | $5.00/M | $30.00/M | 1.05M |  |
+| `openai/gpt-5.5-pro` | $30.00/M | $180.00/M | 1.05M |  |
+| `openai/chat-latest` | $5.00/M | $30.00/M | 128K | ChatGPT Instant — the model behind chatgpt.com |
+| `openai/gpt-5.4` | $2.50/M | $15.00/M | 1.05M |  |
+| `openai/gpt-5.4-pro` | $30.00/M | $180.00/M | 1.05M |  |
+| `openai/gpt-5.4-mini` | $0.75/M | $4.50/M | 400K |  |
+| `openai/gpt-5.4-nano` | $0.20/M | $1.25/M | 1.05M |  |
+| `openai/gpt-5.2` | $1.75/M | $14.00/M | 400K |  |
+| `openai/gpt-5.2-pro` | $21.00/M | $168.00/M | 400K |  |
+| `openai/gpt-5.3-codex` | $1.75/M | $14.00/M | 400K | Coding/agentic SKU |
+| `openai/gpt-5-mini` | $0.25/M | $2.00/M | 200K |  |
+
+### OpenAI GPT-4 Family
+
+| Model | Input Price | Output Price | Context |
+|-------|-------------|--------------|---------|
+| `openai/gpt-4.1` | $2.00/M | $8.00/M | 128K |
+| `openai/gpt-4.1-mini` | $0.40/M | $1.60/M | 128K |
+| `openai/gpt-4.1-nano` | $0.10/M | $0.40/M | 128K |
+| `openai/gpt-4o` | $2.50/M | $10.00/M | 128K |
+| `openai/gpt-4o-mini` | $0.15/M | $0.60/M | 128K |
+
+### OpenAI O-Series (Reasoning)
+
+| Model | Input Price | Output Price | Context |
+|-------|-------------|--------------|---------|
+| `openai/o1` | $15.00/M | $60.00/M | 200K |
+| `openai/o3` | $2.00/M | $8.00/M | 200K |
+| `openai/o3-mini` | $1.10/M | $4.40/M | 128K |
+| `openai/o4-mini` | $1.10/M | $4.40/M | 128K |
+
+### Anthropic Claude
+
+| Model | Input Price | Output Price | Context | Notes |
+|-------|-------------|--------------|---------|-------|
+| `anthropic/claude-fable-5` | $10.00/M | $50.00/M | 1M | Mythos-class flagship above Opus — always-on thinking, 128K output |
+| `anthropic/claude-opus-5` | $5.00/M | $25.00/M | 1M | Flagship — the baseline the routing savings claim is measured against |
+| `anthropic/claude-opus-4.8` | $5.00/M | $25.00/M | 1M | Agentic coding + adaptive thinking, 128K output |
+| `anthropic/claude-opus-4.7` | $5.00/M | $25.00/M | 1M |  |
+| `anthropic/claude-opus-4.5` | $5.00/M | $25.00/M | 200K |  |
+| `anthropic/claude-sonnet-5` | $3.00/M | $15.00/M | 1M | Best cost/quality balance for long-context agent turns |
+| `anthropic/claude-sonnet-4.6` | $3.00/M | $15.00/M | 1M |  |
+| `anthropic/claude-sonnet-4.5` | $3.00/M | $15.00/M | 200K |  |
+| `anthropic/claude-haiku-4.5` | $1.00/M | $5.00/M | 200K |  |
 
 ### Google Gemini
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `google/gemini-3.1-pro` | $2.00/M | $12.00/M |
-| `google/gemini-3.5-flash` | $0.50/M | $3.00/M |
-| `google/gemini-3.1-flash-lite` | $0.25/M | $1.50/M |
-| `google/gemini-3-flash-preview` | $0.50/M | $3.00/M |
-| `google/gemini-2.5-pro` | $1.25/M | $10.00/M |
-| `google/gemini-2.5-flash` | $0.30/M | $2.50/M |
-| `google/gemini-2.5-flash-lite` | $0.10/M | $0.40/M |
+
+| Model | Input Price | Output Price | Context |
+|-------|-------------|--------------|---------|
+| `google/gemini-3.1-pro` | $2.00/M | $12.00/M | 1M |
+| `google/gemini-3.6-flash` | $1.50/M | $7.50/M | 1M |
+| `google/gemini-3.5-flash` | $1.50/M | $9.00/M | 1M |
+| `google/gemini-3-flash-preview` | $0.50/M | $3.00/M | 1M |
+| `google/gemini-3.5-flash-lite` | $0.30/M | $2.50/M | 1M |
+| `google/gemini-3.1-flash-lite` | $0.25/M | $1.50/M | 1M |
+| `google/gemini-2.5-pro` | $1.25/M | $10.00/M | 1M |
+| `google/gemini-2.5-flash` | $0.30/M | $2.50/M | 1M |
+| `google/gemini-2.5-flash-lite` | $0.10/M | $0.40/M | 1M |
 
 ### DeepSeek
 
-V4 family launched 2026-04-24. DeepSeek upstream now serves the legacy
-`deepseek-chat` / `deepseek-reasoner` aliases as V4 Flash non-thinking /
-thinking modes. V4 Pro is the new flagship paid SKU — 1.6T MoE / 49B active,
-1M context, MMLU-Pro 87.5, GPQA 90.1, SWE-bench 80.6, LiveCodeBench 93.5.
+DeepSeek upstream serves the legacy `deepseek-chat` / `deepseek-reasoner`
+aliases as V4 Flash non-thinking / thinking modes. V4 Pro is the flagship
+paid SKU; the vision SKU is an experimental preview.
 
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
-| `deepseek/deepseek-v4-pro` | $0.435/M | $0.87/M | 1M | V4 flagship — strongest open-weight reasoner. The 75% launch promo became the permanent list price after 2026-05-31 |
-| `deepseek/deepseek-chat` | $0.14/M | $0.28/M | 1M | V4 Flash non-thinking (paid endpoint with 5MB request bodies) |
-| `deepseek/deepseek-reasoner` | $0.20/M | $0.40/M | 1M | V4 Flash thinking (same upstream as `deepseek-chat`, thinking enabled by default) |
+| `deepseek/deepseek-v4-pro` | $1.32/M | $3.96/M | 1M | V4 flagship — strongest open-weight reasoner |
+| `deepseek/deepseek-v4-flash-vision-exp` | $0.44/M | $1.32/M | 1M | Experimental vision preview |
+| `deepseek/deepseek-chat` | $0.14/M | $0.28/M | 1M | V4 Flash non-thinking |
+| `deepseek/deepseek-reasoner` | $0.14/M | $0.28/M | 1M | V4 Flash thinking (same upstream, thinking on by default) |
 
 ### xAI Grok
 
-Grok 4.3 and Grok Build are resold through BlockRun's OpenRouter credit pool
-(same pattern as `deepseek/deepseek-v4-pro` and `minimax/minimax-m3`). The
-older Grok chat SKUs (grok-3/3-mini, grok-4-fast / 4-1-fast families,
-grok-code-fast-1, grok-4-0709, grok-2-vision) are now **hidden from
-`/v1/models`** — direct calls by full ID still work, but SmartChat won't
-auto-pick them.
+The older Grok chat SKUs (grok-3/3-mini, the grok-4 fast families,
+grok-code-fast-1, grok-2-vision) have left the catalog. Retired ids stay
+callable — the gateway redirects them to a healthy model — but SmartChat
+only ranks what `/v1/models` lists.
 
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
-| `xai/grok-4.3` | $1.50/M | $4.00/M | 1M | Reasoning model, vision-capable, tuned for agentic workflows |
-| `xai/grok-build-0.1` | $1.50/M | $3.00/M | 256K | Fast agentic coding model — interactive software-engineering workflows |
+| `xai/grok-4.5` | $2.50/M | $9.00/M | 500K | Flagship — reasoning + vision, native Live Search (`search: true`) |
+| `xai/grok-4.3` | $1.50/M | $4.00/M | 1M | Reasoning + vision, tuned for agentic workflows |
+| `xai/grok-build-0.1` | $1.50/M | $3.00/M | 256K | Fast agentic coding model |
 
-### Moonshot Kimi
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `moonshot/kimi-k2.6` | $0.95/M | $4.00/M |
-| `moonshot/kimi-k2.5` | $0.60/M | $3.00/M |
+### Moonshot, MiniMax, Z.ai, Qwen
 
-### MiniMax
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `minimax/minimax-m3` | $0.30/M | $1.20/M |
-| `minimax/minimax-m2.7` | $0.30/M | $1.20/M |
+| Model | Input Price | Output Price | Context | Notes |
+|-------|-------------|--------------|---------|-------|
+| `moonshot/kimi-k3` | $3.00/M | $15.00/M | 1M | Replaces the retired `kimi-k2.5` / `k2.6` SKUs |
+| `minimax/minimax-m3` | $0.30/M | $1.20/M | 1M |  |
+| `minimax/minimax-m2.7` | $0.30/M | $1.20/M | 200K |  |
+| `zai/glm-5.3` | $1.40/M | $4.40/M | 1M |  |
+| `zai/glm-5.3-flash` | $0.15/M | $0.50/M | 1M | Cheapest vision-capable paid SKU |
+| `zai/glm-5.2` | $1.40/M | $4.40/M | 1M |  |
+| `zai/glm-5.1` | $1.40/M | $4.40/M | 200K |  |
+| `zai/glm-5` | $1.00/M | $3.20/M | 200K |  |
+| `zai/glm-5-turbo` | $1.20/M | $4.00/M | 200K |  |
+| `qwen/qwen3.7-max` | $1.475/M | $4.425/M | 1M |  |
+| `qwen/qwen3.7-plus` | $0.32/M | $1.28/M | 1M |  |
+| `qwen/qwen3.8-flash` | $0.15/M | $0.47/M | 1M |  |
+| `qwen/qwen3.7-flash` | $0.03/M | $0.13/M | 1M | Cheapest paid chat model in the catalog |
 
-### NVIDIA (Free) + Moonshot
+### Tencent, Xiaomi
 
-Free tier refreshed 2026-08-12. NVIDIA has retired (HTTP 410 end-of-life)
-the entire free DeepSeek family — `nvidia/deepseek-v4-flash` was the last
-to go — along with `llama-4-maverick`, the qwen3 SKUs, and the free
-Mistral small/large SKUs. Retired IDs stay callable: the gateway
-auto-redirects them to a healthy free model, so pinned callers still get
-a 200. `nvidia/gpt-oss-120b` and `nvidia/gpt-oss-20b` remain callable by
-direct ID but are hidden from `/v1/models` over the NVIDIA free tier's
-prompt-retention terms (so SmartChat won't auto-pick them).
+| Model | Input Price | Output Price | Context |
+|-------|-------------|--------------|---------|
+| `tencent/hy3` | $0.132/M | $0.528/M | 256K |
+| `xiaomi/mimo-v2.5` | $0.14/M | $0.28/M | 1M |
+| `xiaomi/mimo-v2.5-pro` | $0.435/M | $0.87/M | 1M |
 
-| Model | Input Price | Output Price | Notes |
-|-------|-------------|--------------|-------|
-| `nvidia/step-3.7-flash` | **FREE** | **FREE** | Fast general-purpose chat + reasoning, 131K |
-| `nvidia/mistral-nemotron` | **FREE** | **FREE** | Fast free Mistral, 131K |
-| `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | **FREE** | **FREE** | 31B / 3.2B active MoE, 256K — only vision-capable free model |
-| `nvidia/nemotron-nano-9b-v2` | **FREE** | **FREE** | Compact fast chat, 131K |
-| `nvidia/nemotron-nano-12b-v2-vl` | **FREE** | **FREE** | Compact vision, 131K |
-| `nvidia/gpt-oss-120b` | **FREE** | **FREE** | Hidden from `/v1/models` for privacy but direct calls still work — 123 tok/s |
-| `nvidia/gpt-oss-20b` | **FREE** | **FREE** | Hidden from `/v1/models` but direct calls still work — 155 tok/s |
-| `moonshot/kimi-k2.5` | $0.60/M | $3.00/M | Direct from Moonshot — replaces `nvidia/kimi-k2.5` |
+### Free Tier
 
-### E2E Verified Models
+Input and output both $0 — no promo, no rate-limit gimmick. The free tier is
+**no longer NVIDIA-only**, so pin these by full model id rather than by an
+`nvidia/*` prefix, or let `routingProfile: 'eco'` rank them first.
 
-All models below have been tested end-to-end via the TypeScript SDK (Feb 2026):
-
-| Provider | Model | Status |
-|----------|-------|--------|
-| OpenAI | `openai/gpt-4o-mini` | Passed |
-| OpenAI | `openai/gpt-5.2-codex` | Passed |
-| Anthropic | `anthropic/claude-opus-4.6` | Passed |
-| Anthropic | `anthropic/claude-sonnet-4` | Passed |
-| Google | `google/gemini-2.5-flash` | Passed |
-| DeepSeek | `deepseek/deepseek-chat` | Passed |
-| xAI | `xai/grok-3` | Passed |
-| Moonshot | `moonshot/kimi-k2.6` | Passed |
+| Model | Input Price | Output Price | Context | Notes |
+|-------|-------------|--------------|---------|-------|
+| `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | **FREE** | **FREE** | 256K | Multimodal reasoning — text + images |
+| `nvidia/nemotron-3.5-lightning` | **FREE** | **FREE** | 1M | Thinking-mode reasoning at 1M context |
+| `nvidia/nemotron-3-nano-30b` | **FREE** | **FREE** | 128K | Compact and fast, good for high-volume light tasks |
+| `nvidia/llama-3.2-11b-vision` | **FREE** | **FREE** | 128K | Vision-language — accepts images |
+| `nvidia/nemotron-3-ultra-550b` | **FREE** | **FREE** | 1M | Largest free model — 550B, 1M context |
+| `cohere/north-mini-code` | **FREE** | **FREE** | 256K | Compact coding model, sub-second responses |
+| `poolside/laguna-xs-2.1` | **FREE** | **FREE** | 128K | Coding model |
 
 ### Image Generation
-| Model | Price |
-|-------|-------|
-| `openai/dall-e-3` | $0.04-0.08/image |
-| `openai/gpt-image-1` | $0.02-0.04/image |
-| `openai/gpt-image-2` | $0.06-0.12/image (reasoning-driven, multilingual text rendering, character consistency) |
-| `google/nano-banana` | $0.05/image |
-| `google/nano-banana-pro` | $0.10-0.15/image |
-| `xai/grok-imagine-image` | $0.02/image |
-| `xai/grok-imagine-image-pro` | $0.07/image |
-| `zai/cogview-4` | $0.015/image |
+| Model | Price | Notes |
+|-------|-------|-------|
+| `openai/gpt-image-1` | $0.02/image | Native GPT-4o image generation |
+| `openai/gpt-image-2` | $0.06/image | Reasoning-driven — multilingual text rendering, character consistency |
+| `google/nano-banana` | $0.05/image | Gemini 2.5 Flash image generation — fast and efficient |
+| `google/nano-banana-2` | $0.09/image | Gemini 3.1 Flash — pro-level quality at Flash speed |
+| `google/nano-banana-pro` | $0.10/image | Gemini 3 Pro — highest quality, up to 4K |
+| `xai/grok-imagine-image` | $0.02/image | Fast, 300 RPM |
+| `xai/grok-imagine-image-pro` | $0.07/image | Quality tier, 30 RPM |
+| `bytedance/seedream-5-pro` | $0.045/image | Flagship generation + editing, up to 4K-class, reference images |
+| `zai/cogview-4` | $0.015/image | Up to 1440x1440 |
 
 Image editing (`client.edit`) via `/v1/images/image2image`: `openai/gpt-image-1`, `openai/gpt-image-2`, `google/nano-banana`, and `google/nano-banana-pro`. Pass a single base64 `data:image/...` URI to edit one image, or an array of 2–4 URIs to **fuse** them (e.g. a subject + a brand logo). Fusion caps: `openai/*` up to 4 source images, `google/*` up to 3. A `mask` cannot be combined with multiple source images.
 
@@ -660,12 +673,16 @@ console.log(fused.data[0].url);
 ```
 
 ### Video Generation
-| Model | Price |
-|-------|-------|
-| `xai/grok-imagine-video` | $0.05/sec (8s default → $0.42/clip) |
-| `bytedance/seedance-1.5-pro` | $0.03/sec (5s default, up to 10s, 720p) |
-| `bytedance/seedance-2.0-fast` | $0.15/sec (~60-80s gen, sweet-spot price/quality) |
-| `bytedance/seedance-2.0` | $0.30/sec (720p Pro) |
+| Model | Price | Default | Max | Notes |
+|-------|-------|---------|-----|-------|
+| `xai/grok-imagine-video` | $0.05/sec | 8s | 15s | 480p default, 720p at $0.07/sec; text or image to video |
+| `xai/grok-imagine-video-1.5` | $0.08/sec | 8s | 15s | Flagship — native synced audio; 480p default, 720p at $0.11/sec |
+| `bytedance/seedance-1.5-pro` | $0.07/sec | 5s | 12s | Budget 720p with synced audio. No RealFace assets |
+| `bytedance/seedance-2.0-fast` | $0.165/sec | 5s | 15s | 720p, ~60-80s to generate. RealFace assets supported |
+| `bytedance/seedance-2.0-mini` | $0.0797/sec | 5s | 15s | 480p/720p at half the flagship rate. RealFace supported |
+| `bytedance/seedance-2.0` | $0.227/sec | 5s | 15s | Premium 720p with synced audio. RealFace supported |
+| `bytedance/seedance-2.5` | $0.315/sec | 5s | 30s | Long-form — up to 30s, multilingual, multi-asset |
+| `azure/sora-2` | $0.10/sec | 4s | 12s | Sora 2 via Azure AI Foundry — 720p with synced audio; 4, 8 or 12s |
 
 ```ts
 import { VideoClient } from '@blockrun/llm';
@@ -728,8 +745,9 @@ synchronous (<1s for Flash).
 |-------|-------|-----------|-------|
 | `elevenlabs/flash-v2.5` | $0.05/1k chars | 40k chars | ~75ms latency, 32 languages (default) |
 | `elevenlabs/turbo-v2.5` | $0.05/1k chars | 40k chars | ~250ms latency, balanced quality |
-| `elevenlabs/multilingual-v2` | $0.10/1k chars | 10k chars | Long-form narration, audiobooks |
+| `elevenlabs/multilingual-v2` | $0.10/1k chars | 10k chars | Long-form narration, audiobooks — 29 languages |
 | `elevenlabs/v3` | $0.10/1k chars | 5k chars | Max expressiveness, 70+ languages |
+| `bytedance/seed-audio-1.0` | $0.30/1k chars | 3k chars | Prompt-directed — describe voice, emotion and staging in words |
 | `elevenlabs/sound-effects` | $0.05/generation | 1k chars | Sound effects up to 22s |
 
 ```ts
@@ -1044,7 +1062,7 @@ const response = await client.chat('openai/gpt-4o', 'Explain quantum computing')
 console.log(response);
 
 // With system prompt
-const response2 = await client.chat('anthropic/claude-sonnet-4', 'Write a haiku', {
+const response2 = await client.chat('anthropic/claude-sonnet-5', 'Write a haiku', {
   system: 'You are a creative poet.',
 });
 ```
@@ -1070,15 +1088,15 @@ const eco = await client.smartChat('Explain AI', { routingProfile: 'eco' });   /
 const auto = await client.smartChat('Code review', { routingProfile: 'auto' }); // Balanced (default)
 const premium = await client.smartChat('Write a legal brief', { routingProfile: 'premium' }); // Best quality
 
-// Guaranteed $0: call a free NVIDIA model directly
-const free = await client.chat('nvidia/step-3.7-flash', 'Hello!');
+// Guaranteed $0: call a free model directly
+const free = await client.chat('nvidia/nemotron-3.5-lightning', 'Hello!');
 ```
 
 **Routing Profiles:**
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `eco` | Budget-optimized — ranks the <!-- br:models.free -->7<!-- /br:models.free -->-model free NVIDIA tier first | Cost-sensitive workloads, zero-cost testing |
+| `eco` | Budget-optimized — ranks the <!-- br:models.free -->7<!-- /br:models.free -->-model free tier first | Cost-sensitive workloads, zero-cost testing |
 | `auto` | Intelligent routing (default) | General use |
 | `premium` | Best quality models | Critical tasks |
 
@@ -1197,7 +1215,7 @@ const client = new LLMClient();  // Uses BASE_CHAIN_WALLET_KEY (never sent to se
 
 const [gpt, claude, gemini] = await Promise.all([
   client.chat('openai/gpt-4o', 'What is 2+2?'),
-  client.chat('anthropic/claude-sonnet-4', 'What is 3+3?'),
+  client.chat('anthropic/claude-sonnet-5', 'What is 3+3?'),
   client.chat('google/gemini-2.5-flash', 'What is 4+4?'),
 ]);
 ```

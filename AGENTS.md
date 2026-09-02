@@ -4,12 +4,12 @@ Guidance for AI coding agents working with the BlockRun TypeScript SDK.
 
 ## Project Overview
 
-**@blockrun/llm** is a TypeScript SDK that **cuts LLM costs by up to 88%**: its bundled smart router (Router Core V3) picks the cheapest capable model for every request — locally, in <1ms — and pays per-request in USDC via x402 on Base or Solana. No API keys, no subscriptions. Use `smartChat()` for routed (cheapest) calls; `chat()` to pin a model. **Includes 6 fully-free NVIDIA-hosted models** — DeepSeek V4 Flash (1M ctx), Nemotron Nano Omni (multimodal), Mistral Nemotron, Step 3.7 Flash, and the Nemotron Nano pair — plus the hidden gpt-oss pair, directly callable. Access them by calling any `nvidia/*` model id directly, or via `routingProfile: 'eco'`, which ranks the free tier first. (There is no `'free'` routing profile — `routingProfile` accepts `'eco' | 'auto' | 'premium'`.)
+**@blockrun/llm** is a TypeScript SDK that **cuts LLM costs by up to <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->%**: its bundled smart router (Router Core V3) picks the cheapest capable model for every request — locally, in <1ms — and pays per-request in USDC via x402 on Base or Solana. No API keys, no subscriptions. Use `smartChat()` for routed (cheapest) calls; `chat()` to pin a model. **Includes <!-- br:models.free -->7<!-- /br:models.free --> fully-free models** — Nemotron 3.5 Lightning and Nemotron 3 Ultra 550B (1M ctx), Nemotron 3 Nano Omni (multimodal, 256K), Nemotron 3 Nano 30B, Llama 3.2 11B Vision, Cohere North Mini Code (256K coding) and Poolside Laguna XS 2.1. The free tier is no longer NVIDIA-only, so pin them by full model id rather than by an `nvidia/*` prefix, or use `routingProfile: 'eco'`, which ranks the free tier first. (There is no `'free'` routing profile — `routingProfile` accepts `'eco' | 'auto' | 'premium'`.)
 
 **Package:** `@blockrun/llm` (npm)
 **Node:** >=20
 **Networks:** Base (EVM) and Solana
-**Payment:** USDC via x402 v2 (or $0 for `nvidia/*` free tier)
+**Payment:** USDC via x402 v2 (or $0 on the free tier)
 
 ## Repository Structure
 
@@ -119,7 +119,7 @@ pnpm typecheck          # TypeScript check
 
 ### Solana
 - Uses `@solana/web3.js` (optional dependency)
-- Environment: `BLOCKRUN_SOLANA_KEY` (base58)
+- Environment: `SOLANA_WALLET_KEY` (base58-encoded secret key)
 - Gasless transactions (facilitator pays fees)
 
 ## Testing
