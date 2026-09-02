@@ -506,10 +506,14 @@ export function parsePaymentRequired(headerValue: string): PaymentRequired {
       if (error.message.includes("Invalid payment required structure")) {
         throw error;
       }
-      // Sanitize parsing errors
-      throw new Error("Failed to parse payment required header: invalid format");
+      // Sanitize parsing errors. The message stays deliberately vague — the
+      // header is attacker-reachable — but the original is kept as `cause` so
+      // a developer debugging a real gateway response can still see it.
+      throw new Error("Failed to parse payment required header: invalid format", {
+        cause: error,
+      });
     }
-    throw new Error("Failed to parse payment required header");
+    throw new Error("Failed to parse payment required header", { cause: error });
   }
 }
 

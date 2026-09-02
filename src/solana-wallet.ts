@@ -100,7 +100,8 @@ export async function solanaKeyToBytes(privateKey: string): Promise<Uint8Array> 
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
       `Invalid Solana private key: ${msg}. Expected a base58-encoded 64-byte key ` +
-        "(standard Solana format), a 64-byte hex string, or a Solana CLI JSON byte array."
+        "(standard Solana format), a 64-byte hex string, or a Solana CLI JSON byte array.",
+      { cause: err }
     );
   }
 }
@@ -316,7 +317,7 @@ async function solanaPublicKeyFrom(privateKey: string, source: string): Promise<
     return await solanaPublicKey(privateKey);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`${msg} (key loaded from ${source})`);
+    throw new Error(`${msg} (key loaded from ${source})`, { cause: err });
   }
 }
 
