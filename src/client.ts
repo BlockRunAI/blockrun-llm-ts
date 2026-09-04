@@ -203,10 +203,9 @@ export class LLMClient {
 
       // Initialize wallet account (key stays local, never transmitted)
       this._account = privateKeyToAccount(privateKey as `0x${string}`);
-
-      // Validate and set API URL
     }
 
+    // Validate and set API URL
     const apiUrl = this.apiAuth?.apiUrl || options.apiUrl || DEFAULT_API_URL;
     validateApiUrl(apiUrl);
     this.apiUrl = apiUrl.replace(/\/$/, "");

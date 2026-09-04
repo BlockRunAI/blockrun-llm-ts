@@ -141,6 +141,46 @@ describe('account asynchronous jobs', () => {
     fetchMock.mockResolvedValueOnce(json({ id: 'job-1', status: 'queued' }, 202));
     await expect(new VideoClient().generate('cat')).rejects.toThrow('missing poll_url');
   });
+  it('keeps polling a billed job through a transient gateway error', async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValueOnce(json({ id: 'job-1', status: 'queued', poll_url: '/api/v1/videos/generations/job-1' }, 202))
+      .mockResolvedValueOnce(json({ error: { message: 'bad gateway' } }, 502))
+      .mockResolvedValueOnce(json({ id: 'job-1', status: 'completed', data: [{ url: 'https://cdn.example/result' }] }));
+    const promise = new VideoClient().generate('cat');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await promise).toMatchObject({ status: 'completed' });
+  });
+});
+
+describe('account transient retries', () => {
+  it('retries an idempotent GET but never replays a billed POST', async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValueOnce(json({ error: { message: 'bad gateway' } }, 502)).mockResolvedValueOnce(json({ data: [] }));
+    const models = new LLMClient().listModels();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await models;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValue(json({ error: { message: 'bad gateway' } }, 503));
+    const chatCall = new LLMClient().chat('openai/gpt-5.2', 'hi').catch(e => e);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect((await chatCall).statusCode).toBe(503);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it('gives up on a GET after the retry budget and preserves the status', async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValue(json({ error: { message: 'gateway timeout' } }, 504));
+    const failing = new LLMClient().listModels().catch(e => e);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect((await failing).statusCode).toBe(504);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+  it('does not retry an auth or quota failure', async () => {
+    fetchMock.mockResolvedValue(json({ error: { code: 'insufficient_credits' } }, 402));
+    await expect(new LLMClient().listModels()).rejects.toMatchObject({ statusCode: 402 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 

@@ -2,6 +2,30 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.14.0] - 2026-09-04
+
+### Added
+
+- **Account API keys — you can now use the SDK without a wallet.** Set `apiKey` (or `BLOCKRUN_API_KEY`) on any client and requests bill a BlockRun account at `https://api.blockrun.ai` instead of settling USDC on-chain. Register, mint a key and top up credits at https://user.blockrun.ai — [sign in](https://user.blockrun.ai), [API Keys](https://user.blockrun.ai/dashboard/keys), [Credits](https://user.blockrun.ai/dashboard/credits). Covers every client: `LLMClient`, `SolanaLLMClient`, `ImageClient`, `VideoClient`, `MusicClient`, `SpeechClient`, `VoiceClient`, `PhoneClient`, `PortraitClient`, `PriceClient`, `SearchClient`, `SurfClient`, `RpcClient`, `BlockrunClient`, plus the OpenAI and Anthropic compatibility wrappers. Wallet mode is unchanged.
+
+- **`setupAgentClient()`** — one entry point that picks account billing when a key is configured, otherwise honours a saved `~/.blockrun/payment-chain` preference, keeps Base-only installs on Base, and puts new wallets on Solana. `setupAgentWallet()` / `setupAgentSolanaWallet()` keep their existing chain-specific behaviour.
+
+- **`client.authMode`** reports `'api-key'` or `'wallet'`, and `APIError.retryAfter` carries the account gateway's `Retry-After`.
+
+### Security
+
+- Account credentials are pinned to the configured origin. `ApiKeyAuth.resolveUrl()` refuses a cross-origin, off-port, or credentialed URL — including a `poll_url` handed back by the gateway — so a redirected or attacker-influenced job URL can never receive the key. Requests are sent with `redirect: "error"`, caller-supplied `*payment*` and `x-api-key` headers are stripped, and the key is redacted out of error bodies.
+
+- **An account error never falls back to spending from a wallet.** In account mode any non-2xx raises before the x402 signing path is reachable, so an invalid or exhausted key fails loudly instead of quietly draining a funded wallet. 401 and 402 responses carry a link to the key and credit pages.
+
+### Changed
+
+- Transient gateway failures (502/503/504/522/524) are retried twice on idempotent `GET`/`HEAD` requests only. A billed `POST` is never replayed — in account mode the first POST is the charged one, unlike the wallet path where it is the unpaid 402 challenge. `ApiKeyAuth.poll()` rides out a transient error and keeps polling to the deadline rather than abandoning a job the account has already paid for; 401/402/404 still fail immediately.
+- Async image / video / music jobs and `BlockrunClient.poll()` follow `poll_url` from the first authenticated response in account mode — no 402 challenge and no second POST, so a job is never submitted twice.
+- Wallet-only surfaces throw a clear error in account mode rather than inventing a wallet identity: `getWalletAddress()`, `getBalance()`, and `getSpending()` (account usage lives in the dashboard; `getSpending()` only ever tracked x402 settlements).
+- `README.md`, `AGENTS.md`, `CLAUDE.md`, and the package description document both authentication modes and lead with the registration link. Solana is now listed ahead of Base as the recommended wallet chain.
+- `cache` and `cost-log` tests run against a temporary `homedir()` instead of the developer's real `~/.blockrun` files.
+
 ## [3.13.6] - 2026-09-02
 
 ### Fixed

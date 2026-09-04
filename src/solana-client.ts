@@ -903,7 +903,7 @@ export class SolanaLLMClient {
       }
 
       if (this.apiAuth && endpoint.startsWith("/v1/images/")) return this.apiAuth.poll<Record<string, unknown>>(response, this.timeout, 2_000);
-    return response.json() as Promise<Record<string, unknown>>;
+      return response.json() as Promise<Record<string, unknown>>;
     }
   }
 

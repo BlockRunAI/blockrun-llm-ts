@@ -7,6 +7,13 @@ export interface ApiKeyOptions {
   apiKey?: string;
 }
 
+/** Gateway hiccups the account API can recover from. Mirrors the 5xx half of
+ *  router-adapter's isTransientError. 429 is excluded on purpose: it carries a
+ *  Retry-After the caller must honour, not something to paper over here. */
+const TRANSIENT_STATUS = new Set([502, 503, 504, 522, 524]);
+const TRANSIENT_RETRIES = 2;
+const TRANSIENT_BACKOFF_MS = 1_000;
+
 export const API_KEY_URL = "https://api.blockrun.ai";
 export const PORTAL_URL = "https://user.blockrun.ai";
 
@@ -68,10 +75,20 @@ export class ApiKeyAuth {
       if (name.toLowerCase().includes("payment") || name.toLowerCase() === "x-api-key") headers.delete(name);
     }
     headers.set("authorization", `Bearer ${this.#key}`);
-    // Never follow redirects with an account credential or replay a paid POST.
-    const response = await globalThis.fetch(request ? new Request(url, request) : url, {
-      ...init, headers, redirect: "error",
-    });
+    // Only GET/HEAD may be re-sent. In account mode the first POST is the billed
+    // one, so replaying it after a 502 risks a second job and a second charge —
+    // the wallet path can retry freely because its first POST is the unpaid 402.
+    const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
+    const retries = method === "GET" || method === "HEAD" ? TRANSIENT_RETRIES : 0;
+    let response: Response;
+    for (let attempt = 0; ; attempt++) {
+      // Never follow redirects with an account credential.
+      response = await globalThis.fetch(request ? new Request(url, request) : url, {
+        ...init, headers, redirect: "error",
+      });
+      if (attempt >= retries || !TRANSIENT_STATUS.has(response.status)) break;
+      await new Promise(resolve => setTimeout(resolve, TRANSIENT_BACKOFF_MS * (attempt + 1)));
+    }
     if (raiseErrors && !response.ok) {
       let body: unknown;
       try { body = await response.json(); } catch { body = undefined; }
@@ -112,8 +129,15 @@ export class ApiKeyAuth {
       await new Promise(resolve => setTimeout(resolve, Math.min(interval, Math.max(0, deadline - Date.now()))));
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
-      const res = await this.fetch(url, { signal: AbortSignal.timeout(remaining) });
-      data = await res.json() as Record<string, unknown>;
+      try {
+        const res = await this.fetch(url, { signal: AbortSignal.timeout(remaining) });
+        data = await res.json() as Record<string, unknown>;
+      } catch (err) {
+        // The job is already submitted and already billed. A gateway hiccup on
+        // one poll is not a reason to abandon it — keep asking until the
+        // deadline. Auth, quota and not-found errors still fail immediately.
+        if (!(err instanceof APIError) || !TRANSIENT_STATUS.has(err.statusCode)) throw err;
+      }
     }
     if (data.status === "completed") return data as T;
     throw new APIError("Account API job polling timed out; check the job before submitting again.", 504, { poll_url: url });

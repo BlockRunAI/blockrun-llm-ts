@@ -124,7 +124,8 @@ wrappers accept `apiKey`. They use `https://api.blockrun.ai`; an OpenAI-style
 
 An explicit `apiKey` wins over the environment. An explicit `privateKey` selects
 wallet mode even when `BLOCKRUN_API_KEY` is set; passing both explicit credentials
-is an error. Invalid or exhausted API keys never fall back to wallet payments.
+is an error. With no explicit credential, `BLOCKRUN_API_KEY` beats the wallet key
+env vars — a process holding both runs in account mode. Invalid or exhausted API keys never fall back to wallet payments.
 Errors preserve `statusCode`, account error `response.code`, and `retryAfter`.
 Account credentials are restricted to the configured origin, including polling.
 
@@ -1387,9 +1388,15 @@ const client = new LLMClient({
 
 | Variable | Description |
 |----------|-------------|
+| `BLOCKRUN_API_KEY` | Your BlockRun account key (`brk_...`) — account billing, no wallet needed. Create one at [user.blockrun.ai/dashboard/keys](https://user.blockrun.ai/dashboard/keys) |
+| `BLOCKRUN_API_BASE_URL` | Account API endpoint (optional, default: https://api.blockrun.ai) |
 | `BASE_CHAIN_WALLET_KEY` | Your Base chain wallet private key (for Base / `LLMClient`) |
 | `SOLANA_WALLET_KEY` | Your Solana wallet secret key - bs58 encoded (for `SolanaLLMClient`) |
-| `BLOCKRUN_API_URL` | API endpoint (optional, default: https://blockrun.ai/api) |
+| `BLOCKRUN_API_URL` | x402 gateway endpoint (optional, default: https://blockrun.ai/api) |
+
+`BLOCKRUN_API_KEY` takes precedence: if it is set alongside a wallet key env var and
+you pass no explicit credential, the client runs in account mode. Pass an explicit
+`privateKey` to force wallet mode.
 
 ## Error Handling
 
