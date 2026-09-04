@@ -1,3 +1,4 @@
+import type { ApiKeyOptions } from "./api-key.js";
 /**
  * Type definitions for BlockRun LLM SDK
  */
@@ -152,7 +153,7 @@ export interface ImageModel {
   type?: "llm" | "image"; // For listAllModels()
 }
 
-export interface ImageClientOptions {
+export interface ImageClientOptions extends ApiKeyOptions {
   /** EVM wallet private key (hex string starting with 0x) */
   privateKey?: `0x${string}` | string;
   /** API endpoint URL (default: https://blockrun.ai/api) */
@@ -291,7 +292,7 @@ export interface PaymentRequired {
   resource?: ResourceInfo;
 }
 
-export interface LLMClientOptions {
+export interface LLMClientOptions extends ApiKeyOptions {
   /** EVM wallet private key (hex string starting with 0x). Optional if BASE_CHAIN_WALLET_KEY env var is set. */
   privateKey?: `0x${string}` | string;
   /** API endpoint URL (default: https://blockrun.ai/api) */
@@ -476,7 +477,7 @@ export interface AudioModel {
   type: "audio";
 }
 
-export interface MusicClientOptions {
+export interface MusicClientOptions extends ApiKeyOptions {
   /** EVM wallet private key (hex string starting with 0x) */
   privateKey?: `0x${string}` | string;
   /** API endpoint URL (default: https://blockrun.ai/api) */
@@ -512,7 +513,7 @@ export interface SpeechResponse {
   txHash?: string;
 }
 
-export interface SpeechClientOptions {
+export interface SpeechClientOptions extends ApiKeyOptions {
   /** EVM wallet private key (hex string starting with 0x) */
   privateKey?: `0x${string}` | string;
   /** API endpoint URL (default: https://blockrun.ai/api) */
@@ -575,7 +576,7 @@ export interface VoiceInfo {
 
 // Multi-chain RPC types (/v1/rpc/{network})
 
-export interface RpcClientOptions {
+export interface RpcClientOptions extends ApiKeyOptions {
   /** EVM wallet private key (hex string starting with 0x) */
   privateKey?: `0x${string}` | string;
   /** API endpoint URL (default: https://blockrun.ai/api) */
@@ -633,7 +634,7 @@ export type VoicePreset =
 /** Bland.ai conversation model tier. */
 export type CallModel = "base" | "enhanced" | "turbo";
 
-export interface VoiceClientOptions {
+export interface VoiceClientOptions extends ApiKeyOptions {
   /** EVM wallet private key (hex string starting with 0x) */
   privateKey?: `0x${string}` | string;
   /** API endpoint URL (default: https://blockrun.ai/api) */
@@ -736,7 +737,7 @@ export interface VideoModel {
   type: "video";
 }
 
-export interface VideoClientOptions {
+export interface VideoClientOptions extends ApiKeyOptions {
   /** EVM wallet private key (hex string starting with 0x) */
   privateKey?: `0x${string}` | string;
   /** API endpoint URL (default: https://blockrun.ai/api) */
@@ -957,13 +958,13 @@ export interface ListOptions extends PriceOptions {
 
 // Client option bags for the new standalone clients.
 
-export interface SearchClientOptions {
+export interface SearchClientOptions extends ApiKeyOptions {
   privateKey?: `0x${string}` | string;
   apiUrl?: string;
   timeout?: number;
 }
 
-export interface PriceClientOptions {
+export interface PriceClientOptions extends ApiKeyOptions {
   privateKey?: `0x${string}` | string;
   apiUrl?: string;
   timeout?: number;
@@ -971,7 +972,7 @@ export interface PriceClientOptions {
   requireWallet?: boolean;
 }
 
-export interface SurfClientOptions {
+export interface SurfClientOptions extends ApiKeyOptions {
   privateKey?: `0x${string}` | string;
   apiUrl?: string;
   timeout?: number;
@@ -979,7 +980,7 @@ export interface SurfClientOptions {
 
 // ─── Phone (Twilio-backed lookup + number provisioning via x402) ───────
 
-export interface PhoneClientOptions {
+export interface PhoneClientOptions extends ApiKeyOptions {
   /** EVM wallet private key (hex string starting with 0x) */
   privateKey?: `0x${string}` | string;
   /** API endpoint URL (default: https://blockrun.ai/api) */
@@ -1058,7 +1059,7 @@ export interface PhoneReleaseResponse {
 
 // ─── Virtual Portrait enrollment (Token360-backed, via x402) ───────────
 
-export interface PortraitClientOptions {
+export interface PortraitClientOptions extends ApiKeyOptions {
   /** EVM wallet private key (hex string starting with 0x) */
   privateKey?: `0x${string}` | string;
   /** API endpoint URL (default: https://blockrun.ai/api) */
@@ -1118,7 +1119,7 @@ export interface PortraitEnrollResponse {
   txHash?: string;
 }
 
-export interface BlockrunClientOptions {
+export interface BlockrunClientOptions extends ApiKeyOptions {
   privateKey?: `0x${string}` | string;
   apiUrl?: string;
   /** Per-HTTP-call timeout in ms (default 60000). For long-running poll() jobs,
@@ -1163,6 +1164,8 @@ export class PaymentError extends BlockrunError {
 
 export class APIError extends BlockrunError {
   statusCode: number;
+  /** Retry-After header returned by the account API. */
+  retryAfter?: string;
   response?: unknown;
 
   constructor(message: string, statusCode: number, response?: unknown) {

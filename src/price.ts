@@ -1,3 +1,4 @@
+import { resolveApiKeyAuth, type ApiKeyAuth } from "./api-key.js";
 /**
  * BlockRun Price Client - Pyth-backed market data via x402.
  *
@@ -45,20 +46,23 @@ const DEFAULT_API_URL = "https://blockrun.ai/api";
 const DEFAULT_TIMEOUT = 30_000;
 
 export class PriceClient {
+  private apiAuth?: ApiKeyAuth;
+  get authMode(): "api-key" | "wallet" { return this.apiAuth ? "api-key" : "wallet"; }
   private account: Account | null = null;
   private privateKey: `0x${string}` | null = null;
   private apiUrl: string;
   private timeout: number;
 
   constructor(options: PriceClientOptions = {}) {
+    this.apiAuth = resolveApiKeyAuth(options);
     const envKey =
       typeof process !== "undefined" && process.env
         ? process.env.BLOCKRUN_WALLET_KEY || process.env.BASE_CHAIN_WALLET_KEY
         : undefined;
-    const privateKey = options.privateKey || envKey;
+    const privateKey = this.apiAuth ? undefined : options.privateKey || envKey;
     const requireWallet = options.requireWallet ?? true;
 
-    if (!privateKey && requireWallet) {
+    if (!this.apiAuth && !privateKey && requireWallet) {
       throw new Error(
         "Private key required for paid endpoints. Pass privateKey in options, set BLOCKRUN_WALLET_KEY, or pass requireWallet: false for free-only usage."
       );
@@ -69,7 +73,7 @@ export class PriceClient {
       this.account = privateKeyToAccount(privateKey as `0x${string}`);
     }
 
-    const apiUrl = options.apiUrl || DEFAULT_API_URL;
+    const apiUrl = this.apiAuth?.apiUrl || options.apiUrl || DEFAULT_API_URL;
     validateApiUrl(apiUrl);
     this.apiUrl = apiUrl.replace(/\/$/, "");
 
@@ -253,7 +257,7 @@ export class PriceClient {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
     try {
-      return await fetch(url, { ...init, signal: controller.signal });
+      return await (this.apiAuth ? this.apiAuth.fetch.bind(this.apiAuth) : fetch)(url, { ...init, signal: controller.signal });
     } finally {
       clearTimeout(timeoutId);
     }

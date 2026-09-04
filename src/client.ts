@@ -1,3 +1,4 @@
+import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js";
 /**
  * BlockRun LLM Client - Main SDK entry point.
  *
@@ -154,8 +155,13 @@ export const DEFAULT_TIMEOUT = resolveDefaultTimeout();
  */
 export class LLMClient {
   static readonly DEFAULT_API_URL = DEFAULT_API_URL;
-  private account: Account;
-  private privateKey: `0x${string}`;
+  private _account?: Account;
+  private get account(): Account { return requireWallet(this._account); }
+  private apiAuth?: ApiKeyAuth;
+  /** Active billing mode. */
+  get authMode(): "api-key" | "wallet" { return this.apiAuth ? "api-key" : "wallet"; }
+  private _privateKey?: `0x${string}`;
+  private get privateKey(): `0x${string}` { return requireWallet(this._privateKey); }
   private apiUrl: string;
   private timeout: number;
   private sessionTotalUsd: number = 0;
@@ -175,29 +181,33 @@ export class LLMClient {
    * @param options - Client configuration options (optional if BASE_CHAIN_WALLET_KEY env var is set)
    */
   constructor(options: LLMClientOptions = {}) {
-    // Get private key from options or environment variable (browser-safe check)
-    const envKey = typeof process !== "undefined" && process.env
-      ? process.env.BASE_CHAIN_WALLET_KEY
-      : undefined;
-    const privateKey = options.privateKey || envKey;
+    this.apiAuth = resolveApiKeyAuth(options);
+    if (!this.apiAuth) {
+      // Get private key from options or environment variable (browser-safe check)
+      const envKey = typeof process !== "undefined" && process.env
+        ? process.env.BASE_CHAIN_WALLET_KEY
+        : undefined;
+      const privateKey = options.privateKey || envKey;
 
-    if (!privateKey) {
-      throw new Error(
-        "Private key required. Pass privateKey in options or set BASE_CHAIN_WALLET_KEY environment variable."
-      );
+      if (!privateKey) {
+        throw new Error(
+          "Private key required. Pass privateKey in options or set BASE_CHAIN_WALLET_KEY environment variable."
+        );
+      }
+
+      // Validate private key format
+      validatePrivateKey(privateKey);
+
+      // Store private key for signing (never transmitted)
+      this._privateKey = privateKey as `0x${string}`;
+
+      // Initialize wallet account (key stays local, never transmitted)
+      this._account = privateKeyToAccount(privateKey as `0x${string}`);
+
+      // Validate and set API URL
     }
 
-    // Validate private key format
-    validatePrivateKey(privateKey);
-
-    // Store private key for signing (never transmitted)
-    this.privateKey = privateKey as `0x${string}`;
-
-    // Initialize wallet account (key stays local, never transmitted)
-    this.account = privateKeyToAccount(privateKey as `0x${string}`);
-
-    // Validate and set API URL
-    const apiUrl = options.apiUrl || DEFAULT_API_URL;
+    const apiUrl = this.apiAuth?.apiUrl || options.apiUrl || DEFAULT_API_URL;
     validateApiUrl(apiUrl);
     this.apiUrl = apiUrl.replace(/\/$/, "");
 
@@ -257,7 +267,7 @@ export class LLMClient {
       systemPrompt,
       maxOutputTokens,
       await this.getModelPricing(),
-      { ...options, minimumPaymentUsd: BASE_MINIMUM_PAYMENT_USD },
+      { ...options, minimumPaymentUsd: this.apiAuth ? 0 : BASE_MINIMUM_PAYMENT_USD },
     );
   }
 
@@ -928,6 +938,7 @@ export class LLMClient {
       );
     }
 
+    if (this.apiAuth && endpoint.startsWith("/v1/images/")) return this.apiAuth.poll<Record<string, unknown>>(response, this.timeout, 2_000);
     return response.json() as Promise<Record<string, unknown>>;
   }
 
@@ -1216,7 +1227,7 @@ export class LLMClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await (this.apiAuth ? this.apiAuth.fetch.bind(this.apiAuth) : fetch)(url, {
         ...options,
         signal: controller.signal,
       });
@@ -1785,6 +1796,7 @@ export class LLMClient {
    * console.log(`Spent $${spending.totalUsd.toFixed(4)} across ${spending.calls} calls`);
    */
   getSpending(): Spending {
+    if (this.apiAuth) throw new Error("Account usage is available at https://user.blockrun.ai/dashboard; getSpending() tracks x402 settlements only.");
     return {
       totalUsd: this.sessionTotalUsd,
       calls: this.sessionCalls,

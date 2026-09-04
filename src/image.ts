@@ -1,3 +1,4 @@
+import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js";
 /**
  * BlockRun Image Client - Generate images via x402 micropayments.
  *
@@ -60,8 +61,13 @@ const POLL_MAX_DURATION_MS = 300_000; // 5 minutes — enough for the slowest kn
  * or CogView-4 (Zhipu AI) with automatic x402 micropayments on Base chain.
  */
 export class ImageClient {
-  private account: Account;
-  private privateKey: `0x${string}`;
+  private _account?: Account;
+  private get account(): Account { return requireWallet(this._account); }
+  private apiAuth?: ApiKeyAuth;
+  /** Active billing mode. */
+  get authMode(): "api-key" | "wallet" { return this.apiAuth ? "api-key" : "wallet"; }
+  private _privateKey?: `0x${string}`;
+  private get privateKey(): `0x${string}` { return requireWallet(this._privateKey); }
   private apiUrl: string;
   private timeout: number;
   private sessionTotalUsd: number = 0;
@@ -73,30 +79,34 @@ export class ImageClient {
    * @param options - Client configuration options
    */
   constructor(options: ImageClientOptions = {}) {
-    // Get private key from options or environment variable
-    const envKey =
-      typeof process !== "undefined" && process.env
-        ? process.env.BLOCKRUN_WALLET_KEY || process.env.BASE_CHAIN_WALLET_KEY
-        : undefined;
-    const privateKey = options.privateKey || envKey;
+    this.apiAuth = resolveApiKeyAuth(options);
+    if (!this.apiAuth) {
+      // Get private key from options or environment variable
+      const envKey =
+        typeof process !== "undefined" && process.env
+          ? process.env.BLOCKRUN_WALLET_KEY || process.env.BASE_CHAIN_WALLET_KEY
+          : undefined;
+      const privateKey = options.privateKey || envKey;
 
-    if (!privateKey) {
-      throw new Error(
-        "Private key required. Pass privateKey in options or set BLOCKRUN_WALLET_KEY environment variable."
-      );
+      if (!privateKey) {
+        throw new Error(
+          "Private key required. Pass privateKey in options or set BLOCKRUN_WALLET_KEY environment variable."
+        );
+      }
+
+      // Validate private key format
+      validatePrivateKey(privateKey);
+
+      // Store private key for signing (never transmitted)
+      this._privateKey = privateKey as `0x${string}`;
+
+      // Initialize wallet account (key stays local, never transmitted)
+      this._account = privateKeyToAccount(privateKey as `0x${string}`);
+
+      // Validate and set API URL
     }
 
-    // Validate private key format
-    validatePrivateKey(privateKey);
-
-    // Store private key for signing (never transmitted)
-    this.privateKey = privateKey as `0x${string}`;
-
-    // Initialize wallet account (key stays local, never transmitted)
-    this.account = privateKeyToAccount(privateKey as `0x${string}`);
-
-    // Validate and set API URL
-    const apiUrl = options.apiUrl || DEFAULT_API_URL;
+    const apiUrl = this.apiAuth?.apiUrl || options.apiUrl || DEFAULT_API_URL;
     validateApiUrl(apiUrl);
     this.apiUrl = apiUrl.replace(/\/$/, "");
 
@@ -255,6 +265,7 @@ export class ImageClient {
       );
     }
 
+    if (this.apiAuth) return this.apiAuth.poll<ImageResponse>(response, POLL_MAX_DURATION_MS, POLL_INTERVAL_MS);
     return response.json() as Promise<ImageResponse>;
   }
 
@@ -460,7 +471,7 @@ export class ImageClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await (this.apiAuth ? this.apiAuth.fetch.bind(this.apiAuth) : fetch)(url, {
         ...options,
         signal: controller.signal,
       });
@@ -481,6 +492,7 @@ export class ImageClient {
    * Get session spending information.
    */
   getSpending(): Spending {
+    if (this.apiAuth) throw new Error("Account usage is available at https://user.blockrun.ai/dashboard; getSpending() tracks x402 settlements only.");
     return {
       totalUsd: this.sessionTotalUsd,
       calls: this.sessionCalls,

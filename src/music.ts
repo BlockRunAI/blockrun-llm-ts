@@ -1,3 +1,4 @@
+import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js";
 /**
  * BlockRun Music Client - Generate music tracks via x402 micropayments.
  *
@@ -50,31 +51,39 @@ const DEFAULT_TIMEOUT = 210_000; // music gen takes 1-3 min
  * Note: Generated URLs expire in ~24h — download immediately if needed.
  */
 export class MusicClient {
-  private account: Account;
-  private privateKey: `0x${string}`;
+  private _account?: Account;
+  private get account(): Account { return requireWallet(this._account); }
+  private apiAuth?: ApiKeyAuth;
+  /** Active billing mode. */
+  get authMode(): "api-key" | "wallet" { return this.apiAuth ? "api-key" : "wallet"; }
+  private _privateKey?: `0x${string}`;
+  private get privateKey(): `0x${string}` { return requireWallet(this._privateKey); }
   private apiUrl: string;
   private timeout: number;
   private sessionTotalUsd: number = 0;
   private sessionCalls: number = 0;
 
   constructor(options: MusicClientOptions = {}) {
-    const envKey =
-      typeof process !== "undefined" && process.env
-        ? process.env.BLOCKRUN_WALLET_KEY || process.env.BASE_CHAIN_WALLET_KEY
-        : undefined;
-    const privateKey = options.privateKey || envKey;
+    this.apiAuth = resolveApiKeyAuth(options);
+    if (!this.apiAuth) {
+      const envKey =
+        typeof process !== "undefined" && process.env
+          ? process.env.BLOCKRUN_WALLET_KEY || process.env.BASE_CHAIN_WALLET_KEY
+          : undefined;
+      const privateKey = options.privateKey || envKey;
 
-    if (!privateKey) {
-      throw new Error(
-        "Private key required. Pass privateKey in options or set BLOCKRUN_WALLET_KEY environment variable."
-      );
+      if (!privateKey) {
+        throw new Error(
+          "Private key required. Pass privateKey in options or set BLOCKRUN_WALLET_KEY environment variable."
+        );
+      }
+
+      validatePrivateKey(privateKey);
+      this._privateKey = privateKey as `0x${string}`;
+      this._account = privateKeyToAccount(privateKey as `0x${string}`);
     }
 
-    validatePrivateKey(privateKey);
-    this.privateKey = privateKey as `0x${string}`;
-    this.account = privateKeyToAccount(privateKey as `0x${string}`);
-
-    const apiUrl = options.apiUrl || DEFAULT_API_URL;
+    const apiUrl = this.apiAuth?.apiUrl || options.apiUrl || DEFAULT_API_URL;
     validateApiUrl(apiUrl);
     this.apiUrl = apiUrl.replace(/\/$/, "");
 
@@ -143,6 +152,7 @@ export class MusicClient {
       throw new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(errorBody));
     }
 
+    if (this.apiAuth) return this.apiAuth.poll<MusicResponse>(response, this.timeout, 5_000);
     return response.json() as Promise<MusicResponse>;
   }
 
@@ -219,7 +229,7 @@ export class MusicClient {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
     try {
-      return await fetch(url, { ...options, signal: controller.signal });
+      return await (this.apiAuth ? this.apiAuth.fetch.bind(this.apiAuth) : fetch)(url, { ...options, signal: controller.signal });
     } finally {
       clearTimeout(timeoutId);
     }
@@ -230,6 +240,7 @@ export class MusicClient {
   }
 
   getSpending(): Spending {
+    if (this.apiAuth) throw new Error("Account usage is available at https://user.blockrun.ai/dashboard; getSpending() tracks x402 settlements only.");
     return { totalUsd: this.sessionTotalUsd, calls: this.sessionCalls };
   }
 }

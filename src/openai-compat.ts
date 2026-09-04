@@ -1,3 +1,4 @@
+import { resolveApiKeyAuth, type ApiKeyOptions } from "./api-key.js";
 /**
  * OpenAI-compatible API wrapper for BlockRun LLM SDK.
  *
@@ -31,8 +32,8 @@ import type {
 } from "./types";
 
 // OpenAI-compatible types
-export interface OpenAIClientOptions {
-  /** EVM wallet private key (replaces apiKey) */
+export interface OpenAIClientOptions extends ApiKeyOptions {
+  /** EVM wallet private key for explicit wallet mode. */
   walletKey?: `0x${string}` | string;
   /** Alternative: use privateKey like LLMClient */
   privateKey?: `0x${string}` | string;
@@ -278,15 +279,18 @@ class Chat {
  */
 export class OpenAI {
   public chat: Chat;
+  get authMode(): "api-key" | "wallet" { return this.client.authMode; }
   private client: LLMClient;
 
   constructor(options: OpenAIClientOptions = {}) {
     const privateKey = options.walletKey || options.privateKey;
-    const apiUrl = options.baseURL || "https://blockrun.ai/api";
+    const apiUrl = resolveApiKeyAuth({ apiKey: options.apiKey, privateKey, apiUrl: options.baseURL })?.apiUrl
+      ?? options.baseURL ?? "https://blockrun.ai/api";
     const timeout = options.timeout ?? DEFAULT_TIMEOUT;
 
     this.client = new LLMClient({
       privateKey: privateKey as `0x${string}`,
+      apiKey: options.apiKey,
       apiUrl,
       timeout,
     });
