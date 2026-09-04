@@ -142,3 +142,14 @@ describe('account asynchronous jobs', () => {
     await expect(new VideoClient().generate('cat')).rejects.toThrow('missing poll_url');
   });
 });
+
+
+it('preserves native Anthropic quota errors without replaying the request', async () => {
+  vi.stubEnv('BLOCKRUN_API_KEY', 'brk_live_unit_test');
+  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { type: 'insufficient_credits', message: 'Top up' } }), { status: 402, headers: { 'content-type': 'application/json' } }));
+  vi.stubGlobal('fetch', fetchMock);
+  await expect(new AnthropicClient().messages.create({ model: 'claude-sonnet-4-6', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] })).rejects.toMatchObject({ status: 402 });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});

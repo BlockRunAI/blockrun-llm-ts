@@ -60,7 +60,7 @@ export class ApiKeyAuth {
     return url.href;
   }
 
-  async fetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+  async fetch(input: string | URL | Request, init?: RequestInit, raiseErrors = true): Promise<Response> {
     const request = input instanceof Request ? input : undefined;
     const url = this.resolveUrl(request?.url ?? String(input));
     const headers = new Headers(init?.headers ?? request?.headers);
@@ -72,7 +72,7 @@ export class ApiKeyAuth {
     const response = await globalThis.fetch(request ? new Request(url, request) : url, {
       ...init, headers, redirect: "error",
     });
-    if (!response.ok) {
+    if (raiseErrors && !response.ok) {
       let body: unknown;
       try { body = await response.json(); } catch { body = undefined; }
       const outer = body && typeof body === "object" ? body as Record<string, unknown> : {};

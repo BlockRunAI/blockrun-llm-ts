@@ -77,7 +77,7 @@ export class AnthropicClient {
 
     try {
       const mergedInit = { ...init, signal: controller.signal };
-      if (this.apiAuth) return await this.apiAuth.fetch(input, mergedInit);
+      if (this.apiAuth) return await this.apiAuth.fetch(input, mergedInit, false);
       let response = await globalThis.fetch(input, mergedInit);
 
       if (response.status === 402) {
