@@ -1292,35 +1292,35 @@ const markets = await client.pm("polymarket/markets");
 const filtered = await client.pm("polymarket/markets", { status: "active", limit: 10 });
 const searched = await client.pm("polymarket/markets", { search: "bitcoin" });
 
-// List events ($0.001/request)
+// List events
 const events = await client.pm("polymarket/events");
 
-// Historical trades ($0.001/request)
+// Historical trades
 const trades = await client.pm("polymarket/trades");
 
-// OHLCV candlestick data for a specific condition ($0.001/request)
+// OHLCV candlestick data for a specific condition
 const candles = await client.pm("polymarket/candlesticks/0x1234abcd...");
 
-// Wallet profile ($0.005/request — tier 2)
+// Wallet profile (tier 2)
 const profile = await client.pm("polymarket/wallet/0xABC123...");
 
-// Wallet P&L ($0.005/request — tier 2)
+// Wallet P&L (tier 2)
 const pnl = await client.pm("polymarket/wallet/pnl/0xABC123...");
 
-// Global leaderboard ($0.001/request)
+// Global leaderboard
 const leaderboard = await client.pm("polymarket/leaderboard");
 ```
 
 ### Kalshi & Binance
 
 ```typescript
-// Kalshi markets ($0.001/request)
+// Kalshi markets
 const kalshiMarkets = await client.pm("kalshi/markets");
 
-// Kalshi trades ($0.001/request)
+// Kalshi trades
 const kalshiTrades = await client.pm("kalshi/trades");
 
-// Binance candles for supported pairs ($0.001/request)
+// Binance candles for supported pairs
 const btcCandles = await client.pm("binance/candles/BTCUSDT");
 const ethCandles = await client.pm("binance/candles/ETHUSDT");
 // Also: SOLUSDT, XRPUSDT
@@ -1329,7 +1329,7 @@ const ethCandles = await client.pm("binance/candles/ETHUSDT");
 ### Cross-Platform
 
 ```typescript
-// Cross-platform matching pairs ($0.001/request)
+// Cross-platform matching pairs
 const pairs = await client.pm("matching-markets/pairs");
 ```
 
@@ -1354,17 +1354,17 @@ import { LLMClient } from '@blockrun/llm';
 
 const client = new LLMClient();
 
-// Neural web search ($0.01/request)
+// Neural web search
 const results = await client.exaSearch("latest AI safety research", { numResults: 5 });
 const news = await client.exaSearch("bitcoin ETF news", { category: "news", numResults: 10 });
 
-// Find similar pages ($0.01/request)
+// Find similar pages
 const similar = await client.exaFindSimilar("https://openai.com/research/gpt-4", { numResults: 5 });
 
-// Extract content from URLs ($0.002/URL)
+// Extract content from URLs
 const content = await client.exaContents(["https://arxiv.org/abs/2303.08774"]);
 
-// AI-generated answer from live web ($0.01/request)
+// AI-generated answer from live web
 const answer = await client.exaAnswer("What is the current state of AI safety research?");
 
 // Generic proxy for any Exa endpoint
@@ -1436,7 +1436,7 @@ npm test -- --coverage            # Run with coverage report
 Integration tests call the production API and require:
 - A funded Base wallet with USDC ($1+ recommended)
 - `BASE_CHAIN_WALLET_KEY` environment variable set
-- Estimated cost: ~$0.05 per test run
+- Integration tests make real paid calls; cost depends on the models exercised
 
 ```bash
 export BASE_CHAIN_WALLET_KEY=0x...
@@ -1726,7 +1726,7 @@ Router Core V3 is bundled into the SDK — the same deterministic routing engine
 Yes — as of v1.6.1. Use `client.chatCompletionStream()` for native streaming or `stream: true` in the OpenAI-compatible client. Payment is handled automatically: the SDK signs USDC payment before streaming begins, and caches payment requirements per model so subsequent calls skip the 402 round-trip (~200ms faster).
 
 ### How much does it cost?
-Pay only for what you use. Prices start at $0.0002 per request (GPT-5 Nano). There are no minimums, subscriptions, or monthly fees. $5 in USDC gets you thousands of requests.
+Pay only for what you use. There are no minimums, subscriptions, or monthly fees, and $5 in USDC gets you thousands of requests. Live per-model rates are at [blockrun.ai/models](https://blockrun.ai/models).
 
 ### Does it support both Solana and Base?
 Yes. Use `SolanaLLMClient` for Solana payments (recommended) and `LLMClient` for Base payments. Use `apiKey` for account billing without selecting a chain.
