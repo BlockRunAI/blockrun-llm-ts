@@ -2,6 +2,24 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.15.0] - 2026-09-05
+
+### Added
+
+- **`SolanaLLMClient.stream()`** — streaming chat paid on Solana. Its absence was not a missing convenience: `SolanaLLMClient` had `chat`, `chatCompletion`, `search`, `exa` and the rest, but no way to consume a response as it arrived, so any caller built around streaming — every agent harness on this SDK — was Base-only whatever the docs said. `chatCompletion` buffers the whole answer, which is the wrong shape for an agent loop and for anything that shows tokens as they are produced.
+
+  Same signature as `BlockrunClient.stream()`: `stream<T>(path, body?)`, yielding each `data:` frame already parsed as JSON and stopping at `[DONE]`. The x402 handshake completes before the first frame is handed out — 402, sign an SPL TransferChecked authorization locally, replay with `PAYMENT-SIGNATURE` — including the same verification-phase fresh-blockhash re-sign the non-streaming paths do. A settlement-phase rejection is still never re-signed, because it may already have moved USDC.
+
+  A `200` on the first request is streamed as-is and settles nothing: that is the free tier, and it is also API-key mode, where the account is billed instead of a wallet. Verified against the live gateway — a free model streams unpaid, and `deepseek/deepseek-chat` completes the full 402 → sign → replay → SSE round trip and records $0.001.
+
+  `stream: true` is the caller's to set. This method does not inject it: the gateway prices a streaming and a non-streaming request identically, and silently rewriting a caller's body is how you end up debugging a request you did not send.
+
+- **`src/sse.ts`** — the SSE frame reader, now shared by both clients rather than copied. The `[DONE]` sentinel, the partial-line buffer across chunk boundaries, and skipping a malformed frame instead of aborting the stream are each behaviour a caller depends on, and a second copy would have drifted from the first.
+
+### Changed
+
+- **The Solana 402 signing block is written once instead of three times.** `handlePaymentAndRetry`, `handlePaymentAndRetryRaw` and `handleGetPaymentAndRetryRaw` each carried their own copy of "parse the payment requirements, check the network, sign the transfer" — identical but for which URL they claim as the resource. That is the code that signs a transfer of the caller's USDC, so three copies meant every fix to it had to be applied three times or quietly apply to two thirds of the paths. They now share `signPaymentFrom402()`, plus `assertPaid()` for the post-payment classification and `recordSettlement()` for the session total. No behaviour change; the existing suite covers it.
+
 ## [3.14.4] - 2026-09-05
 
 ### Fixed
