@@ -2,6 +2,27 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.14.4] - 2026-09-05
+
+### Fixed
+
+- **A billed account POST could be replayed three times.** `ApiKeyAuth` retries only GET/HEAD, but the Anthropic SDK has its own retry layer above it, and in account mode `_x402Fetch` runs with `raiseErrors=false` — so a 429 or 5xx arrived as an ordinary response and the SDK re-sent the request. `maxRetries: 0` in account mode. Wallet mode keeps its retries, since its first POST is the unpaid 402 challenge.
+
+- **Cancellation was ignored on two paths.** The transient-retry backoff was a bare `setTimeout`, so an aborted request still slept out its delay; and the Anthropic compat fetch built its init from its own controller, discarding the caller's signal entirely. Both propagate abort now, and a discarded response body is cancelled before the backoff rather than leaking the connection.
+
+- **The published type declarations did not resolve for ordinary consumers.** `dist/index.d.ts` opens with `import * as _anthropic_ai_sdk from '@anthropic-ai/sdk'` while that package sat in `optionalDependencies`, so anyone running `npm install --omit=optional` got an SDK whose public types would not compile. This is the same failure class the router-core rule in CLAUDE.md exists to prevent. `@anthropic-ai/sdk` is now a regular dependency at the same version range; the Solana signing peers stay optional.
+
+- **`new OpenAI({ walletKey: '', privateKey: '0xREAL' })` used the wrong credential.** A blank string is not nullish, so the blank alias shadowed the real key and the client fell back to `BASE_CHAIN_WALLET_KEY`. The first real key from either alias now wins, and a blank one is used only when that is all the caller passed — so the legacy empty-key convention and explicit key precedence both hold.
+
+### Added
+
+- **`npm run test:package`** packs the tarball, installs it into a throwaway consumer with `--omit=optional`, compiles the public types under `--strict`, and exercises the ESM and CJS account constructors. Wired into `ci.yml` (Node 22 leg) and into `publish.yml` immediately after `Verify package` — that step is `npm pack --dry-run`, which only proves the tarball builds and never installs it, which is exactly how 3.14.3 shipped with unresolvable declarations.
+
+### Changed
+
+- Video polling timeouts no longer claim "No payment was taken". That held for wallet settlement, which happens on the first completed poll, but not for an account debit; the message now points at account Activity or wallet receipts.
+- The Solana concurrency test mocks the SDK's own `solana-deps` loader instead of `@solana/web3.js`, and asserts the guarantee the cache actually makes — a warm burst performs no additional RPC. The previous cold-burst bound was timing-dependent, because `getBlockhash` caches completed results with no in-flight coalescing.
+
 ## [3.14.3] - 2026-09-05
 
 ### Changed

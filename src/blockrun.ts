@@ -1,4 +1,5 @@
 import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js";
+import { readSseFrames } from "./sse";
 /**
  * BlockrunClient — the x402-paying HTTP primitive for the BlockRun gateway.
  *
@@ -341,40 +342,10 @@ export class BlockrunClient {
       return; // unreachable
     }
 
-    if (!streamResp.body) {
-      throw new APIError("Stream response has no body", streamResp.status, {});
-    }
-
-    const reader = streamResp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith("data: ")) continue;
-
-          const data = trimmed.slice(6);
-          if (data === "[DONE]") return;
-
-          try {
-            yield JSON.parse(data) as T;
-          } catch {
-            // Skip malformed JSON chunks
-          }
-        }
-      }
-    } finally {
-      reader.releaseLock();
-    }
+    yield* readSseFrames<T>(
+      streamResp,
+      (status) => new APIError("Stream response has no body", status, {})
+    );
   }
 
   // --------------------------------------------------------------------
