@@ -360,7 +360,7 @@ export class VideoClient {
         const data = pollData as unknown as VideoResponse;
         // Account the actual settled amount (micro-USDC from the signed 402),
         // not a hardcoded per-second rate. Seedance is flat-token priced, so
-        // the old xAI $0.05/sec formula misreported every non-Grok video.
+        // the old xAI formula misreported every non-Grok video.
         this.sessionCalls++;
         this.sessionTotalUsd += Number(details.amount) / 1e6;
         const txHash =

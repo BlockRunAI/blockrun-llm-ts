@@ -7,9 +7,9 @@ import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js"
  * a single OpenAPI surface mounted at `/api/v1/surf/*`.
  *
  * Pricing tiers (flat per-call, USDC on Base):
- *   Tier 1 — $0.001/call (prices, rankings, lists, news, simple reads)
- *   Tier 2 — $0.005/call (order books, candles, search, wallet details)
- *   Tier 3 — $0.020/call (on-chain SQL, schema introspection, chat)
+ *   Tier 1 — (prices, rankings, lists, news, simple reads)
+ *   Tier 2 — (order books, candles, search, wallet details)
+ *   Tier 3 — (on-chain SQL, schema introspection, chat)
  *
  * Because the catalog is large and evolving, this client deliberately
  * exposes a thin `get` / `post` pair instead of 84 typed wrappers. Pass the
@@ -22,16 +22,16 @@ import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js"
  *
  *   const surf = new SurfClient({ privateKey: "0x..." });
  *
- *   // Tier 1 — token price ($0.001)
+ *   // Tier 1 — token price
  *   const btc = await surf.get("/market/price", { symbol: "BTC" });
  *
- *   // Tier 2 — order book ($0.005)
+ *   // Tier 2 — order book
  *   const book = await surf.get("/exchange/depth", {
  *     exchange: "binance",
  *     symbol: "BTC-USDT",
  *   });
  *
- *   // Tier 3 — raw on-chain SQL ($0.020)
+ *   // Tier 3 — raw on-chain SQL
  *   const rows = await surf.post("/onchain/sql", {
  *     query: "SELECT block_number FROM ethereum.blocks ORDER BY block_number DESC LIMIT 5",
  *   });

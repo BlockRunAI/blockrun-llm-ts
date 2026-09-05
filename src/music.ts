@@ -47,7 +47,7 @@ const DEFAULT_TIMEOUT = 210_000; // music gen takes 1-3 min
  * Generate full-length ~3 minute music tracks using MiniMax Music 2.5+
  * with automatic x402 micropayments on Base chain.
  *
- * Pricing: $0.1575/track
+ * Pricing: per track — see https://blockrun.ai/models
  * Note: Generated URLs expire in ~24h — download immediately if needed.
  */
 export class MusicClient {

@@ -2,7 +2,7 @@ import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js"
 /**
  * BlockRun Portrait Client — enroll a Virtual Portrait via x402.
  *
- * Wraps `POST /v1/portrait/enroll` ($0.01 USDC promo, no KYC). You upload a face image
+ * Wraps `POST /v1/portrait/enroll` (promotional rate, no KYC). You upload a face image
  * by URL and get back a Token360 asset id (`ta_xxxxxx`). Pass that id as
  * `realFaceAssetId` on a Seedance 2.0 video generation (VideoClient.generate)
  * to keep the same AI character across clips.
@@ -52,7 +52,7 @@ const DEFAULT_TIMEOUT = 60_000;
 
 /**
  * Flat enrollment price in USD — mirrors the backend's `ENROLLMENT_PRICE_USD`.
- * Currently $0.01 (promotional, parity with RealFace). The authoritative price
+ * Currently (promotional, parity with RealFace). The authoritative price
  * is whatever the gateway quotes in the 402; this constant is informational.
  */
 export const PORTRAIT_ENROLLMENT_PRICE_USD = 0.01;
@@ -113,7 +113,7 @@ export class PortraitClient {
   }
 
   /**
-   * Enroll a Virtual Portrait from a face image URL. $0.01 (promo).
+   * Enroll a Virtual Portrait from a face image URL. (promo).
    *
    * Payment is settled only after Token360 confirms the enrollment, so failed
    * enrollments never charge your wallet.

@@ -24,10 +24,10 @@ import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js"
  *
  *   const br = new BlockrunClient({ privateKey: "0x..." });
  *
- *   // Surf endpoint (Tier 1, $0.001)
+ *   // Surf endpoint (Tier 1)
  *   const btc = await br.get("/v1/surf/market/price", { symbol: "BTC" });
  *
- *   // Raw on-chain SQL (Tier 3, $0.020)
+ *   // Raw on-chain SQL (Tier 3)
  *   const rows = await br.post("/v1/surf/onchain/sql", {
  *     query: "SELECT block_number FROM ethereum.blocks ORDER BY block_number DESC LIMIT 1",
  *   });

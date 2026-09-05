@@ -1,6 +1,6 @@
 {
   "name": "@blockrun/llm",
-  "version": "3.14.1",
+  "version": "3.14.2",
   "type": "module",
   "description": "TypeScript SDK for BlockRun - every frontier model behind one OpenAI-compatible client. Pay with a BlockRun API key or per-call in USDC. Smart routing picks the cheapest capable model. No rate limits.",
   "main": "dist/index.cjs",

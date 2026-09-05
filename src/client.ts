@@ -1377,7 +1377,7 @@ export class LLMClient {
 
   /**
    * Neural web search via Exa. Returns semantically relevant URLs and metadata.
-   * Understands meaning, not just keywords. $0.01/call.
+   * Understands meaning, not just keywords.
    *
    * @param query - Natural language search query
    * @param options - Optional filters (numResults, category, date range, domains)
@@ -1396,7 +1396,7 @@ export class LLMClient {
 
   /**
    * Ask a question and get a cited, synthesized answer grounded in real web sources.
-   * No hallucinations — every claim is backed by a citation. $0.01/call.
+   * No hallucinations — every claim is backed by a citation.
    *
    * @param query - The question to answer
    */
@@ -1406,7 +1406,7 @@ export class LLMClient {
   }
 
   /**
-   * Fetch full Markdown text content from a list of URLs. $0.002 per URL.
+   * Fetch full Markdown text content from a list of URLs. Billed per URL.
    * Returns clean text ready to feed into an LLM context window.
    *
    * @param urls - Array of URLs to fetch (up to 100)
@@ -1417,7 +1417,7 @@ export class LLMClient {
   }
 
   /**
-   * Find pages semantically similar to a given URL. $0.01/call.
+   * Find pages semantically similar to a given URL.
    * Useful for discovering competitors, alternatives, and related resources.
    *
    * @param url - Reference URL
@@ -1521,7 +1521,7 @@ export class LLMClient {
    * Query Predexon prediction market data (GET endpoints).
    *
    * Access real-time data from Polymarket, Kalshi, dFlow, and Binance Futures.
-   * Powered by Predexon. $0.001 per request.
+   * Powered by Predexon. Billed per request.
    *
    * @param path - Endpoint path, e.g. "polymarket/events", "kalshi/markets/12345"
    * @param params - Query parameters passed to the endpoint
@@ -1539,7 +1539,7 @@ export class LLMClient {
    * Structured query for Predexon prediction market data (POST endpoints).
    *
    * For endpoints that require a JSON body, e.g. bulk wallet identity lookup.
-   * Tier 1 = $0.001/call, Tier 2 = $0.005/call.
+   * Tier 1 =, Tier 2 =
    *
    * @param path - Endpoint path, e.g. "polymarket/wallet/identities"
    * @param query - JSON body for the structured query
@@ -1596,18 +1596,18 @@ export class LLMClient {
   }
 
   /** Polymarket markets with cursor-based keyset pagination (use pagination_key).
-   * Tier 1 ($0.001/call). */
+   * Tier 1. */
   async pmPolymarketMarketsKeyset(params?: Record<string, string>): Promise<Record<string, unknown>> {
     return this.pm("polymarket/markets/keyset", params);
   }
 
   /** Polymarket events with cursor-based keyset pagination (use pagination_key).
-   * Tier 1 ($0.001/call). */
+   * Tier 1. */
   async pmPolymarketEventsKeyset(params?: Record<string, string>): Promise<Record<string, unknown>> {
     return this.pm("polymarket/events/keyset", params);
   }
 
-  /** List available sports categories. Tier 1 ($0.001/call).
+  /** List available sports categories. Tier 1.
    *
    * NOTE: upstream returns 500 for every `sports/*` path as of 2026-08-04.
    * The route still resolves, so this works again the moment Predexon restores
@@ -1617,7 +1617,7 @@ export class LLMClient {
   }
 
   /** List sports markets grouped by game. Filter with league, sport_type,
-   * status, venue. Tier 1 ($0.001/call).
+   * status, venue. Tier 1.
    *
    * NOTE: upstream returns 500 for every `sports/*` path as of 2026-08-04. */
   async pmSportsMarkets(params?: Record<string, string>): Promise<Record<string, unknown>> {
@@ -1625,18 +1625,18 @@ export class LLMClient {
   }
 
   /** Fetch identity + profile metadata for one wallet (ENS, Twitter, portfolio,
-   * etc.). Tier 2 ($0.005/call). */
+   * etc.). Tier 2. */
   async pmWalletIdentity(wallet: string): Promise<Record<string, unknown>> {
     return this.pm(`polymarket/wallet/identity/${wallet}`);
   }
 
-  /** Bulk identity lookup for up to 200 wallet addresses (POST). Tier 2 ($0.005/call). */
+  /** Bulk identity lookup for up to 200 wallet addresses (POST). Tier 2. */
   async pmWalletIdentities(addresses: string[]): Promise<Record<string, unknown>> {
     return this.pmQuery("polymarket/wallet/identities", { addresses });
   }
 
   /** Discover wallets connected to a seed address via on-chain transfers and
-   * identity proofs. Tier 2 ($0.005/call). */
+   * identity proofs. Tier 2. */
   async pmWalletCluster(address: string): Promise<Record<string, unknown>> {
     return this.pm(`polymarket/wallet/${address}/cluster`);
   }
@@ -1647,8 +1647,8 @@ export class LLMClient {
 
   /**
    * Query DefiLlama DeFi data (GET passthrough). Powered by DefiLlama.
-   * $0.005/call for protocols / protocol/{slug} / chains / yields;
-   * $0.001/call for prices/{coins}.
+   * for protocols / protocol/{slug} / chains / yields;
+   * for prices/{coins}.
    *
    * @param path - e.g. "protocols", "protocol/aave", "chains", "yields",
    *               "prices/coingecko:bitcoin,base:0x..."
@@ -1658,27 +1658,27 @@ export class LLMClient {
     return this.getWithPaymentRaw(`/v1/defillama/${path}`, params);
   }
 
-  /** All DeFi protocols with TVL ($0.005/call). */
+  /** All DeFi protocols with TVL. */
   async defiProtocols(): Promise<Record<string, unknown>> {
     return this.defi("protocols");
   }
 
-  /** Single protocol details + historical TVL ($0.005/call). */
+  /** Single protocol details + historical TVL. */
   async defiProtocol(slug: string): Promise<Record<string, unknown>> {
     return this.defi(`protocol/${slug}`);
   }
 
-  /** Current TVL of every chain ($0.005/call). */
+  /** Current TVL of every chain. */
   async defiChains(): Promise<Record<string, unknown>> {
     return this.defi("chains");
   }
 
-  /** Yield pools with APY/TVL ($0.005/call). */
+  /** Yield pools with APY/TVL. */
   async defiYields(params?: Record<string, string>): Promise<Record<string, unknown>> {
     return this.defi("yields", params);
   }
 
-  /** Token price lookup ($0.001/call). Coins like "coingecko:bitcoin" or "{chain}:{address}". */
+  /** Token price lookup. Coins like "coingecko:bitcoin" or "{chain}:{address}". */
   async defiPrices(coins: string | string[]): Promise<Record<string, unknown>> {
     const joined = Array.isArray(coins) ? coins.join(",") : coins;
     return this.defi(`prices/${joined}`);
@@ -1754,20 +1754,20 @@ export class LLMClient {
   /**
    * Call the Modal sandbox compute API (POST passthrough).
    *
-   * @param path - "sandbox/create" ($0.01 CPU / $0.05 GPU), "sandbox/exec",
-   *               "sandbox/status", "sandbox/terminate" ($0.001 each)
+   * @param path - "sandbox/create" (CPU / GPU tiers), "sandbox/exec",
+   *               "sandbox/status", "sandbox/terminate"
    * @param body - JSON body for the endpoint
    */
   async modal(path: string, body?: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.requestWithPaymentRaw(`/v1/modal/${path}`, body ?? {});
   }
 
-  /** Create a sandboxed compute environment ($0.01 CPU / $0.05 GPU). */
+  /** Create a sandboxed compute environment (CPU / GPU tiers). */
   async modalSandboxCreate(body?: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.modal("sandbox/create", body);
   }
 
-  /** Execute a command in a sandbox; returns stdout/stderr ($0.001). */
+  /** Execute a command in a sandbox; returns stdout/stderr. */
   async modalSandboxExec(
     sandboxId: string,
     command: string[],
@@ -1776,12 +1776,12 @@ export class LLMClient {
     return this.modal("sandbox/exec", { sandbox_id: sandboxId, command, ...extra });
   }
 
-  /** Check a sandbox's status ($0.001). */
+  /** Check a sandbox's status. */
   async modalSandboxStatus(sandboxId: string): Promise<Record<string, unknown>> {
     return this.modal("sandbox/status", { sandbox_id: sandboxId });
   }
 
-  /** Terminate a sandbox ($0.001). */
+  /** Terminate a sandbox. */
   async modalSandboxTerminate(sandboxId: string): Promise<Record<string, unknown>> {
     return this.modal("sandbox/terminate", { sandbox_id: sandboxId });
   }
