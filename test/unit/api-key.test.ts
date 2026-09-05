@@ -37,6 +37,18 @@ describe('account mode across SDK entrypoints', () => {
     expect(new OpenAI({ [field]: '' }).authMode).toBe('wallet');
     expect(() => new OpenAI({ [field]: '', apiKey: key })).toThrow('either');
   });
+  it('does not let a blank walletKey shadow a real privateKey', () => {
+    // `walletKey ?? privateKey` returns the blank string, which is not nullish,
+    // so the real key under the other alias would be dropped and the client
+    // would silently fall back to the wallet env var — a different credential
+    // than the caller handed it.
+    // A different key in the env, so falling back to it is visible as a
+    // different address rather than passing by coincidence.
+    vi.stubEnv('BASE_CHAIN_WALLET_KEY', `0x${'11'.repeat(32)}`);
+    const client = new OpenAI({ walletKey: '', privateKey: TEST_PRIVATE_KEY });
+    expect(client.authMode).toBe('wallet');
+    expect(client.getWalletAddress()).toBe(new OpenAI({ privateKey: TEST_PRIVATE_KEY }).getWalletAddress());
+  });
   it.each(clients)('%s starts without reading or generating a wallet', Client => {
     expect(new Client().authMode).toBe('api-key');
   });

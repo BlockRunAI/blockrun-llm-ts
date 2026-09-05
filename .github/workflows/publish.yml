@@ -101,6 +101,13 @@ jobs:
       - name: Verify package
         run: npm pack --dry-run
 
+      # --dry-run only proves the tarball builds. It never installs it, so a
+      # public .d.ts importing a package the consumer did not get resolves
+      # fine here and breaks on their machine — which is how 3.14.3 went out.
+      # This installs the tarball with --omit=optional and typechecks a consumer.
+      - name: Packed install
+        run: pnpm run test:package
+
       - name: Check if version already published
         id: check
         run: |
