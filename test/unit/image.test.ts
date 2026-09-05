@@ -4,6 +4,7 @@ import { APIError } from "../../src/types";
 import {
   TEST_PRIVATE_KEY,
   buildImageModelsResponse,
+  buildGatewayImageModelsResponse,
   buildImageResponse,
 } from "../helpers/testHelpers";
 
@@ -82,6 +83,25 @@ describe("ImageClient", () => {
       expect(models[0].id).toBe("google/nano-banana");
       expect(models[0].provider).toBe("google");
       expect(models[0].pricePerImage).toBe(0.01);
+    });
+
+    it("reads the price the gateway actually sends (pricing.per_image)", async () => {
+      // Shipped since v3.0.0 reporting $0 for every image model: the fallback
+      // chain looked for pricing.flat, which the gateway has never sent. The
+      // other fixture sets pricePerImage at the top level, so it matches first
+      // and the nested branch was never exercised. Verified live against
+      // api.blockrun.ai: gpt-image-2 is $0.063.
+      fetchSpy.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => buildGatewayImageModelsResponse(),
+      });
+
+      const models = await client.listImageModels();
+
+      expect(models).toHaveLength(1);
+      expect(models[0].id).toBe("openai/gpt-image-2");
+      expect(models[0].pricePerImage).toBe(0.063);
     });
 
     it("should throw APIError on failure", async () => {
