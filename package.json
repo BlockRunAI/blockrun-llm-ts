@@ -1,8 +1,8 @@
 {
   "name": "@blockrun/llm",
-  "version": "3.13.6",
+  "version": "3.14.0",
   "type": "module",
-  "description": "BlockRun SDK - Pay-per-request AI (LLM, Image, Video, Music, Voice) via x402 on Base and Solana",
+  "description": "BlockRun SDK - AI chat, media and tools with API key account billing or x402 USDC on Solana and Base",
   "main": "dist/index.cjs",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",

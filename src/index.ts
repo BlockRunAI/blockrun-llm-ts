@@ -1,3 +1,4 @@
+export { API_KEY_URL, PORTAL_URL, type ApiKeyOptions } from "./api-key.js";
 /**
  * BlockRun LLM SDK - Pay-per-request AI via x402 on Base
  *
@@ -225,7 +226,7 @@ export { SOLANA_NETWORK, USDC_SOLANA, createSolanaPaymentPayload } from "./x402"
 export { getCached, setCache, clearCache, saveToCache, getCachedByRequest, getCostLogSummary } from "./cache";
 
 // Agent wallet setup
-export { setupAgentWallet, setupAgentSolanaWallet, status } from "./setup";
+export { setupAgentClient, setupAgentWallet, setupAgentSolanaWallet, status } from "./setup";
 
 // Cost logging
 export { logCost, getCostSummary, type CostEntry } from "./cost-log";

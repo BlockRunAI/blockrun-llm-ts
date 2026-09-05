@@ -4,11 +4,11 @@ Guidance for AI coding agents working with the BlockRun TypeScript SDK.
 
 ## Project Overview
 
-**@blockrun/llm** is a TypeScript SDK that **cuts LLM costs by up to <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->%**: its bundled smart router (Router Core V3) picks the cheapest capable model for every request — locally, in <1ms — and pays per-request in USDC via x402 on Base or Solana. No API keys, no subscriptions. Use `smartChat()` for routed (cheapest) calls; `chat()` to pin a model. **Includes <!-- br:models.free -->7<!-- /br:models.free --> fully-free models** — Nemotron 3.5 Lightning and Nemotron 3 Ultra 550B (1M ctx), Nemotron 3 Nano Omni (multimodal, 256K), Nemotron 3 Nano 30B, Llama 3.2 11B Vision, Cohere North Mini Code (256K coding) and Poolside Laguna XS 2.1. The free tier is no longer NVIDIA-only, so pin them by full model id rather than by an `nvidia/*` prefix, or use `routingProfile: 'eco'`, which ranks the free tier first. (There is no `'free'` routing profile — `routingProfile` accepts `'eco' | 'auto' | 'premium'`.)
+**@blockrun/llm** is a TypeScript SDK that **cuts LLM costs by up to <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->%**: its bundled smart router (Router Core V3) picks the cheapest capable model for every request — locally, in <1ms — and pays per-request in USDC via x402 on Base or Solana. API key account billing or x402 wallet payments. Use `smartChat()` for routed (cheapest) calls; `chat()` to pin a model. **Includes <!-- br:models.free -->7<!-- /br:models.free --> fully-free models** — Nemotron 3.5 Lightning and Nemotron 3 Ultra 550B (1M ctx), Nemotron 3 Nano Omni (multimodal, 256K), Nemotron 3 Nano 30B, Llama 3.2 11B Vision, Cohere North Mini Code (256K coding) and Poolside Laguna XS 2.1. The free tier is no longer NVIDIA-only, so pin them by full model id rather than by an `nvidia/*` prefix, or use `routingProfile: 'eco'`, which ranks the free tier first. (There is no `'free'` routing profile — `routingProfile` accepts `'eco' | 'auto' | 'premium'`.)
 
 **Package:** `@blockrun/llm` (npm)
 **Node:** >=20
-**Networks:** Base (EVM) and Solana
+**Networks:** Solana (recommended) and Base (EVM)
 **Payment:** USDC via x402 v2 (or $0 on the free tier)
 
 ## Repository Structure
@@ -113,7 +113,7 @@ pnpm typecheck          # TypeScript check
 
 ## Network Support
 
-### Base (Default)
+### Base (explicit wallet client)
 - Uses `viem` for signing
 - Environment: `BASE_CHAIN_WALLET_KEY`
 
@@ -149,3 +149,12 @@ npm publish --access public
 - HTTPS required for production
 - Solana keys are base58 encoded
 - Error messages are sanitized
+
+## Account API authentication
+
+All service clients accept `apiKey` / `BLOCKRUN_API_KEY`. Shared transport in
+`src/api-key.ts` authenticates against `https://api.blockrun.ai`, prevents x402
+replay on account errors, and scopes credentials to the configured origin.
+`setupAgentClient()` chooses account mode first, then preserves existing chain
+preferences/Base-only wallets, otherwise initializes Solana. The named wallet
+setup functions remain chain-specific. Register at https://user.blockrun.ai.

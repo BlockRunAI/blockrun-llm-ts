@@ -1,7 +1,17 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, afterAll, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+const testHome = await vi.hoisted(async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  return fs.mkdtempSync(os.tmpdir() + '/blockrun-test-');
+});
+vi.mock('os', async () => ({
+  ...await vi.importActual<typeof import('os')>('os'),
+  homedir: () => testHome,
+}));
+afterAll(() => fs.rmSync(testHome, { recursive: true, force: true }));
 import { getCached, setCache, saveToCache, getCachedByRequest, clearCache } from '../../src/cache.js';
 
 const CACHE_DIR = path.join(os.homedir(), '.blockrun', 'cache');

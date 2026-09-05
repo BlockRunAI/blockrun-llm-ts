@@ -1,3 +1,9 @@
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { resolveApiKeyAuth, type ApiKeyOptions } from './api-key.js';
+import { loadWallet } from './wallet.js';
+import { loadSolanaWallet } from './solana-wallet.js';
 /**
  * Agent wallet setup utilities.
  *
@@ -63,4 +69,26 @@ export async function status(): Promise<{
   console.log(`Wallet: ${address}`);
   console.log(`Balance: $${balance.toFixed(2)} USDC`);
   return { address, balance };
+}
+
+/** Account API when configured; otherwise Solana for new wallets.
+ * Existing chain preferences and Base-only wallets remain on their chosen chain.
+ * The named setupAgentWallet/setupAgentSolanaWallet helpers retain their behavior.
+ */
+export async function setupAgentClient(options: ApiKeyOptions & {
+  chain?: 'solana' | 'base';
+  silent?: boolean;
+} = {}): Promise<LLMClient | SolanaLLMClient> {
+  if (resolveApiKeyAuth(options)) return new LLMClient({ apiKey: options.apiKey });
+  let chain = options.chain;
+  if (!chain) {
+    for (const file of ['payment-chain', '.chain']) {
+      try {
+        const saved = readFileSync(join(homedir(), '.blockrun', file), 'utf8').trim();
+        if (saved === 'solana' || saved === 'base') { chain = saved; break; }
+      } catch { /* No saved preference. */ }
+    }
+  }
+  chain ??= !loadSolanaWallet() && loadWallet() ? 'base' : 'solana';
+  return chain === 'solana' ? setupAgentSolanaWallet(options) : setupAgentWallet(options);
 }

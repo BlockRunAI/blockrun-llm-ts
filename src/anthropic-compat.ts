@@ -1,3 +1,4 @@
+import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth, type ApiKeyOptions } from "./api-key.js";
 import { privateKeyToAccount } from 'viem/accounts';
 import type { Account } from 'viem/accounts';
 import {
@@ -13,7 +14,7 @@ import { DEFAULT_TIMEOUT } from './client.js';
 // Types
 // ======================================================================
 
-export interface BlockRunAnthropicOptions {
+export interface BlockRunAnthropicOptions extends ApiKeyOptions {
   privateKey?: `0x${string}` | string;
   apiUrl?: string;
   timeout?: number;
@@ -27,19 +28,24 @@ export class AnthropicClient {
   private _client: import('@anthropic-ai/sdk').default | null = null;
   private _clientPromise: Promise<import('@anthropic-ai/sdk').default> | null =
     null;
-  private _privateKey: `0x${string}`;
-  private _account: Account;
+  private apiAuth?: ApiKeyAuth;
+  get authMode(): "api-key" | "wallet" { return this.apiAuth ? "api-key" : "wallet"; }
+  private walletKey?: `0x${string}`;
+  private get _privateKey(): `0x${string}` { return requireWallet(this.walletKey); }
+  private walletAccount?: Account;
+  private get _account(): Account { return requireWallet(this.walletAccount); }
   private _apiUrl: string;
   private _timeout: number;
 
   constructor(options: BlockRunAnthropicOptions = {}) {
-    const wallet = getOrCreateWallet();
-    const key = options.privateKey ?? wallet.privateKey;
-    validatePrivateKey(key);
-    this._privateKey = key as `0x${string}`;
-    this._account = privateKeyToAccount(this._privateKey);
-
-    const apiUrl = options.apiUrl ?? 'https://blockrun.ai/api';
+    this.apiAuth = resolveApiKeyAuth(options);
+    if (!this.apiAuth) {
+      const key = options.privateKey ?? getOrCreateWallet().privateKey;
+      validatePrivateKey(key);
+      this.walletKey = key as `0x${string}`;
+      this.walletAccount = privateKeyToAccount(this.walletKey);
+    }
+    const apiUrl = this.apiAuth?.apiUrl ?? options.apiUrl ?? 'https://blockrun.ai/api';
     validateApiUrl(apiUrl);
     this._apiUrl = apiUrl.replace(/\/$/, '');
     this._timeout = options.timeout ?? DEFAULT_TIMEOUT;
@@ -71,6 +77,7 @@ export class AnthropicClient {
 
     try {
       const mergedInit = { ...init, signal: controller.signal };
+      if (this.apiAuth) return await this.apiAuth.fetch(input, mergedInit, false);
       let response = await globalThis.fetch(input, mergedInit);
 
       if (response.status === 402) {

@@ -1,6 +1,10 @@
 # @blockrun/llm (TypeScript SDK)
 
-TypeScript SDK for <!-- br:models.chatVisible -->74<!-- /br:models.chatVisible --> LLMs with streaming, smart routing, and automatic USDC micropayments via x402. No API keys — wallet signature is authentication.
+TypeScript SDK for <!-- br:models.chatVisible -->74<!-- /br:models.chatVisible --> LLMs with streaming, smart routing, and pay-per-request billing.
+Two authentication modes, one API surface:
+
+- **Account API key** — `apiKey` / `BLOCKRUN_API_KEY` bills a BlockRun account at `https://api.blockrun.ai`. Register, mint keys and top up credits at https://user.blockrun.ai.
+- **Wallet (x402)** — a wallet signature is the authentication; each request settles USDC on Solana or Base. No account needed.
 
 ## Commands
 
@@ -21,6 +25,7 @@ src/
 ├── client.ts            # LLMClient (Base chain)
 ├── solana-client.ts     # SolanaLLMClient
 ├── router-adapter.ts    # Bundled Router Core V3 adapter (smartChat / blockrun/* aliases)
+├── api-key.ts           # Account API-key auth: resolveApiKeyAuth / ApiKeyAuth transport + poll
 ├── blockrun.ts          # BlockrunClient — universal x402 primitive (get/post/poll/stream)
 ├── image.ts             # ImageClient — image generation + editing (multi-image fusion)
 ├── video.ts             # VideoClient — video generation (incl. realFaceAssetId)
@@ -42,7 +47,7 @@ src/
 ├── validation.ts        # Input validation
 ├── cache.ts             # Response caching
 ├── cost-log.ts          # Cost logging
-├── setup.ts             # First-run setup
+├── setup.ts             # First-run setup (setupAgentClient / setupAgentWallet / setupAgentSolanaWallet)
 ├── anthropic-compat.ts  # Anthropic SDK compatibility layer
 └── openai-compat.ts     # OpenAI SDK compatibility layer
 ```
@@ -64,11 +69,40 @@ src/
 - The routing runtime and types are **derived directly from `@blockrun/router-core`**, pinned to an immutable GitHub commit. Do not hand-edit the upstream shapes; re-pin the reviewed router-core commit and rerun golden tests.
 - `tsup.config.ts` holds the build config; its `dts.resolve` inlines the router-core declarations into the shipped `.d.ts`. After any routing-dependency bump, verify `grep -c router-core dist/index.d.ts` prints `0` — a leaked `import from '@blockrun/router-core'` is unresolvable in consumer trees. The full procedure is in CONTRIBUTING.md.
 
+## Account API keys (`src/api-key.ts`)
+
+- Every client option bag extends `ApiKeyOptions`. `resolveApiKeyAuth()` runs first in each
+  constructor: an explicit `apiKey` wins over the environment, an explicit `privateKey` forces
+  wallet mode even when `BLOCKRUN_API_KEY` is set, and passing both explicitly throws. With
+  neither explicit, `BLOCKRUN_API_KEY` beats the wallet env vars — a process holding both
+  runs in account mode.
+- `ApiKeyAuth` is the shared transport: it pins the credential to the configured origin
+  (`resolveUrl` refuses cross-origin, credentialed, and off-port URLs, including poll URLs),
+  sets `redirect: "error"`, strips caller `*payment*` / `x-api-key` headers, and redacts the
+  key out of error bodies. Base URL defaults to `https://api.blockrun.ai`, overridable with
+  `apiUrl` (`baseURL` on `OpenAI`) or `BLOCKRUN_API_BASE_URL`; a trailing `/v1` is trimmed.
+- **An account error never falls back to a wallet.** `fetch()` raises on any non-2xx, so the
+  x402 signing path is unreachable in account mode; `APIError` carries `statusCode`, the
+  account `code`/`type`/`message`, and `retryAfter`.
+- Async jobs (image / video / music / `BlockrunClient.poll`) follow `poll_url` from the first
+  authenticated response via `ApiKeyAuth.poll()` — no 402 challenge, no second POST.
+- **Transient retries are GET/HEAD-only.** 502/503/504/522/524 retry twice on idempotent
+  requests; a POST is never replayed, because in account mode the first POST is the billed
+  one (the wallet path can retry because its first POST is the unpaid 402 challenge).
+  `poll()` rides out a transient error to the deadline instead of dropping a paid job.
+- Wallet-only surfaces throw `requireWallet()` in account mode: `getWalletAddress()`,
+  `getBalance()`, and `getSpending()` (account usage lives in the dashboard, not in-process).
+- `setupAgentClient()` picks account mode when a key is configured, otherwise honours a saved
+  `~/.blockrun/payment-chain` preference, keeps Base-only installs on Base, and defaults new
+  wallets to Solana. `setupAgentWallet()` / `setupAgentSolanaWallet()` stay chain-specific.
+
 ## Supported chains
 
-- Base Mainnet (primary) — USDC
+Only relevant in wallet mode; account API keys are chain-independent.
+
+- Solana Mainnet — USDC SPL (recommended for new wallets)
+- Base Mainnet — USDC
 - Base Sepolia (testnet) — Testnet USDC
-- Solana Mainnet — USDC SPL
 
 ## Conventions
 
