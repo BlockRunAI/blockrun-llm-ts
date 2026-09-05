@@ -15,7 +15,7 @@ import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js"
  * The client signs once and replays the same PAYMENT-SIGNATURE on every poll,
  * re-signing automatically if the 600s authorization window lapses mid-poll.
  * Settlement happens only on the first completed poll, so upstream failure or
- * the caller giving up = zero charge.
+ * a client timeout alone cannot establish the final billing status.
  *
  * Usage:
  *   import { VideoClient } from '@blockrun/llm';
@@ -119,7 +119,7 @@ export class VideoClient {
    * Submits an async job, then polls until the video is ready. Typical total
    * wall-time is 60-180s, but upstream status can lag several minutes behind
    * actual completion. If upstream runs past the budget (default 15min),
-   * throws without charging — the job stays claimable ~48h via poll_url.
+   * throws with the existing poll URL; check billing before submitting again.
    *
    * @param prompt - Text description of the video
    * @param options - Optional generation parameters
@@ -399,9 +399,9 @@ export class VideoClient {
 
     throw new APIError(
       `Video generation did not complete within ${Math.round(budgetMs / 1000)}s ` +
-        `(last status: ${lastStatus}). No payment was taken. The job is NOT lost: ` +
-        `it stays claimable for ~48h — re-GET poll_url with a fresh signature from ` +
-        `the same wallet to fetch (and settle) the finished video.`,
+        `(last status: ${lastStatus}). A polling timeout does not confirm billing status. ` +
+        `Resume the existing poll_url using the same account or wallet; check ` +
+        `account Activity or wallet receipts before submitting another job.`,
       504,
       { id: submitData.id, last_status: lastStatus, poll_url: pollUrl }
     );

@@ -283,7 +283,13 @@ export class OpenAI {
   private client: LLMClient;
 
   constructor(options: OpenAIClientOptions = {}) {
-    const privateKey = options.walletKey || options.privateKey;
+    // Preserve an explicit wallet selection, including the legacy empty-key
+    // convention that loads the wallet from the environment. `??` alone is not
+    // enough: a blank walletKey is not nullish, so it would shadow a real key
+    // passed under the privateKey alias. Take the first REAL key from either
+    // alias, and fall back to a blank one only when that is all the caller gave.
+    const aliases = [options.walletKey, options.privateKey].filter(k => k !== undefined);
+    const privateKey = aliases.find(k => k !== "") ?? aliases[0];
     const apiUrl = resolveApiKeyAuth({ apiKey: options.apiKey, privateKey, apiUrl: options.baseURL })?.apiUrl
       ?? options.baseURL ?? "https://blockrun.ai/api";
     const timeout = options.timeout ?? DEFAULT_TIMEOUT;
