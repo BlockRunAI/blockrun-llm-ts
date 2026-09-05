@@ -1239,6 +1239,35 @@ while (true) {
 }
 ```
 
+#### Solana
+
+`SolanaLLMClient.stream()` is the Solana counterpart, with the same shape as
+`BlockrunClient.stream()`: it yields each `data:` frame already parsed as JSON
+and stops at `[DONE]`. The x402 handshake happens before the first frame — 402,
+sign an SPL TransferChecked authorization locally, replay with
+`PAYMENT-SIGNATURE` — including the fresh-blockhash re-sign on a
+verification-phase rejection. A free model, or an account key, is answered `200`
+with no handshake at all and settles nothing.
+
+```typescript
+import { SolanaLLMClient } from '@blockrun/llm';
+
+const client = new SolanaLLMClient(); // SOLANA_WALLET_KEY, or { apiKey: 'brk_live_…' }
+
+for await (const chunk of client.stream('/v1/chat/completions', {
+  model: 'deepseek/deepseek-chat',
+  messages: [{ role: 'user', content: 'Hi' }],
+  max_tokens: 64,
+  stream: true,
+})) {
+  process.stdout.write(chunk?.choices?.[0]?.delta?.content ?? '');
+}
+```
+
+Set `stream: true` yourself — the method does not inject it, because the gateway
+prices a streaming and a non-streaming request the same and rewriting a caller's
+body silently is how you end up debugging a request you did not send.
+
 #### Payment + streaming flow
 
 ```

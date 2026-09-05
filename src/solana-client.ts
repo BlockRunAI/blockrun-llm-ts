@@ -54,6 +54,7 @@ import {
   validateResourceUrl,
 } from "./validation";
 import { USER_AGENT } from "./version";
+import { readSseFrames } from "./sse";
 
 const SOLANA_API_URL = "https://sol.blockrun.ai/api";
 const DEFAULT_MAX_TOKENS = 1024;
@@ -456,6 +457,135 @@ export class SolanaLLMClient {
     return { response, model: decision.model, routing: decision };
   }
 
+  /**
+   * Stream a Server-Sent Events endpoint, paid on Solana.
+   *
+   * The Solana counterpart to `BlockrunClient.stream`, and the reason it had to
+   * exist: a streaming harness cannot use this client at all without it, so
+   * "BlockRun supports Solana" stopped being true the moment a caller streamed.
+   * `chatCompletion` buffers the whole answer, which is the wrong shape for an
+   * agent loop and for anything that shows tokens as they arrive.
+   *
+   * The handshake is the one the non-streaming paths use — `402`, sign an SPL
+   * TransferChecked authorization locally, replay with `PAYMENT-SIGNATURE` —
+   * with the same verification-phase re-sign on a stale blockhash. What differs
+   * is that the paid response is not read as JSON: it is handed to the SSE
+   * reader with its body untouched.
+   *
+   * A `200` on the first request is returned as-is and settles nothing. That is
+   * the free tier (the gateway answers a `billing_mode: "free"` model without a
+   * 402 at all) and it is also API-key mode, where billing is on the account
+   * rather than on a wallet.
+   *
+   * Yields each `data:` frame parsed as JSON, and stops at `data: [DONE]`.
+   * Malformed frames are skipped rather than thrown — see {@link readSseFrames}.
+   *
+   * @example
+   * for await (const chunk of client.stream<ChatChunk>("/v1/chat/completions", {
+   *   model: "deepseek/deepseek-chat",
+   *   messages: [{ role: "user", content: "Hi" }],
+   *   stream: true,
+   * })) {
+   *   process.stdout.write(chunk.choices?.[0]?.delta?.content ?? "");
+   * }
+   *
+   * @param path - endpoint after the API root; a leading `/api` is tolerated.
+   * @param body - JSON request body. Set `stream: true` yourself — this method
+   *   does not inject it, because the gateway prices a streaming and a
+   *   non-streaming request the same and silently rewriting a caller's body is
+   *   how you end up debugging a request you did not send.
+   * @returns each decoded SSE frame, in order.
+   */
+  async *stream<T = unknown>(
+    path: string,
+    body?: Record<string, unknown>
+  ): AsyncGenerator<T, void, undefined> {
+    const url = this.buildUrl(path);
+    const response = await this.openPaidStream(url, JSON.stringify(body ?? {}));
+    yield* readSseFrames<T>(
+      response,
+      (status) => new APIError("Stream response has no body", status, {})
+    );
+  }
+
+  /**
+   * Get to a streaming response, paying for it if the gateway asks.
+   *
+   * Separate from {@link SolanaLLMClient.stream} because a generator cannot
+   * retry cleanly around a `yield`: the stale-blockhash re-sign has to finish
+   * before the first frame is handed out, and putting the loop here keeps the
+   * payment decision entirely ahead of any output the caller has seen.
+   *
+   * @param url - resolved endpoint URL.
+   * @param requestBody - the serialized body, reused verbatim on the paid retry
+   *   so the gateway prices and answers the same request it quoted for.
+   * @returns a response whose body has not been read.
+   */
+  private async openPaidStream(url: string, requestBody: string): Promise<Response> {
+    for (let staleRetries = 0; ; ) {
+      const response = await this.fetchWithTimeout(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
+        body: requestBody,
+      });
+
+      // Served without a payment: the free tier, or account billing under an
+      // API key. Nothing was quoted, so nothing is recorded as spent.
+      if (response.ok) return response;
+
+      if (response.status !== 402) {
+        let errorBody: unknown;
+        try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
+        throw new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(errorBody));
+      }
+
+      try {
+        const { paymentPayload, costUsd } = await this.signPaymentFrom402(
+          url,
+          response,
+          staleRetries > 0
+        );
+        const paid = await this.fetchWithTimeout(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
+            "PAYMENT-SIGNATURE": paymentPayload,
+          },
+          body: requestBody,
+        });
+        // Throws before the body is touched, so a refusal never reaches the SSE
+        // reader as an empty stream the caller would read as an empty answer.
+        await this.assertPaid(paid);
+        this.recordSettlement(costUsd);
+        return paid;
+      } catch (error) {
+        if (
+          !(error instanceof SafeStaleBlockhashError) ||
+          staleRetries >= STALE_BLOCKHASH_RETRY_BACKOFFS_MS.length
+        ) throw error;
+        await waitForStaleRetry(staleRetries++);
+        continue;
+      }
+    }
+  }
+
+  /**
+   * Resolve an endpoint path against this client's API root.
+   *
+   * A leading `/api` is stripped for the same reason `BlockrunClient` strips
+   * it: the documented paths are written `/api/v1/…` on the website and
+   * `/v1/…` in this SDK, and a caller who copies one into the other should get
+   * their request rather than a 404.
+   * @param path - endpoint path, with or without a leading slash.
+   * @returns the absolute URL to call.
+   */
+  private buildUrl(path: string): string {
+    let normalized = path.startsWith("/") ? path : `/${path}`;
+    if (normalized.startsWith("/api/")) normalized = normalized.slice(4);
+    return `${this.apiUrl}${normalized}`;
+  }
+
   /** List available models. */
   async listModels(): Promise<Model[]> {
     const response = await this.fetchWithTimeout(`${this.apiUrl}/v1/models`, { method: "GET" });
@@ -783,12 +913,30 @@ export class SolanaLLMClient {
     }
   }
 
-  private async handlePaymentAndRetry(
+  /**
+   * Turn a `402` into a signed Solana payment payload.
+   *
+   * Extracted because four call sites need it — chat, the raw POST helpers, the
+   * raw GET helper, and {@link SolanaLLMClient.stream} — and it had been
+   * written out three times before this. That mattered more than ordinary
+   * duplication: this is the code that signs a transfer of the caller's USDC,
+   * so three copies meant every fix to it had to be applied three times or
+   * quietly apply to two thirds of the paths.
+   *
+   * @param url - the request being paid for.
+   * @param response - the gateway's `402`, not yet consumed.
+   * @param forceFreshBlockhash - set on a re-sign after a stale-blockhash
+   *   rejection, so the retry cannot produce byte-identical transaction bytes.
+   * @param resourceFallback - resource URL to claim when the 402 states none.
+   * @returns the header value to replay with, and what it will settle for.
+   * @throws PaymentError when the 402 carries no usable Solana requirements.
+   */
+  private async signPaymentFrom402(
     url: string,
-    body: Record<string, unknown>,
     response: Response,
-    forceFreshBlockhash = false
-  ): Promise<ChatResponse> {
+    forceFreshBlockhash: boolean,
+    resourceFallback = url
+  ): Promise<{ paymentPayload: string; costUsd: number }> {
     let paymentHeader = response.headers.get("payment-required");
 
     if (!paymentHeader) {
@@ -828,7 +976,7 @@ export class SolanaLLMClient {
       feePayer,
       {
         resourceUrl: validateResourceUrl(
-          details.resource?.url || `${this.apiUrl}/v1/chat/completions`,
+          details.resource?.url || resourceFallback,
           this.apiUrl
         ),
         resourceDescription: details.resource?.description || "BlockRun Solana AI API call",
@@ -841,6 +989,22 @@ export class SolanaLLMClient {
       }
     );
 
+    return { paymentPayload, costUsd: parseFloat(details.amount) / 1e6 };
+  }
+
+  private async handlePaymentAndRetry(
+    url: string,
+    body: Record<string, unknown>,
+    response: Response,
+    forceFreshBlockhash = false
+  ): Promise<ChatResponse> {
+    const { paymentPayload, costUsd } = await this.signPaymentFrom402(
+      url,
+      response,
+      forceFreshBlockhash,
+      `${this.apiUrl}/v1/chat/completions`
+    );
+
     const retryResponse = await this.fetchWithTimeout(url, {
       method: "POST",
       headers: {
@@ -851,22 +1015,8 @@ export class SolanaLLMClient {
       body: JSON.stringify(body),
     });
 
-    if (retryResponse.status === 402) {
-      if (await isSafeStaleBlockhashResponse(retryResponse)) {
-        throw new SafeStaleBlockhashError();
-      }
-      throw new PaymentError("Payment was rejected. Check your Solana USDC balance.");
-    }
-
-    if (!retryResponse.ok) {
-      let errorBody: unknown;
-      try { errorBody = await retryResponse.json(); } catch { errorBody = { error: "Request failed" }; }
-      throw new APIError(`API error after payment: ${retryResponse.status}`, retryResponse.status, sanitizeErrorResponse(errorBody));
-    }
-
-    const costUsd = parseFloat(details.amount) / 1e6;
-    this.sessionCalls += 1;
-    this.sessionTotalUsd += costUsd;
+    await this.assertPaid(retryResponse);
+    this.recordSettlement(costUsd);
 
     return retryResponse.json() as Promise<ChatResponse>;
   }
@@ -913,57 +1063,7 @@ export class SolanaLLMClient {
     response: Response,
     forceFreshBlockhash = false
   ): Promise<Record<string, unknown>> {
-    let paymentHeader = response.headers.get("payment-required");
-
-    if (!paymentHeader) {
-      try {
-        const respBody = await response.json() as Record<string, unknown>;
-        if (respBody.accepts || respBody.x402Version) {
-          paymentHeader = btoa(JSON.stringify(respBody));
-        }
-      } catch { /* ignore */ }
-    }
-
-    if (!paymentHeader) {
-      throw new PaymentError("402 response but no payment requirements found");
-    }
-
-    const paymentRequired = parsePaymentRequired(paymentHeader);
-    const details = extractPaymentDetails(paymentRequired, SOLANA_NETWORK);
-
-    if (!details.network?.startsWith("solana:")) {
-      throw new PaymentError(
-        `Expected Solana payment network, got: ${details.network}. Use LLMClient for Base payments.`
-      );
-    }
-
-    const feePayer = (details.extra as { feePayer?: string })?.feePayer;
-    if (!feePayer) throw new PaymentError("Missing feePayer in 402 extra field");
-
-    const fromAddress = await this.getWalletAddress();
-    const secretKey = await solanaKeyToBytes(this.privateKey);
-    const extensions = ((paymentRequired as unknown) as Record<string, unknown>).extensions as Record<string, unknown> | undefined;
-
-    const paymentPayload = await createSolanaPaymentPayload(
-      secretKey,
-      fromAddress,
-      details.recipient,
-      details.amount,
-      feePayer,
-      {
-        resourceUrl: validateResourceUrl(
-          details.resource?.url || url,
-          this.apiUrl
-        ),
-        resourceDescription: details.resource?.description || "BlockRun Solana AI API call",
-        maxTimeoutSeconds: details.maxTimeoutSeconds || 300,
-        extra: details.extra as Record<string, unknown>,
-        extensions,
-        rpcUrl: this.rpcUrl,
-        rpcHeaders: this.rpcHeaders,
-        forceFreshBlockhash,
-      }
-    );
+    const { paymentPayload, costUsd } = await this.signPaymentFrom402(url, response, forceFreshBlockhash);
 
     const retryResponse = await this.fetchWithTimeout(url, {
       method: "POST",
@@ -975,22 +1075,8 @@ export class SolanaLLMClient {
       body: JSON.stringify(body),
     });
 
-    if (retryResponse.status === 402) {
-      if (await isSafeStaleBlockhashResponse(retryResponse)) {
-        throw new SafeStaleBlockhashError();
-      }
-      throw new PaymentError("Payment was rejected. Check your Solana USDC balance.");
-    }
-
-    if (!retryResponse.ok) {
-      let errorBody: unknown;
-      try { errorBody = await retryResponse.json(); } catch { errorBody = { error: "Request failed" }; }
-      throw new APIError(`API error after payment: ${retryResponse.status}`, retryResponse.status, sanitizeErrorResponse(errorBody));
-    }
-
-    const costUsd = parseFloat(details.amount) / 1e6;
-    this.sessionCalls += 1;
-    this.sessionTotalUsd += costUsd;
+    await this.assertPaid(retryResponse);
+    this.recordSettlement(costUsd);
 
     return retryResponse.json() as Promise<Record<string, unknown>>;
   }
@@ -1038,57 +1124,7 @@ export class SolanaLLMClient {
     response: Response,
     forceFreshBlockhash = false
   ): Promise<Record<string, unknown>> {
-    let paymentHeader = response.headers.get("payment-required");
-
-    if (!paymentHeader) {
-      try {
-        const respBody = await response.json() as Record<string, unknown>;
-        if (respBody.accepts || respBody.x402Version) {
-          paymentHeader = btoa(JSON.stringify(respBody));
-        }
-      } catch { /* ignore */ }
-    }
-
-    if (!paymentHeader) {
-      throw new PaymentError("402 response but no payment requirements found");
-    }
-
-    const paymentRequired = parsePaymentRequired(paymentHeader);
-    const details = extractPaymentDetails(paymentRequired, SOLANA_NETWORK);
-
-    if (!details.network?.startsWith("solana:")) {
-      throw new PaymentError(
-        `Expected Solana payment network, got: ${details.network}. Use LLMClient for Base payments.`
-      );
-    }
-
-    const feePayer = (details.extra as { feePayer?: string })?.feePayer;
-    if (!feePayer) throw new PaymentError("Missing feePayer in 402 extra field");
-
-    const fromAddress = await this.getWalletAddress();
-    const secretKey = await solanaKeyToBytes(this.privateKey);
-    const extensions = ((paymentRequired as unknown) as Record<string, unknown>).extensions as Record<string, unknown> | undefined;
-
-    const paymentPayload = await createSolanaPaymentPayload(
-      secretKey,
-      fromAddress,
-      details.recipient,
-      details.amount,
-      feePayer,
-      {
-        resourceUrl: validateResourceUrl(
-          details.resource?.url || url,
-          this.apiUrl
-        ),
-        resourceDescription: details.resource?.description || "BlockRun Solana AI API call",
-        maxTimeoutSeconds: details.maxTimeoutSeconds || 300,
-        extra: details.extra as Record<string, unknown>,
-        extensions,
-        rpcUrl: this.rpcUrl,
-        rpcHeaders: this.rpcHeaders,
-        forceFreshBlockhash,
-      }
-    );
+    const { paymentPayload, costUsd } = await this.signPaymentFrom402(url, response, forceFreshBlockhash);
 
     const query = params ? "?" + new URLSearchParams(params).toString() : "";
     const retryUrl = `${this.apiUrl}${endpoint}${query}`;
@@ -1100,24 +1136,44 @@ export class SolanaLLMClient {
       },
     });
 
-    if (retryResponse.status === 402) {
-      if (await isSafeStaleBlockhashResponse(retryResponse)) {
+    await this.assertPaid(retryResponse);
+    this.recordSettlement(costUsd);
+
+    return retryResponse.json() as Promise<Record<string, unknown>>;
+  }
+
+  /**
+   * Fail a post-payment response, telling a re-signable rejection from a real one.
+   *
+   * A `402` here is not "pay again": it is the gateway refusing the payment we
+   * just signed. Only a rejection the gateway attributes to the VERIFICATION
+   * phase is safe to re-sign — anything settled, or ambiguous about which
+   * phase it failed in, could already have moved USDC, and re-signing it would
+   * pay twice. {@link isSafeStaleBlockhashResponse} is where that judgement
+   * lives.
+   * @param response - the reply to the paid request.
+   * @throws SafeStaleBlockhashError when the caller should re-sign, PaymentError
+   *   when it should not, APIError for any other failure.
+   */
+  private async assertPaid(response: Response): Promise<void> {
+    if (response.status === 402) {
+      if (await isSafeStaleBlockhashResponse(response)) {
         throw new SafeStaleBlockhashError();
       }
       throw new PaymentError("Payment was rejected. Check your Solana USDC balance.");
     }
 
-    if (!retryResponse.ok) {
+    if (!response.ok) {
       let errorBody: unknown;
-      try { errorBody = await retryResponse.json(); } catch { errorBody = { error: "Request failed" }; }
-      throw new APIError(`API error after payment: ${retryResponse.status}`, retryResponse.status, sanitizeErrorResponse(errorBody));
+      try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
+      throw new APIError(`API error after payment: ${response.status}`, response.status, sanitizeErrorResponse(errorBody));
     }
+  }
 
-    const costUsd = parseFloat(details.amount) / 1e6;
+  /** Count one settled x402 payment against the session total. */
+  private recordSettlement(costUsd: number): void {
     this.sessionCalls += 1;
     this.sessionTotalUsd += costUsd;
-
-    return retryResponse.json() as Promise<Record<string, unknown>>;
   }
 
   private async fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {
