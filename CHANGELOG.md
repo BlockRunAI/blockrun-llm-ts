@@ -2,6 +2,12 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.14.3] - 2026-09-05
+
+### Changed
+
+- **Finishes the price removal 3.14.2 started.** That pass swept the tables and doc comments but missed prices living inside README code blocks — 14 Polymarket and Exa examples annotated with `($0.001/request)`, `($0.005/request — tier 2)` and the like — plus the FAQ's "Prices start at $0.0002 per request" and the integration-test cost estimate. Tier labels are kept, since a tier is a stable classification; the rates are gone. Audited: every remaining dollar figure in `README.md` is a `$0` free-tier statement, the "$5 covers thousands of requests" framing, wallet funding guidance, or a sample balance in example output.
+
 ## [3.14.2] - 2026-09-05
 
 ### Changed
