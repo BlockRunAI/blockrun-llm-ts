@@ -32,6 +32,23 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe('account mode across SDK entrypoints', () => {
+  it.each(['walletKey', 'privateKey'] as const)('OpenAI retains explicit %s selection even when blank', field => {
+    vi.stubEnv('BASE_CHAIN_WALLET_KEY', TEST_PRIVATE_KEY);
+    expect(new OpenAI({ [field]: '' }).authMode).toBe('wallet');
+    expect(() => new OpenAI({ [field]: '', apiKey: key })).toThrow('either');
+  });
+  it('does not let a blank walletKey shadow a real privateKey', () => {
+    // `walletKey ?? privateKey` returns the blank string, which is not nullish,
+    // so the real key under the other alias would be dropped and the client
+    // would silently fall back to the wallet env var — a different credential
+    // than the caller handed it.
+    // A different key in the env, so falling back to it is visible as a
+    // different address rather than passing by coincidence.
+    vi.stubEnv('BASE_CHAIN_WALLET_KEY', `0x${'11'.repeat(32)}`);
+    const client = new OpenAI({ walletKey: '', privateKey: TEST_PRIVATE_KEY });
+    expect(client.authMode).toBe('wallet');
+    expect(client.getWalletAddress()).toBe(new OpenAI({ privateKey: TEST_PRIVATE_KEY }).getWalletAddress());
+  });
   it.each(clients)('%s starts without reading or generating a wallet', Client => {
     expect(new Client().authMode).toBe('api-key');
   });
@@ -97,6 +114,24 @@ describe('account mode across SDK entrypoints', () => {
 });
 
 describe('account errors and credential boundaries', () => {
+  it('keeps concurrent account and wallet clients isolated after environment changes', async () => {
+    const account = new LLMClient();
+    const wallet = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
+    const address = wallet.getWalletAddress();
+    vi.stubEnv('BLOCKRUN_API_KEY', 'brk_live_changed_account');
+    vi.stubEnv('BLOCKRUN_API_BASE_URL', 'https://changed.example');
+    await Promise.all([account.chat('openai/gpt-5.2', 'hi'), wallet.chat('openai/gpt-5.2', 'hi')]);
+    const accountCall = fetchMock.mock.calls.find(c => String(c[0]).startsWith('https://api.blockrun.ai/'))!;
+    const walletCall = fetchMock.mock.calls.find(c => String(c[0]).startsWith('https://blockrun.ai/api/'))!;
+    expect(accountCall).toBeDefined();
+    expect(walletCall).toBeDefined();
+    expect(new Headers(accountCall[1].headers).get('authorization')).toBe(`Bearer ${key}`);
+    expect(new Headers(accountCall[1].headers).has('payment-signature')).toBe(false);
+    expect(new Headers(walletCall[1].headers).has('authorization')).toBe(false);
+    expect(wallet.getWalletAddress()).toBe(address);
+    expect(account.authMode).toBe('api-key');
+    expect(wallet.authMode).toBe('wallet');
+  });
   it.each([401, 402, 429])('preserves %s without signing or replaying', async status => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 'account_error', message: `rejected ${key}`, type: 'billing_error' } }), { status, headers: { 'retry-after': '12', 'payment-required': 'never-sign-this' } }));
     const error = await new LLMClient().chat('openai/gpt-5.2', 'hi').catch(e => e);

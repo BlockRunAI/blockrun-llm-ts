@@ -1,12 +1,12 @@
 import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js";
 /**
- * BlockRun Surf Client — pay-per-call crypto data via x402 micropayments.
+ * BlockRun Surf Client — pay-per-call crypto data via account API keys or x402 micropayments.
  *
  * Surf aggregates 84+ endpoints across CEX/DEX market data, on-chain SQL,
  * wallet intelligence, prediction markets, social analytics, and news under
  * a single OpenAPI surface mounted at `/api/v1/surf/*`.
  *
- * Pricing tiers (flat per-call, USDC on Base):
+ * Service tiers (account credits or wallet payments; see the live gateway price):
  *   Tier 1 — (prices, rankings, lists, news, simple reads)
  *   Tier 2 — (order books, candles, search, wallet details)
  *   Tier 3 — (on-chain SQL, schema introspection, chat)
@@ -20,7 +20,7 @@ import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js"
  * Usage:
  *   import { SurfClient } from "@blockrun/llm";
  *
- *   const surf = new SurfClient({ privateKey: "0x..." });
+ *   const surf = new SurfClient(); // BLOCKRUN_API_KEY, or explicit wallet credentials
  *
  *   // Tier 1 — token price
  *   const btc = await surf.get("/market/price", { symbol: "BTC" });

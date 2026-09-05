@@ -14,6 +14,22 @@ const TRANSIENT_STATUS = new Set([502, 503, 504, 522, 524]);
 const TRANSIENT_RETRIES = 2;
 const TRANSIENT_BACKOFF_MS = 1_000;
 
+function retryDelay(ms: number, signal?: AbortSignal | null): Promise<void> {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export const API_KEY_URL = "https://api.blockrun.ai";
 export const PORTAL_URL = "https://user.blockrun.ai";
 
@@ -80,6 +96,7 @@ export class ApiKeyAuth {
     // the wallet path can retry freely because its first POST is the unpaid 402.
     const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
     const retries = method === "GET" || method === "HEAD" ? TRANSIENT_RETRIES : 0;
+    const signal = init?.signal ?? request?.signal;
     let response: Response;
     for (let attempt = 0; ; attempt++) {
       // Never follow redirects with an account credential.
@@ -87,7 +104,8 @@ export class ApiKeyAuth {
         ...init, headers, redirect: "error",
       });
       if (attempt >= retries || !TRANSIENT_STATUS.has(response.status)) break;
-      await new Promise(resolve => setTimeout(resolve, TRANSIENT_BACKOFF_MS * (attempt + 1)));
+      await response.body?.cancel();
+      await retryDelay(TRANSIENT_BACKOFF_MS * (attempt + 1), signal);
     }
     if (raiseErrors && !response.ok) {
       let body: unknown;

@@ -16,6 +16,7 @@ pnpm run dev             # Watch mode
 pnpm test                # Unit tests (vitest)
 pnpm run typecheck       # Type checking
 pnpm run lint            # Linting
+pnpm run test:package    # Packed install, strict consumer types, ESM/CJS (uses npm registry)
 ```
 
 ## Code Standards

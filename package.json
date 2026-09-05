@@ -22,7 +22,8 @@
     "dev": "tsup --watch",
     "test": "vitest",
     "lint": "eslint src/",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:package": "npm run build && node scripts/check-package.mjs"
   },
   "keywords": [
     "llm",
@@ -52,9 +53,7 @@
   },
   "dependencies": {
     "bs58": "^6.0.0",
-    "viem": "^2.56.3"
-  },
-  "optionalDependencies": {
+    "viem": "^2.56.3",
     "@anthropic-ai/sdk": "^0.123.0"
   },
   "devDependencies": {

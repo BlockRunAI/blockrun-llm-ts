@@ -38,6 +38,17 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      # Installs the packed tarball into a throwaway consumer and compiles the
+      # public types with --omit=optional. This is the check that was missing
+      # when 3.14.3 shipped a dist/index.d.ts importing @anthropic-ai/sdk while
+      # that package was an optionalDependency: every other job here resolves
+      # types from the workspace, where the dep is always present, so nothing
+      # saw it. One Node leg — it packs and installs from the registry, and the
+      # failure it catches is version-independent.
+      - name: Packed install
+        if: matrix.node-version == 22
+        run: pnpm run test:package
+
       # Fails when a number in the docs disagrees with brand-numbers.json.
       # Offline by design: it reads the committed snapshot and never fetches, so
       # a blockrun.ai deploy in progress cannot fail this repo's CI.
