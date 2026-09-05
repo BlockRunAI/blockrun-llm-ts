@@ -14,12 +14,13 @@ paid with an API key or per-request USDC on Solana or Base. No vendor lock-in.
 [![Node](https://img.shields.io/badge/Node-%E2%89%A520-brightgreen?style=flat-square&logo=node.js&logoColor=white)](package.json)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript&logoColor=white)](tsconfig.json)
 
+[![API Key](https://img.shields.io/badge/API%20Key-user.blockrun.ai-2ea44f?style=flat-square)](https://user.blockrun.ai)
 [![Solana](https://img.shields.io/badge/Solana-USDC-9945FF?style=flat-square&logo=solana&logoColor=white)](https://solana.com)
 [![Base Network](https://img.shields.io/badge/Base-USDC-0052FF?style=flat-square&logo=coinbase&logoColor=white)](https://base.org)
 [![x402](https://img.shields.io/badge/x402-micropayments-orange?style=flat-square)](https://x402.org)
 [![Telegram](https://img.shields.io/badge/Telegram-Community-26A5E4?style=flat-square&logo=telegram)](https://t.me/blockrunAI)
 
-[Get an API key](https://user.blockrun.ai) · [Website](https://blockrun.ai) · [Models & Pricing](https://blockrun.ai/models) · [ClawRouter](https://github.com/BlockRunAI/ClawRouter) · [Python SDK](https://github.com/BlockRunAI/blockrun-llm) · [Telegram](https://t.me/blockrunAI)
+[Sign up / Get an API key](https://user.blockrun.ai) · [Website](https://blockrun.ai) · [Models & Pricing](https://blockrun.ai/models) · [ClawRouter](https://github.com/BlockRunAI/ClawRouter) · [Python SDK](https://github.com/BlockRunAI/blockrun-llm) · [Telegram](https://t.me/blockrunAI)
 
 </div>
 
@@ -28,6 +29,8 @@ paid with an API key or per-request USDC on Solana or Base. No vendor lock-in.
 ```typescript
 import { LLMClient } from '@blockrun/llm';
 
+// Reads BLOCKRUN_API_KEY (sign up at https://user.blockrun.ai),
+// or a wallet key if you'd rather pay per request in USDC.
 const client = new LLMClient();
 
 const r = await client.smartChat('Prove step by step that the sum of two odd integers is even.');
@@ -42,7 +45,7 @@ console.log(r.response);         // the proof
 
 - 🧠 **Smart routing that pays for itself** — the bundled [Router Core V3](https://github.com/BlockRunAI/router-core) engine (shared with [ClawRouter](https://github.com/BlockRunAI/ClawRouter)) classifies every request locally in <1ms across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions and routes to the cheapest capable model. The main event.
 - 🆓 **<!-- br:models.free -->7<!-- /br:models.free --> genuinely free models** — $0 in and out, incl. two 1M-context Nemotrons, a multimodal one, and free coding models from Cohere and Poolside. No rate-limit gimmicks.
-- 🔐 **Two ways to connect** — use a BlockRun API key with account credit, or a wallet signature with x402 payments.
+- 🔐 **Two ways to connect** — a **BlockRun API key** billed against account credit ([sign up at user.blockrun.ai](https://user.blockrun.ai), [create a key](https://user.blockrun.ai/dashboard/keys), [add credit](https://user.blockrun.ai/dashboard/credits)), or a wallet signature with x402 micropayments and no account at all. Same code either way.
 - 💸 **Pay per request in USDC** — x402 micropayments on Solana or Base. $5 covers thousands of requests; agents can pay their own way.
 - 🛡️ **Automatic failover** — transient errors (timeouts, 429, 5xx) walk the router's ranked fallback chain instead of failing your request.
 - ⚡ **Streaming, OpenAI & Anthropic compat** — drop-in `chat.completions` / `messages` layers, SSE streaming, strict TypeScript.
@@ -53,11 +56,11 @@ console.log(r.response);         // the proof
 |                    | OpenAI SDK     | OpenRouter        | LiteLLM          | **@blockrun/llm**                                                       |
 | ------------------ | -------------- | ----------------- | ---------------- | ----------------------------------------------------------------------- |
 | **Cost routing**   | ✗ one vendor   | Manual selection  | Manual selection | **Automatic — <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->% cheaper** |
-| **Models**         | GPT only       | 200+              | 100+ (BYO keys)  | **<!-- br:models.chatVisible -->74<!-- /br:models.chatVisible -->, one wallet** |
+| **Models**         | GPT only       | 200+              | 100+ (BYO keys)  | **<!-- br:models.chatVisible -->74<!-- /br:models.chatVisible -->, one credential** |
 | **Free tier**      | ✗              | Rate-limited      | ✗                | **<!-- br:models.free -->7<!-- /br:models.free --> models, no signup**  |
-| **Auth**           | API key        | Account + API key | Your API keys    | **Wallet signature**                                                    |
-| **Payment**        | Card + invoice | Credit card       | BYO keys         | **USDC per-request**                                                    |
-| **Agent-ready**    | ✗              | ✗                 | ✗                | **✓ — agents fund their own wallet**                                    |
+| **Auth**           | API key        | Account + API key | Your API keys    | **API key *or* wallet signature**                                       |
+| **Payment**        | Card + invoice | Credit card       | BYO keys         | **Account credit or USDC per-request**                                  |
+| **Agent-ready**    | ✗              | ✗                 | ✗                | **✓ — one key, or agents fund their own wallet**                        |
 
 ## Installation
 
