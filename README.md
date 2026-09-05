@@ -65,7 +65,7 @@ console.log(r.response);         // the proof
 ## Installation
 
 ```bash
-npm install @blockrun/llm   # Base / EVM payments — smart routing included, nothing else needed
+npm install @blockrun/llm   # Account API keys or Base wallets; smart routing included
 ```
 
 <details>
@@ -97,6 +97,8 @@ without them throws an error naming the exact install command.
 **Protocol:** x402 v2 (CDP Facilitator)
 
 </details>
+
+The Anthropic SDK is a runtime dependency because the public compatibility wrapper exposes its types. Solana signing dependencies remain optional and are unnecessary for account billing.
 
 ## Quick Start: API Key
 
@@ -130,9 +132,14 @@ wallet mode even when `BLOCKRUN_API_KEY` is set; passing both explicit credentia
 is an error. With no explicit credential, `BLOCKRUN_API_KEY` beats the wallet key
 env vars — a process holding both runs in account mode. Invalid or exhausted API keys never fall back to wallet payments.
 Errors preserve `statusCode`, account error `response.code`, and `retryAfter`.
-Account credentials are restricted to the configured origin, including polling.
+Account credentials are restricted to the configured origin, including polling. Account POSTs are not automatically replayed, including through the Anthropic wrapper. GET/HEAD requests can retry temporary gateway errors; accepted jobs keep polling the same job within the original timeout. A 429 returns `retryAfter` to the caller.
 
-Use the [account dashboard](https://user.blockrun.ai/dashboard) for account usage.
+Check [Activity](https://user.blockrun.ai/dashboard/activity) for account usage and charges. Chat uses token usage; media and data can use duration, image, or per-request units. When adding credit, the checkout shows the credit amount and total card charge, including any processing fee. Keep API keys in server or local environment variables, never in browser code or logs.
+
+For asynchronous jobs, retain the complete returned `poll_url`, including its query parameters. If polling times out, check the original job and Activity before submitting again.
+
+To switch back to a wallet, unset `BLOCKRUN_API_KEY` and create a new wallet client, or pass an explicit `privateKey` to the appropriate client. Existing clients retain their original credentials; changing a wallet chain does not change account billing.
+
 `getSpending()` reports x402 settlements only and throws in account mode; wallet
 address/balance helpers require a wallet. Account credit does not sign trades or
 transfer wallet funds. Service availability depends on the account gateway and model.
@@ -1017,8 +1024,7 @@ Generic escape hatches: `client.defi(path, params)`, `client.dex(path, params, b
 `RpcClient` wraps `POST /v1/rpc/{network}` — standard JSON-RPC 2.0 access to
 <!-- br:chains.rpc -->40<!-- /br:chains.rpc --> chains through one endpoint (Ethereum, Base, Solana, Polygon, BSC,
 Arbitrum, Optimism, Avalanche, Bitcoin, Sui, and more; powered by Tatum's RPC
-gateway). No API key, no per-chain endpoints: one flat per-call rate in
-USDC; a JSON-RPC batch charges per element.
+gateway). Use account credits or the selected x402 wallet; no separate Tatum key is needed. A JSON-RPC batch is priced per element.
 
 ```ts
 import { RpcClient } from '@blockrun/llm';
@@ -1278,7 +1284,7 @@ const [gpt, claude, gemini] = await Promise.all([
 
 ## Prediction Markets (Powered by Predexon)
 
-Access real-time prediction market data from Polymarket, Kalshi, and Binance Futures via [Predexon](https://predexon.com). No API keys needed — pay-per-request via x402.
+Access real-time prediction market data from Polymarket, Kalshi, and Binance Futures via [Predexon](https://predexon.com). Use a BlockRun account API key or x402 wallet payments; no separate Predexon key is needed.
 
 ### Polymarket
 
@@ -1339,7 +1345,7 @@ Works on both `LLMClient` (Base) and `SolanaLLMClient`.
 
 ## Exa Web Search (Powered by Exa)
 
-Access [Exa](https://exa.ai)'s neural web search via x402. No API keys needed — pay-per-request. Available on **`LLMClient` (Base USDC)** and `SolanaLLMClient` (Solana USDC). Use Base as the primary path; the Solana gateway is awaiting `EXA_API_KEY` provisioning.
+Access [Exa](https://exa.ai)'s neural web search using account credits or x402 wallet payments; no separate Exa key is needed. Use `SolanaLLMClient` for a Solana wallet or `LLMClient` for a Base wallet. Availability depends on the selected gateway.
 
 | Method | Description |
 |---|---|

@@ -61,6 +61,8 @@ export class AnthropicClient {
         baseURL: this._apiUrl,
         apiKey: 'blockrun',
         fetch: this._x402Fetch.bind(this),
+        // Account POSTs may already be billed when an upstream error arrives.
+        ...(this.apiAuth ? { maxRetries: 0 } : {}),
       });
       return this._client;
     })();
@@ -74,6 +76,10 @@ export class AnthropicClient {
   ): Promise<Response> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this._timeout);
+    const callerSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+    const onAbort = () => controller.abort(callerSignal?.reason);
+    callerSignal?.addEventListener('abort', onAbort, { once: true });
+    if (callerSignal?.aborted) onAbort();
 
     try {
       const mergedInit = { ...init, signal: controller.signal };
@@ -146,6 +152,7 @@ export class AnthropicClient {
 
       return response;
     } finally {
+      callerSignal?.removeEventListener('abort', onAbort);
       clearTimeout(timeoutId);
     }
   }

@@ -283,7 +283,9 @@ export class OpenAI {
   private client: LLMClient;
 
   constructor(options: OpenAIClientOptions = {}) {
-    const privateKey = options.walletKey || options.privateKey;
+    // Preserve an explicit wallet selection, including the legacy empty-key
+    // convention that loads the wallet from the environment.
+    const privateKey = options.walletKey ?? options.privateKey;
     const apiUrl = resolveApiKeyAuth({ apiKey: options.apiKey, privateKey, apiUrl: options.baseURL })?.apiUrl
       ?? options.baseURL ?? "https://blockrun.ai/api";
     const timeout = options.timeout ?? DEFAULT_TIMEOUT;
