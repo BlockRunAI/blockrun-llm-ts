@@ -1,7 +1,17 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+const testHome = await vi.hoisted(async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  return fs.mkdtempSync(os.tmpdir() + '/blockrun-test-');
+});
+vi.mock('os', async () => ({
+  ...await vi.importActual<typeof import('os')>('os'),
+  homedir: () => testHome,
+}));
+afterAll(() => fs.rmSync(testHome, { recursive: true, force: true }));
 import { logCost, getCostSummary } from '../../src/cost-log.js';
 
 // `src/cost-log.ts` was rewritten to share the on-wire schema with
@@ -10,24 +20,8 @@ import { logCost, getCostSummary } from '../../src/cost-log.js';
 // previous `timestamp` / `costUsd` / `inputTokens`. These tests track
 // the current shape.
 const COST_LOG = path.join(os.homedir(), '.blockrun', 'cost_log.jsonl');
-const BACKUP = COST_LOG + '.bak';
-
 describe('Cost Log Module', () => {
-  beforeEach(() => {
-    // Move any real on-disk log out of the way so tests run against an
-    // empty file and don't permanently destroy the user's ledger.
-    if (fs.existsSync(COST_LOG)) {
-      fs.copyFileSync(COST_LOG, BACKUP);
-      fs.unlinkSync(COST_LOG);
-    }
-  });
-
-  afterEach(() => {
-    try { fs.unlinkSync(COST_LOG); } catch { /* ignore */ }
-    if (fs.existsSync(BACKUP)) {
-      fs.renameSync(BACKUP, COST_LOG);
-    }
-  });
+  beforeEach(() => fs.rmSync(path.dirname(COST_LOG), { recursive: true, force: true }));
 
   it('should log a cost entry', () => {
     logCost({

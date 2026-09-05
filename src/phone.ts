@@ -1,3 +1,4 @@
+import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js";
 /**
  * BlockRun Phone Client — Twilio-backed phone lookup + number provisioning via x402.
  *
@@ -93,29 +94,37 @@ function requireE164(value: string | undefined | null): string {
  * and provisioning of the caller-ID numbers required by VoiceClient.call().
  */
 export class PhoneClient {
-  private account: Account;
-  private privateKey: `0x${string}`;
+  private _account?: Account;
+  private get account(): Account { return requireWallet(this._account); }
+  private apiAuth?: ApiKeyAuth;
+  /** Active billing mode. */
+  get authMode(): "api-key" | "wallet" { return this.apiAuth ? "api-key" : "wallet"; }
+  private _privateKey?: `0x${string}`;
+  private get privateKey(): `0x${string}` { return requireWallet(this._privateKey); }
   private apiUrl: string;
   private timeout: number;
   private sessionTotalUsd = 0;
   private sessionCalls = 0;
 
   constructor(options: PhoneClientOptions = {}) {
-    const envKey =
-      typeof process !== "undefined" && process.env
-        ? process.env.BLOCKRUN_WALLET_KEY || process.env.BASE_CHAIN_WALLET_KEY
-        : undefined;
-    const privateKey = options.privateKey || envKey;
-    if (!privateKey) {
-      throw new Error(
-        "Private key required. Pass privateKey in options or set BLOCKRUN_WALLET_KEY environment variable."
-      );
+    this.apiAuth = resolveApiKeyAuth(options);
+    if (!this.apiAuth) {
+      const envKey =
+        typeof process !== "undefined" && process.env
+          ? process.env.BLOCKRUN_WALLET_KEY || process.env.BASE_CHAIN_WALLET_KEY
+          : undefined;
+      const privateKey = options.privateKey || envKey;
+      if (!privateKey) {
+        throw new Error(
+          "Private key required. Pass privateKey in options or set BLOCKRUN_WALLET_KEY environment variable."
+        );
+      }
+      validatePrivateKey(privateKey);
+      this._privateKey = privateKey as `0x${string}`;
+      this._account = privateKeyToAccount(privateKey as `0x${string}`);
     }
-    validatePrivateKey(privateKey);
-    this.privateKey = privateKey as `0x${string}`;
-    this.account = privateKeyToAccount(privateKey as `0x${string}`);
 
-    const apiUrl = options.apiUrl || DEFAULT_API_URL;
+    const apiUrl = this.apiAuth?.apiUrl || options.apiUrl || DEFAULT_API_URL;
     validateApiUrl(apiUrl);
     this.apiUrl = apiUrl.replace(/\/$/, "");
     this.timeout = options.timeout || DEFAULT_TIMEOUT;
@@ -128,6 +137,7 @@ export class PhoneClient {
 
   /** Session-cumulative USD spend + call count across this client instance. */
   getSpending(): Spending {
+    if (this.apiAuth) throw new Error("Account usage is available at https://user.blockrun.ai/dashboard; getSpending() tracks x402 settlements only.");
     return { totalUsd: this.sessionTotalUsd, calls: this.sessionCalls };
   }
 
@@ -314,7 +324,7 @@ export class PhoneClient {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
     try {
-      return await fetch(url, { ...init, signal: controller.signal });
+      return await (this.apiAuth ? this.apiAuth.fetch.bind(this.apiAuth) : fetch)(url, { ...init, signal: controller.signal });
     } finally {
       clearTimeout(timeoutId);
     }

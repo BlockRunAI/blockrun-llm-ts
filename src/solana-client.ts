@@ -1,3 +1,4 @@
+import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth, type ApiKeyOptions } from "./api-key.js";
 /**
  * BlockRun Solana LLM Client.
  *
@@ -169,7 +170,7 @@ async function waitForStaleRetry(attempt: number): Promise<void> {
  */
 const DEFAULT_SOLANA_RPC_URL = "https://sol.blockrun.ai/api/v1/solana/rpc";
 
-export interface SolanaLLMClientOptions {
+export interface SolanaLLMClientOptions extends ApiKeyOptions {
   /** bs58-encoded Solana secret key (64 bytes). Optional if SOLANA_WALLET_KEY env var is set. */
   privateKey?: string;
   /** API endpoint URL (default: https://sol.blockrun.ai/api) */
@@ -231,7 +232,10 @@ function resolveRpcConfig(
 export class SolanaLLMClient {
   static readonly SOLANA_API_URL = SOLANA_API_URL;
 
-  private privateKey: string;
+  private apiAuth?: ApiKeyAuth;
+  get authMode(): "api-key" | "wallet" { return this.apiAuth ? "api-key" : "wallet"; }
+  private _privateKey?: string;
+  private get privateKey(): string { return requireWallet(this._privateKey); }
   private apiUrl: string;
   private rpcUrl: string;
   private rpcHeaders?: Record<string, string>;
@@ -243,20 +247,23 @@ export class SolanaLLMClient {
   private modelPricingPromise: Promise<Map<string, ModelPricing>> | null = null;
 
   constructor(options: SolanaLLMClientOptions = {}) {
-    const envKey = typeof process !== "undefined" && process.env
-      ? process.env.SOLANA_WALLET_KEY
-      : undefined;
-    const privateKey = options.privateKey || envKey;
+    this.apiAuth = resolveApiKeyAuth(options);
+    if (!this.apiAuth) {
+      const envKey = typeof process !== "undefined" && process.env
+        ? process.env.SOLANA_WALLET_KEY
+        : undefined;
+      const privateKey = options.privateKey || envKey;
 
-    if (!privateKey) {
-      throw new Error(
-        "Private key required. Pass privateKey in options or set SOLANA_WALLET_KEY environment variable."
-      );
+      if (!privateKey) {
+        throw new Error(
+          "Private key required. Pass privateKey in options or set SOLANA_WALLET_KEY environment variable."
+        );
+      }
+
+      this._privateKey = privateKey;
+
     }
-
-    this.privateKey = privateKey;
-
-    const apiUrl = options.apiUrl || SOLANA_API_URL;
+    const apiUrl = this.apiAuth?.apiUrl || options.apiUrl || SOLANA_API_URL;
     validateApiUrl(apiUrl);
     this.apiUrl = apiUrl.replace(/\/$/, "");
 
@@ -395,7 +402,7 @@ export class SolanaLLMClient {
       {
         routingProfile: options?.routingProfile,
         requiresStructuredOutput: options?.responseFormat !== undefined,
-        minimumPaymentUsd: SOLANA_MINIMUM_PAYMENT_USD,
+        minimumPaymentUsd: this.apiAuth ? 0 : SOLANA_MINIMUM_PAYMENT_USD,
       },
     );
   }
@@ -429,7 +436,7 @@ export class SolanaLLMClient {
         toolChoice: options.toolChoice,
         conversationChars,
         hasVision,
-        minimumPaymentUsd: SOLANA_MINIMUM_PAYMENT_USD,
+        minimumPaymentUsd: this.apiAuth ? 0 : SOLANA_MINIMUM_PAYMENT_USD,
       },
     );
     const response = await this.chatCompletion(decision.model, messages, {
@@ -732,6 +739,7 @@ export class SolanaLLMClient {
 
   /** Get session spending. */
   getSpending(): Spending {
+    if (this.apiAuth) throw new Error("Account usage is available at https://user.blockrun.ai/dashboard; getSpending() tracks x402 settlements only.");
     return { totalUsd: this.sessionTotalUsd, calls: this.sessionCalls };
   }
 
@@ -894,6 +902,7 @@ export class SolanaLLMClient {
         throw new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(errorBody));
       }
 
+      if (this.apiAuth && endpoint.startsWith("/v1/images/")) return this.apiAuth.poll<Record<string, unknown>>(response, this.timeout, 2_000);
       return response.json() as Promise<Record<string, unknown>>;
     }
   }
@@ -1115,7 +1124,7 @@ export class SolanaLLMClient {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
     try {
-      return await fetch(url, { ...options, signal: controller.signal });
+      return await (this.apiAuth ? this.apiAuth.fetch.bind(this.apiAuth) : fetch)(url, { ...options, signal: controller.signal });
     } finally {
       clearTimeout(timeoutId);
     }
