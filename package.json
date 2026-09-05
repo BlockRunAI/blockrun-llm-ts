@@ -2,7 +2,7 @@
   "name": "@blockrun/llm",
   "version": "3.14.0",
   "type": "module",
-  "description": "BlockRun SDK - AI chat, media and tools with API key account billing or x402 USDC on Solana and Base",
+  "description": "TypeScript SDK for BlockRun - every frontier model behind one OpenAI-compatible client. Pay with a BlockRun API key or per-call in USDC. Smart routing picks the cheapest capable model. No rate limits.",
   "main": "dist/index.cjs",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -27,6 +27,9 @@
   "keywords": [
     "llm",
     "ai",
+    "api-key",
+    "openai-compatible",
+    "smart-routing",
     "x402",
     "base",
     "solana",
