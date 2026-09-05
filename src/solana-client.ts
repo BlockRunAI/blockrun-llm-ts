@@ -553,7 +553,7 @@ export class SolanaLLMClient {
   }
 
   /**
-   * Neural and keyword web search via Exa (Solana payment, $0.01/request).
+   * Neural and keyword web search via Exa (Solana payment).
    *
    * @example
    * const results = await client.exaSearch("latest AI papers", { numResults: 5 });
@@ -563,7 +563,7 @@ export class SolanaLLMClient {
   }
 
   /**
-   * Find pages semantically similar to a given URL via Exa (Solana payment, $0.01/request).
+   * Find pages semantically similar to a given URL via Exa (Solana payment).
    *
    * @example
    * const results = await client.exaFindSimilar("https://openai.com/research/gpt-4", { numResults: 5 });
@@ -573,7 +573,7 @@ export class SolanaLLMClient {
   }
 
   /**
-   * Extract full text content from URLs via Exa (Solana payment, $0.002/URL).
+   * Extract full text content from URLs via Exa (Solana payment).
    *
    * @example
    * const data = await client.exaContents(["https://arxiv.org/abs/2303.08774"]);
@@ -583,7 +583,7 @@ export class SolanaLLMClient {
   }
 
   /**
-   * AI-generated answer grounded in live web search via Exa (Solana payment, $0.01/request).
+   * AI-generated answer grounded in live web search via Exa (Solana payment).
    *
    * @example
    * const answer = await client.exaAnswer("What is the current state of AI safety research?");
@@ -598,8 +598,8 @@ export class SolanaLLMClient {
 
   /**
    * Query DefiLlama DeFi data (GET passthrough). Powered by DefiLlama.
-   * $0.005/call for protocols / protocol/{slug} / chains / yields;
-   * $0.001/call for prices/{coins}.
+   * for protocols / protocol/{slug} / chains / yields;
+   * for prices/{coins}.
    *
    * @param path - e.g. "protocols", "protocol/aave", "chains", "yields",
    *               "prices/coingecko:bitcoin,base:0x..."
@@ -609,27 +609,27 @@ export class SolanaLLMClient {
     return this.getWithPaymentRaw(`/v1/defillama/${path}`, params);
   }
 
-  /** All DeFi protocols with TVL ($0.005/call). */
+  /** All DeFi protocols with TVL. */
   async defiProtocols(): Promise<Record<string, unknown>> {
     return this.defi("protocols");
   }
 
-  /** Single protocol details + historical TVL ($0.005/call). */
+  /** Single protocol details + historical TVL. */
   async defiProtocol(slug: string): Promise<Record<string, unknown>> {
     return this.defi(`protocol/${slug}`);
   }
 
-  /** Current TVL of every chain ($0.005/call). */
+  /** Current TVL of every chain. */
   async defiChains(): Promise<Record<string, unknown>> {
     return this.defi("chains");
   }
 
-  /** Yield pools with APY/TVL ($0.005/call). */
+  /** Yield pools with APY/TVL. */
   async defiYields(params?: Record<string, string>): Promise<Record<string, unknown>> {
     return this.defi("yields", params);
   }
 
-  /** Token price lookup ($0.001/call). Coins like "coingecko:bitcoin" or "{chain}:{address}". */
+  /** Token price lookup. Coins like "coingecko:bitcoin" or "{chain}:{address}". */
   async defiPrices(coins: string | string[]): Promise<Record<string, unknown>> {
     const joined = Array.isArray(coins) ? coins.join(",") : coins;
     return this.defi(`prices/${joined}`);
@@ -705,20 +705,20 @@ export class SolanaLLMClient {
   /**
    * Call the Modal sandbox compute API (POST passthrough).
    *
-   * @param path - "sandbox/create" ($0.01 CPU / $0.05 GPU), "sandbox/exec",
-   *               "sandbox/status", "sandbox/terminate" ($0.001 each)
+   * @param path - "sandbox/create" (CPU / GPU tiers), "sandbox/exec",
+   *               "sandbox/status", "sandbox/terminate"
    * @param body - JSON body for the endpoint
    */
   async modal(path: string, body?: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.requestWithPaymentRaw(`/v1/modal/${path}`, body ?? {});
   }
 
-  /** Create a sandboxed compute environment ($0.01 CPU / $0.05 GPU). */
+  /** Create a sandboxed compute environment (CPU / GPU tiers). */
   async modalSandboxCreate(body?: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.modal("sandbox/create", body);
   }
 
-  /** Execute a command in a sandbox; returns stdout/stderr ($0.001). */
+  /** Execute a command in a sandbox; returns stdout/stderr. */
   async modalSandboxExec(
     sandboxId: string,
     command: string[],
@@ -727,12 +727,12 @@ export class SolanaLLMClient {
     return this.modal("sandbox/exec", { sandbox_id: sandboxId, command, ...extra });
   }
 
-  /** Check a sandbox's status ($0.001). */
+  /** Check a sandbox's status. */
   async modalSandboxStatus(sandboxId: string): Promise<Record<string, unknown>> {
     return this.modal("sandbox/status", { sandbox_id: sandboxId });
   }
 
-  /** Terminate a sandbox ($0.001). */
+  /** Terminate a sandbox. */
   async modalSandboxTerminate(sandboxId: string): Promise<Record<string, unknown>> {
     return this.modal("sandbox/terminate", { sandbox_id: sandboxId });
   }

@@ -3,7 +3,7 @@ import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js"
  * BlockRun Search Client - Standalone Grok Live Search via x402 micropayments.
  *
  * Backend endpoint: POST /api/v1/search
- * Pricing: $0.025/source + margin (default 10 sources ≈ $0.26).
+ * Pricing: per source plus margin — see https://blockrun.ai/models.
  *
  * Usage:
  *   import { SearchClient } from "@blockrun/llm";

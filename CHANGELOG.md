@@ -2,6 +2,14 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.14.2] - 2026-09-05
+
+### Changed
+
+- **Prices are no longer written down in this repo.** They change, and a number copied into a README or a TSDoc comment is wrong shortly after it lands — the image prices sitting in these docs were the pre-margin catalog values, which is not what anyone was ever charged. Removed 95 hardcoded prices from `README.md` (17 tables lost their price column) and 88 from doc comments across 13 source files. The source-comment ones mattered most: TSDoc ships into `dist/index.d.ts`, so 59 stale prices were reaching users on IDE hover.
+
+  Live rates now come from one place: [blockrun.ai/models](https://blockrun.ai/models), or `client.listModels()` / `client.listImageModels()` at runtime, which return exactly what the gateway charges. Model tables keep their ids, context windows and capability notes — only the price columns are gone. `$0` free-tier statements stay, since those do not drift.
+
 ## [3.14.1] - 2026-09-05
 
 ### Fixed

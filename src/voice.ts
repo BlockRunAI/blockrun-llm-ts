@@ -17,7 +17,7 @@ import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js"
  *
  *   const client = new VoiceClient({ privateKey: '0x...' });
  *
- *   // Initiate a call (paid, $0.54)
+ *   // Initiate a call
  *   const result = await client.call({
  *     to: '+14155552671',
  *     task: 'You are a friendly assistant calling to confirm a 3pm dentist appointment.',
@@ -63,7 +63,7 @@ const VALID_MODELS = new Set(["base", "enhanced", "turbo"]);
  * Initiates AI-powered outbound phone calls with automatic x402 micropayments
  * on Base chain.
  *
- * Pricing: $0.54 per call (regardless of duration up to max_duration).
+ * Pricing: per call (regardless of duration up to max_duration).
  * Status polling is free.
  */
 export class VoiceClient {
@@ -109,7 +109,7 @@ export class VoiceClient {
   /**
    * Initiate an AI-powered outbound phone call.
    *
-   * Pricing: $0.54 per call. Returns immediately once the call is queued —
+   * Pricing: per call. Returns immediately once the call is queued —
    * poll getStatus() for transcript and recording.
    *
    * @example

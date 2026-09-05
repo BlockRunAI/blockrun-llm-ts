@@ -29,14 +29,14 @@ import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js"
  *   // Non-EVM chains speak their native JSON-RPC
  *   const slot = await client.call('solana', 'getSlot');
  *
- *   // Batch: one payment, per-element pricing ($0.002 x N)
+ *   // Batch: one payment, per-element pricing (rate x N)
  *   const out = await client.batch('polygon', [
  *     { method: 'eth_blockNumber' },
  *     { method: 'eth_gasPrice' },
  *   ]);
  *
  * Pricing:
- *   Flat $0.002 per JSON-RPC call; a batch charges per element.
+ *   Flat per JSON-RPC call; a batch charges per element.
  *
  * Networks:
  *   40 curated chains (see SUPPORTED_NETWORKS) plus common aliases
@@ -165,7 +165,7 @@ export const NETWORK_ALIASES: Record<string, string> = {
  * Standard JSON-RPC 2.0 access to 40+ chains through BlockRun's Tatum
  * gateway with automatic x402 micropayments on Base chain.
  *
- * Flat $0.002 per call; a JSON-RPC batch charges per element.
+ * Flat per call; a JSON-RPC batch charges per element.
  */
 export class RpcClient {
   private _account?: Account;
@@ -208,7 +208,7 @@ export class RpcClient {
   }
 
   /**
-   * Make a single JSON-RPC 2.0 call. Flat $0.002.
+   * Make a single JSON-RPC 2.0 call. Flat per-call rate.
    *
    * @param network - Chain name (e.g. "ethereum", "base", "solana") or a
    *                  common alias ("eth", "sol", "matic", ...). See
@@ -237,7 +237,7 @@ export class RpcClient {
   }
 
   /**
-   * Make a JSON-RPC 2.0 batch call. Priced per element ($0.002 x N).
+   * Make a JSON-RPC 2.0 batch call. Priced per element (rate x N).
    *
    * @param network - Chain name or alias (see {@link call}).
    * @param requests - Requests, each with a `method` and optional
@@ -365,7 +365,7 @@ export class RpcClient {
     }
 
     // Track spending — the quote comes from the 402 requirements
-    // ($0.002 x batch size).
+    // (per-element rate x batch size).
     this.sessionCalls++;
     const paidUsd = Number(details.amount) / 1_000_000; // USDC has 6 decimals
     if (Number.isFinite(paidUsd)) this.sessionTotalUsd += paidUsd;

@@ -3,11 +3,11 @@ import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js"
  * BlockRun Phone Client — Twilio-backed phone lookup + number provisioning via x402.
  *
  * Endpoints (all under /v1/phone/...):
- *   POST /lookup            $0.01    Carrier + line-type lookup
- *   POST /lookup/fraud      $0.05    Carrier + SIM-swap / call-forwarding signals
- *   POST /numbers/buy       $5.00    Provision a US/CA number (30-day lease, bound to wallet)
- *   POST /numbers/renew     $5.00    Extend an existing number by 30 days
- *   POST /numbers/list      $0.001   List the wallet's active numbers
+ *   POST /lookup            Carrier + line-type lookup
+ *   POST /lookup/fraud      Carrier + SIM-swap / call-forwarding signals
+ *   POST /numbers/buy       Provision a US/CA number (30-day lease, bound to wallet)
+ *   POST /numbers/renew     Extend an existing number by 30 days
+ *   POST /numbers/list      List the wallet's active numbers
  *   POST /numbers/release   free     Release a provisioned number (still flows through x402
  *                                    so the backend can verify wallet identity)
  *
@@ -144,7 +144,7 @@ export class PhoneClient {
   // ─── Lookup ────────────────────────────────────────────────────────────
 
   /**
-   * Carrier + line-type lookup. ~$0.01.
+   * Carrier + line-type lookup.
    *
    * @param phoneNumber E.164 number (e.g. "+14155552671").
    */
@@ -154,7 +154,7 @@ export class PhoneClient {
   }
 
   /**
-   * Lookup + fraud signals (SIM swap, call forwarding). ~$0.05.
+   * Lookup + fraud signals (SIM swap, call forwarding).
    *
    * @param phoneNumber E.164 number.
    */
@@ -166,7 +166,7 @@ export class PhoneClient {
   // ─── Provisioning ──────────────────────────────────────────────────────
 
   /**
-   * Provision a dedicated phone number for 30 days. $5.00.
+   * Provision a dedicated phone number for 30 days.
    *
    * Payment is settled only after Twilio confirms the purchase, so failed
    * buys never charge your wallet.
@@ -194,7 +194,7 @@ export class PhoneClient {
   }
 
   /**
-   * Extend an existing provisioned number by 30 days. $5.00.
+   * Extend an existing provisioned number by 30 days.
    *
    * @throws {APIError} 403 when the wallet doesn't own the number or it has expired.
    */
@@ -206,7 +206,7 @@ export class PhoneClient {
     return data as unknown as PhoneRenewResponse;
   }
 
-  /** List the wallet's active phone numbers. ~$0.001. */
+  /** List the wallet's active phone numbers. */
   async listNumbers(): Promise<PhoneListResponse> {
     const data = await this.request<Record<string, unknown>>("numbers/list", {});
     return data as unknown as PhoneListResponse;

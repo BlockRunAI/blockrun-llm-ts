@@ -17,20 +17,20 @@ import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js"
  *   const result = await client.generate('Hello from BlockRun!', { voice: 'sarah' });
  *   console.log(result.data[0].url);
  *
- *   // Sound effects (flat $0.05/generation)
+ *   // Sound effects
  *   const fx = await client.soundEffect('rain on a tin roof, distant thunder');
  *
  *   // List voices (free, rate-limited)
  *   const voices = await client.listVoices();
  *
  * Models & pricing:
- *   elevenlabs/flash-v2.5        $0.05/1k chars  ~75ms latency, 32 languages (default)
- *   elevenlabs/turbo-v2.5        $0.05/1k chars  ~250ms latency, 32 languages
- *   elevenlabs/multilingual-v2   $0.10/1k chars  long-form narration, 29 languages
- *   elevenlabs/v3                $0.10/1k chars  max expressiveness, 70+ languages
- *   elevenlabs/sound-effects     $0.05/generation (up to 22s)
+ *   elevenlabs/flash-v2.5        ~75ms latency, 32 languages (default)
+ *   elevenlabs/turbo-v2.5        ~250ms latency, 32 languages
+ *   elevenlabs/multilingual-v2   long-form narration, 29 languages
+ *   elevenlabs/v3                max expressiveness, 70+ languages
+ *   elevenlabs/sound-effects (up to 22s)
  *
- * Price = (characters / 1000) x model rate, minimum $0.001/request.
+ * Price = (characters / 1000) x model rate, minimum
  */
 
 import { privateKeyToAccount } from "viem/accounts";
@@ -68,7 +68,7 @@ const DEFAULT_TIMEOUT = 120_000; // synthesis is synchronous (<1s for Flash)
  * with automatic x402 micropayments on Base chain.
  *
  * TTS pricing scales with input characters; sound effects are flat
- * $0.05/generation.
+ *
  */
 export class SpeechClient {
   private _account?: Account;
@@ -114,7 +114,7 @@ export class SpeechClient {
    * Synthesize speech from text (OpenAI-compatible TTS).
    *
    * Price scales with character count: (chars / 1000) x model rate,
-   * minimum $0.001/request. Synthesis is synchronous.
+   * minimum Synthesis is synchronous.
    *
    * @param input - Text to synthesize. Per-model character caps apply
    *                (flash/turbo 40k, multilingual-v2 10k, v3 5k).
@@ -148,7 +148,7 @@ export class SpeechClient {
   /**
    * Generate a cinematic sound effect from a text prompt.
    *
-   * Flat $0.05/generation, up to 22 seconds of audio.
+   *, up to 22 seconds of audio.
    *
    * @param text - Sound effect description (max 1000 chars).
    *               E.g. 'rain on a tin roof', 'sci-fi door whoosh'

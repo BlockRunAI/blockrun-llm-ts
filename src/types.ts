@@ -522,7 +522,7 @@ export interface SpeechClientOptions extends ApiKeyOptions {
   timeout?: number;
 }
 
-/** TTS model IDs (price per 1k chars: flash/turbo $0.05, multilingual-v2/v3 $0.10). */
+/** TTS model IDs. Billed per 1k characters; rates at https://blockrun.ai/models. */
 export type SpeechModel =
   | "elevenlabs/flash-v2.5"
   | "elevenlabs/turbo-v2.5"
@@ -754,7 +754,7 @@ export interface VideoGenerateOptions {
   /**
    * Virtual Portrait asset ID (`ta_xxxxxx`) — keeps the same AI character
    * across multiple Seedance videos. Enroll via `POST /v1/portrait/enroll`
-   * ($0.01 USDC promo, no KYC). **Seedance 2.0 fast/pro only.** Mutually exclusive
+   * (promotional rate, no KYC). **Seedance 2.0 fast/pro only.** Mutually exclusive
    * with `imageUrl`. Real-person likeness is not supported on BlockRun.
    */
   realFaceAssetId?: string;
