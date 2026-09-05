@@ -221,7 +221,8 @@ export class ImageClient {
         provider: m.provider || m.owned_by || "",
         description: m.description || "",
         pricePerImage:
-          m.pricePerImage ?? m.price_per_image ?? m.pricing?.flat ?? m.flatPrice ?? m.flat_price ?? 0,
+          m.pricePerImage ?? m.price_per_image ?? m.pricing?.per_image ?? m.pricing?.perImage ??
+          m.pricing?.flat ?? m.flatPrice ?? m.flat_price ?? 0,
         supportedSizes: m.supportedSizes ?? m.supported_sizes,
         maxPromptLength: m.maxPromptLength ?? m.max_prompt_length,
         available: true,

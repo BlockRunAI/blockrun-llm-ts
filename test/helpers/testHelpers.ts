@@ -205,7 +205,13 @@ export function wait(ms: number): Promise<void> {
  * Mirrors the unified `/v1/models` shape used by the backend after
  * `/v1/images/models` was deprecated — image rows live in the same
  * catalog, identified by `categories: ["image"]`. SDK normalisers
- * accept either top-level `pricePerImage` or nested `pricing.flat`.
+ * accept either top-level `pricePerImage` or nested pricing.
+ *
+ * This fixture hand-authors the top-level form, which the normaliser reads
+ * first — so it can never catch a broken nested fallback.
+ * `buildGatewayImageModelsResponse()` exists for that: a verbatim real
+ * `/v1/models` row. It is what caught `pricing.per_image` being read as
+ * `pricing.flat` and reported as $0 for every image model.
  */
 export function buildImageModelsResponse() {
   return {
@@ -259,6 +265,36 @@ export function buildImageResponse(overrides?: {
       {
         url: overrides?.url || "https://example.com/generated-image.png",
         revised_prompt: overrides?.revisedPrompt,
+      },
+    ],
+  };
+}
+
+/**
+ * A real `/v1/models` image row, copied verbatim from the live gateway
+ * (both blockrun.ai/api and api.blockrun.ai serve this shape). Price lives at
+ * `pricing.per_image`, never at `pricing.flat`, and there is no top-level
+ * `pricePerImage` to fall back on.
+ */
+export function buildGatewayImageModelsResponse() {
+  return {
+    data: [
+      {
+        id: "openai/gpt-image-2",
+        name: "ChatGPT Images 2.0",
+        provider: "openai",
+        description: "OpenAI's GPT Image 2",
+        categories: ["image"],
+        available: true,
+        pricing: {
+          per_image: 0.063,
+          currency: "USD",
+          transaction_fee: 0,
+          sizes: [
+            { width: 1024, height: 1024, price: 0.063 },
+            { width: 1536, height: 1024, price: 0.126 },
+          ],
+        },
       },
     ],
   };

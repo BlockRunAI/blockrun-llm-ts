@@ -7,6 +7,7 @@ import {
   buildErrorResponse,
   buildModelsResponse,
   buildImageModelsResponse,
+  buildGatewayImageModelsResponse,
   buildUnifiedModelsResponse,
   buildPaymentRequiredResponse,
 } from "../helpers/testHelpers";
@@ -190,6 +191,23 @@ describe("LLMClient", () => {
       expect(models).toHaveLength(2);
       expect(models[0].id).toBe("google/nano-banana");
       expect(models[0].pricePerImage).toBe(0.01);
+    });
+
+    it("reads the price the gateway actually sends (pricing.per_image)", async () => {
+      // Same normaliser bug as ImageClient: the fallback chain looked for
+      // pricing.flat, which /v1/models has never sent, so every image model
+      // reported $0 from v3.0.0 on. The other fixture sets pricePerImage at
+      // the top level and matches first, hiding it.
+      fetchSpy.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => buildGatewayImageModelsResponse(),
+      });
+
+      const models = await client.listImageModels();
+
+      expect(models).toHaveLength(1);
+      expect(models[0].pricePerImage).toBe(0.063);
     });
 
     it("should throw APIError on failure", async () => {

@@ -2,6 +2,14 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.14.1] - 2026-09-05
+
+### Fixed
+
+- **`listImageModels()` reported `$0` for every image model, and had since 3.0.0.** The normaliser's fallback chain looked for `pricing.flat`, a field `/v1/models` has never sent; the gateway sends `pricing.per_image`. Both `LLMClient` and `ImageClient` carried the same chain, so every caller sizing an image budget off the SDK saw free. Verified live against `api.blockrun.ai`: `openai/gpt-image-1` is $0.021, `openai/gpt-image-2` $0.063, `google/nano-banana` $0.0525 — all three read `0` before this fix.
+
+  The bug survived three years of tests because `buildImageModelsResponse()` hand-authored `pricePerImage` at the top level, which the chain matches first, so the nested branch was never exercised. The regression test now uses `buildGatewayImageModelsResponse()`, a verbatim row from the live catalog. Same failure shape as the 402 classifier in PR #33: a fixture that agrees with the SDK instead of with the server proves nothing.
+
 ## [3.14.0] - 2026-09-04
 
 ### Added
