@@ -234,11 +234,36 @@ export function sanitizeErrorResponse(errorBody: unknown): unknown {
 
   const body = errorBody as Record<string, unknown>;
 
-  // Only expose safe fields
+  // Only expose safe fields.
+  //
+  // `detail` used to be dropped, and it is the field that carries the actual
+  // cause — including whether money moved. A BlockRun gateway 502 looks like:
+  //
+  //   { error:   "Upstream provider error",
+  //     message: "Predexon 500: An unexpected error occurred (payment NOT charged)",
+  //     status:  500, endpoint: "...", details: { ... } }
+  //
+  // Keeping only `error` reduced that to "Upstream provider error", so a caller
+  // saw `API error after payment: 502` with no cause and no payment status —
+  // and "after payment" asserts a charge the gateway had just said did not
+  // happen. Reported as blockrun-mcp#132, where the wallet balance was
+  // unchanged while the tool reported a post-payment failure.
+  //
+  // `message` and `hint` are gateway-authored operator text, the same strings
+  // the gateway already returns to unauthenticated callers, so surfacing them
+  // exposes nothing the caller could not read from the raw response. Everything
+  // else — `details`, `endpoint`, upstream payloads — stays dropped.
+  const detail =
+    typeof body.message === "string" && body.message !== body.error
+      ? body.message
+      : undefined;
+
   return {
     message:
       typeof body.error === "string" ? body.error : "API request failed",
     code: typeof body.code === "string" ? body.code : undefined,
+    ...(detail ? { detail } : {}),
+    ...(typeof body.hint === "string" ? { hint: body.hint } : {}),
   };
 }
 
