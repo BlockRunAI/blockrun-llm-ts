@@ -2,6 +2,14 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.15.1] - 2026-09-08
+
+### Fixed
+
+- **A sanitized error now says what happened — and whether money moved.** `sanitizeErrorResponse` kept only `error` and `code`, which reduced a BlockRun gateway 502 to `"Upstream provider error"` and dropped the field that carries the cause: `"Predexon 500: An unexpected error occurred (payment NOT charged)"`. A caller saw `API error after payment: 502` with no reason and no settlement status, while "after payment" asserted a charge the gateway had just said did not happen. Reported as blockrun-mcp#132, where the reporter's wallet balance was unchanged and the tool still described a post-payment failure.
+
+  The gateway's `message` now survives as `detail` (when it differs from `error`), and `hint` survives as `hint`. Both are gateway-authored operator text — the same strings an unauthenticated caller already gets back — so surfacing them exposes nothing new. Everything else (`details`, `endpoint`, `status`, `method`, upstream payloads) stays dropped. Consumers that print `APIError.response` should read `detail` alongside `message`; `@blockrun/mcp` does from its next release.
+
 ## [3.15.0] - 2026-09-05
 
 ### Added
