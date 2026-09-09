@@ -1,6 +1,6 @@
 # @blockrun/llm (TypeScript SDK)
 
-TypeScript SDK for <!-- br:models.chatVisible -->76<!-- /br:models.chatVisible --> LLMs with streaming, smart routing, and pay-per-request billing.
+TypeScript SDK for <!-- br:models.chatVisible -->78<!-- /br:models.chatVisible --> LLMs with streaming, smart routing, and pay-per-request billing.
 Two authentication modes, one API surface:
 
 - **Account API key** — `apiKey` / `BLOCKRUN_API_KEY` bills a BlockRun account at `https://api.blockrun.ai`. Register, mint keys and top up credits at https://user.blockrun.ai.
