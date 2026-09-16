@@ -26,7 +26,7 @@ export interface CostEntry {
   model?: string;
   /** Payer wallet address (EVM 0x... or Solana base58). */
   wallet?: string;
-  /** Network identifier — "eip155:8453" for Base mainnet, "solana-mainnet", etc. */
+  /** Network identifier — "eip155:8453" for Base, "eip155:5042" for Arc, "solana-mainnet", etc. */
   network?: string;
   /** Caller kind for analytics — "LLMClient", "ImageClient", "AgentClient", ... */
   client_kind?: string;

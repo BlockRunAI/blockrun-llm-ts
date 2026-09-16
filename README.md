@@ -444,6 +444,31 @@ const tweet = await client.chat('xai/grok-4.5', 'What is trending on X?', { sear
 **Supported endpoint:** `https://sol.blockrun.ai/api`
 **Payment:** Solana USDC (SPL, mainnet)
 
+## Arc Support
+
+The same `LLMClient` pays on [Circle's Arc](https://www.arc.network) via [arc.blockrun.ai](https://arc.blockrun.ai) — point `apiUrl` at it and hold USDC on Arc in the same EVM wallet:
+
+```typescript
+import { LLMClient } from '@blockrun/llm';
+
+const client = new LLMClient({
+  privateKey: process.env.BLOCKRUN_WALLET_KEY,
+  apiUrl: 'https://arc.blockrun.ai/api',
+});
+
+const response = await client.chat('openai/gpt-4o', 'gm Arc');
+```
+
+The 402 from that host names `eip155:5042`, and the SDK signs the EIP-3009 authorization against Arc's USDC (`0x3600…0000`, EIP-712 domain `USDC` v2) — never Base's. Circle's facilitator verifies and settles it on Arc; you pay no gas. Which networks the SDK can sign for is the exported `EVM_NETWORKS` table (Base, Arc, Base Sepolia); a 402 naming any other network, or a non-USDC asset, is refused before anything is signed.
+
+**Setup:**
+1. Same wallet key as Base: `export BLOCKRUN_WALLET_KEY="0x..."`
+2. Fund it with USDC on Arc (Arc's native token, shown as the ERC-20 at `0x3600…0000`)
+3. `apiUrl: 'https://arc.blockrun.ai/api'` — payments are automatic via x402
+
+**Supported endpoint:** `https://arc.blockrun.ai/api`
+**Payment:** USDC on Arc (chain 5042), settled by Circle
+
 ## How Payment Works
 
 In wallet mode, no API key is required. You hold USDC in your own wallet, and **every request pays for itself** with an on-chain micropayment. Two phases:

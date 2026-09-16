@@ -130,6 +130,7 @@ export class AnthropicClient {
               details.resource?.description || 'BlockRun AI API call',
             maxTimeoutSeconds: details.maxTimeoutSeconds || 300,
             extra: details.extra,
+            asset: details.asset,
             extensions,
           }
         );
