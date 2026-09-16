@@ -151,7 +151,9 @@ export const DEFAULT_TIMEOUT = resolveDefaultTimeout();
  * BlockRun LLM Gateway Client.
  *
  * Provides access to multiple LLM providers (OpenAI, Anthropic, Google, etc.)
- * with automatic x402 micropayments on Base chain (Mainnet, Chain ID 8453).
+ * with automatic x402 micropayments in USDC on Base (chain 8453) or, with
+ * `apiUrl` pointed at arc.blockrun.ai, on Circle's Arc (chain 5042) — the
+ * 402's `network` selects the chain (see EVM_NETWORKS in x402.ts).
  * API base: https://blockrun.ai/api
  */
 export class LLMClient {
@@ -654,6 +656,7 @@ export class LLMClient {
         resourceDescription: details.resource?.description || "BlockRun AI API call",
         maxTimeoutSeconds: details.maxTimeoutSeconds || 300,
         extra: details.extra,
+        asset: details.asset,
         extensions,
       }
     );
@@ -746,6 +749,7 @@ export class LLMClient {
         resourceDescription: details.resource?.description || "BlockRun AI API call",
         maxTimeoutSeconds: details.maxTimeoutSeconds || 300,
         extra: details.extra,
+        asset: details.asset,
         extensions,
       }
     );
@@ -985,6 +989,7 @@ export class LLMClient {
         resourceDescription: details.resource?.description || "BlockRun AI API call",
         maxTimeoutSeconds: details.maxTimeoutSeconds || 300,
         extra: details.extra,
+        asset: details.asset,
         extensions,
       }
     );
@@ -1151,6 +1156,7 @@ export class LLMClient {
         resourceDescription: details.resource?.description || "BlockRun AI API call",
         maxTimeoutSeconds: details.maxTimeoutSeconds || 300,
         extra: details.extra,
+        asset: details.asset,
         extensions,
       }
     );

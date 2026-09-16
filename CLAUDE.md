@@ -4,7 +4,7 @@ TypeScript SDK for <!-- br:models.chatVisible -->78<!-- /br:models.chatVisible -
 Two authentication modes, one API surface:
 
 - **Account API key** — `apiKey` / `BLOCKRUN_API_KEY` bills a BlockRun account at `https://api.blockrun.ai`. Register, mint keys and top up credits at https://user.blockrun.ai.
-- **Wallet (x402)** — a wallet signature is the authentication; each request settles USDC on Solana or Base. No account needed.
+- **Wallet (x402)** — a wallet signature is the authentication; each request settles USDC on Base, Arc (`apiUrl: https://arc.blockrun.ai/api`, same `LLMClient` and key) or Solana. No account needed. The EVM domain signed follows the 402's `network` through `EVM_NETWORKS` in `src/x402.ts`; the 402's `extra` is never trusted for it.
 
 ## Commands
 
@@ -22,7 +22,7 @@ npm run lint             # eslint
 ```
 src/
 ├── index.ts             # Package exports
-├── client.ts            # LLMClient (Base chain)
+├── client.ts            # LLMClient (EVM: Base, Arc — the 402's network picks the chain)
 ├── solana-client.ts     # SolanaLLMClient
 ├── router-adapter.ts    # Bundled Router Core V3 adapter (smartChat / blockrun/* aliases)
 ├── api-key.ts           # Account API-key auth: resolveApiKeyAuth / ApiKeyAuth transport + poll
