@@ -171,6 +171,11 @@ export {
 export {
   BASE_CHAIN_ID,
   USDC_BASE,
+  ARC_CHAIN_ID,
+  USDC_ARC,
+  EVM_NETWORKS,
+  evmNetwork,
+  type EvmNetwork,
   createPaymentPayload,
   parsePaymentRequired,
   extractPaymentDetails,
