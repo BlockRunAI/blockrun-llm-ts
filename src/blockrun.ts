@@ -493,6 +493,7 @@ export class BlockrunClient {
           opts.maxTimeoutSeconds || 300
         ),
         extra: details.extra,
+        asset: details.asset,
       }
     );
   }

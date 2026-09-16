@@ -319,6 +319,7 @@ export class ImageClient {
           details.resource?.description || "BlockRun Image Generation",
         maxTimeoutSeconds: details.maxTimeoutSeconds || 300,
         extra: details.extra,
+        asset: details.asset,
         extensions,
       }
     );

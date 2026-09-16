@@ -12,6 +12,68 @@ import { loadSolanaWeb3, loadSplToken } from "./solana-deps.js";
 // Chain and token constants
 export const BASE_CHAIN_ID = 8453;
 export const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const;
+export const ARC_CHAIN_ID = 5042;
+export const USDC_ARC = "0x3600000000000000000000000000000000000000" as const;
+
+/**
+ * The EVM networks a BlockRun gateway settles on, keyed by the CAIP-2
+ * `network` a 402 carries, each with the SDK's OWN values for that network's
+ * USDC and its EIP-712 domain.
+ *
+ * Until 3.16.0 there was one domain — Base's — signed whatever the 402 said,
+ * so against arc.blockrun.ai (eip155:5042) or testnet.blockrun.ai every
+ * payment was a signature over the wrong domain: the facilitator recovered a
+ * different signer and answered 401 after the SDK had reported a payment.
+ *
+ * The 402 SELECTS a network from this table; it never supplies the domain.
+ * That keeps the rule the single constant enforced — a hostile 402's `extra`
+ * cannot steer a signature onto another contract — while letting the same
+ * SDK pay on every host. Arc's USDC is the chain's native token exposed as an
+ * ERC-20 at 0x3600…0000, and its domain name is "USDC", not Base's "USD Coin".
+ */
+export interface EvmNetwork {
+  name: string;
+  chainId: number;
+  usdc: `0x${string}`;
+  domain: { name: string; version: string; chainId: number; verifyingContract: `0x${string}` };
+}
+
+export const EVM_NETWORKS: Readonly<Record<string, EvmNetwork>> = {
+  "eip155:8453": {
+    name: "Base",
+    chainId: BASE_CHAIN_ID,
+    usdc: USDC_BASE,
+    domain: { name: "USD Coin", version: "2", chainId: BASE_CHAIN_ID, verifyingContract: USDC_BASE },
+  },
+  "eip155:5042": {
+    name: "Arc",
+    chainId: ARC_CHAIN_ID,
+    usdc: USDC_ARC,
+    domain: { name: "USDC", version: "2", chainId: ARC_CHAIN_ID, verifyingContract: USDC_ARC },
+  },
+  "eip155:84532": {
+    name: "Base Sepolia",
+    chainId: 84532,
+    usdc: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    domain: {
+      name: "USDC",
+      version: "2",
+      chainId: 84532,
+      verifyingContract: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    },
+  },
+};
+
+/** The network table entry for a 402's `network`, or a refusal that names what IS supported. */
+export function evmNetwork(network: string): EvmNetwork {
+  const net = EVM_NETWORKS[network];
+  if (!net) {
+    throw new Error(
+      `Unsupported x402 network "${network}": this SDK signs USDC payments on ${Object.keys(EVM_NETWORKS).join(", ")}`,
+    );
+  }
+  return net;
+}
 
 // Solana constants
 export const SOLANA_NETWORK = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
@@ -148,14 +210,6 @@ export function __resetSolanaPaymentCaches(): void {
   issuedByBlockhash.clear();
 }
 
-// EIP-712 domain for Base USDC
-const USDC_DOMAIN = {
-  name: "USD Coin",
-  version: "2",
-  chainId: BASE_CHAIN_ID,
-  verifyingContract: USDC_BASE,
-} as const;
-
 // EIP-712 types for TransferWithAuthorization
 const TRANSFER_TYPES = {
   TransferWithAuthorization: [
@@ -207,7 +261,10 @@ export interface CreatePaymentOptions {
   resourceUrl?: string;
   resourceDescription?: string;
   maxTimeoutSeconds?: number;
+  /** The 402's `extra`. Echoed nowhere: the domain comes from EVM_NETWORKS. */
   extra?: { name?: string; version?: string };
+  /** The 402's `asset`. Checked against the network's USDC; a mismatch is refused. */
+  asset?: string;
   extensions?: Record<string, unknown>;
 }
 
@@ -218,7 +275,7 @@ export interface CreatePaymentOptions {
  * @param fromAddress - Sender wallet address
  * @param recipient - Payment recipient address
  * @param amount - Amount in micro USDC (6 decimals)
- * @param network - Network identifier (default: eip155:8453)
+ * @param network - CAIP-2 network from the 402 (default: eip155:8453); must be in EVM_NETWORKS
  * @param options - Additional options for resource info
  * @returns Base64-encoded signed payment payload
  */
@@ -235,9 +292,16 @@ export async function createPaymentPayload(
   const validBefore = now + (options.maxTimeoutSeconds || 300);
   const nonce = createNonce();
 
-  // USDC domain is fixed - NEVER use extra values from payment requirements
-  // The USDC contract on Base uses exactly "USD Coin" version "2"
-  const domain = USDC_DOMAIN;
+  // The domain is the SDK's own value for the 402's network — NEVER the 402's
+  // `extra` (see EVM_NETWORKS). A 402 naming a network this table lacks, or an
+  // asset that is not that network's USDC, is refused rather than signed.
+  const net = evmNetwork(network);
+  if (options.asset && options.asset.toLowerCase() !== net.usdc.toLowerCase()) {
+    throw new Error(
+      `x402 asset mismatch: the 402 asks for ${options.asset} on ${network}, but this SDK only pays USDC there (${net.usdc})`,
+    );
+  }
+  const domain = net.domain;
 
   // Sign using EIP-712 (private key used locally, never transmitted)
   const signature = await signTypedData({
@@ -267,10 +331,10 @@ export async function createPaymentPayload(
       scheme: "exact",
       network,
       amount,
-      asset: USDC_BASE,
+      asset: net.usdc,
       payTo: recipient,
       maxTimeoutSeconds: options.maxTimeoutSeconds || 300,
-      extra: { name: "USD Coin", version: "2" },
+      extra: { name: net.domain.name, version: net.domain.version },
     },
     payload: {
       signature,

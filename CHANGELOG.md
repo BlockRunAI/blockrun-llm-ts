@@ -2,6 +2,14 @@
 
 All notable changes to @blockrun/llm will be documented in this file.
 
+## [3.16.0] - 2026-09-16
+
+### Added
+
+- **Arc.** `LLMClient` pays on Circle's Arc when `apiUrl` is `https://arc.blockrun.ai/api`. The signed EIP-712 domain now follows the 402's `network`: until this release it was one constant — Base's USDC, "USD Coin" v2, chainId 8453, `0x8335…` — whatever the 402 said, so against arc.blockrun.ai (`eip155:5042`, USDC at `0x3600…`, domain name `USDC`) or testnet.blockrun.ai (Base Sepolia) every payment was a signature over the wrong domain: the facilitator recovered a different signer and answered 401 after the SDK had reported a payment.
+
+  The 402 still never supplies the domain. It selects a network from the exported `EVM_NETWORKS` table (Base, Arc, Base Sepolia), and the SDK's own values for that network are signed — the rule the single constant enforced, that a hostile 402's `extra` cannot steer a signature onto another contract, holds. A 402 naming a network the table lacks is refused with the list of what is supported; a 402 whose `asset` is not that network's USDC is refused before anything is signed. `accepted.asset` and `accepted.extra` in the payload now describe the network actually signed. New exports: `EVM_NETWORKS`, `evmNetwork()`, `ARC_CHAIN_ID`, `USDC_ARC`.
+
 ## [3.15.1] - 2026-09-08
 
 ### Fixed
