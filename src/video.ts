@@ -154,11 +154,20 @@ export class VideoClient {
           "referenceImageUrls is mutually exclusive with imageUrl, lastFrameUrl, and realFaceAssetId."
         );
       }
-      if (options.referenceImageUrls.length > 9) {
-        throw new Error("referenceImageUrls accepts at most 9 images.");
+      const imageLimit = options.model?.replace(/^bytedance\//, "") === "seedance-2.5" ? 30 : 9;
+      if (options.referenceImageUrls.length > imageLimit) {
+        throw new Error(`referenceImageUrls accepts at most ${imageLimit} images.`);
       }
     }
 
+    if ((options?.referenceVideos?.length || options?.referenceAudios?.length) && (options.imageUrl || options.lastFrameUrl || options.realFaceAssetId)) {
+      throw new Error("reference media is mutually exclusive with frame-seed inputs; use referenceImageUrls.");
+    }
+    for (const clips of [options?.referenceVideos, options?.referenceAudios]) {
+      if (clips !== undefined && (clips.length < 1 || clips.length > 3 || clips.some(clip => !/^https?:\/\//.test(clip.url) || (clip.role !== undefined && clip.role !== "reference")))) {
+        throw new Error("reference media requires 1 to 3 http(s) clips with optional reference role.");
+      }
+    }
     const body: Record<string, unknown> = {
       model: options?.model || DEFAULT_MODEL,
       prompt,
@@ -174,7 +183,14 @@ export class VideoClient {
     if (options?.generateAudio !== undefined) body.generate_audio = options.generateAudio;
     if (options?.seed !== undefined) body.seed = options.seed;
     if (options?.watermark !== undefined) body.watermark = options.watermark;
-    if (options?.returnLastFrame) body.return_last_frame = true;
+    if (options?.returnLastFrame !== undefined) body.return_last_frame = options.returnLastFrame;
+    if (options?.referenceVideos !== undefined) body.reference_videos = options.referenceVideos;
+    if (options?.referenceAudios !== undefined) body.reference_audios = options.referenceAudios;
+    if (options?.bitrateMode !== undefined) body.bitrate_mode = options.bitrateMode;
+    if (options?.outputFormat !== undefined) body.output_format = options.outputFormat;
+    if (options?.cameraFixed !== undefined) body.camera_fixed = options.cameraFixed;
+    if (options?.safetyIdentifier !== undefined) body.safety_identifier = options.safetyIdentifier;
+    if (options?.inputType !== undefined) body.input_type = options.inputType;
 
     const budgetMs = options?.budgetMs ?? DEFAULT_GENERATE_BUDGET_MS;
     return this.submitAndPoll(body, budgetMs);
@@ -216,6 +232,11 @@ export class VideoClient {
       seed?: number;
       watermark?: boolean;
       returnLastFrame?: boolean;
+      bitrateMode?: "standard" | "high";
+      outputFormat?: "mp4" | "mov";
+      cameraFixed?: boolean;
+      safetyIdentifier?: string;
+      inputType?: "text" | "image" | "first_last_frame" | "reference";
     } & Record<string, unknown>
   ): Promise<VideoResponse> {
     if (!Array.isArray(content) || content.length === 0) {
@@ -232,6 +253,11 @@ export class VideoClient {
       seed,
       watermark,
       returnLastFrame,
+      bitrateMode,
+      outputFormat,
+      cameraFixed,
+      safetyIdentifier,
+      inputType,
       ...extra
     } = options ?? {};
 
@@ -249,6 +275,11 @@ export class VideoClient {
     if (seed !== undefined) body.seed = seed;
     if (watermark !== undefined) body.watermark = watermark;
     if (returnLastFrame !== undefined) body.return_last_frame = returnLastFrame;
+    if (bitrateMode !== undefined) body.bitrate_mode = bitrateMode;
+    if (outputFormat !== undefined) body.output_format = outputFormat;
+    if (cameraFixed !== undefined) body.camera_fixed = cameraFixed;
+    if (safetyIdentifier !== undefined) body.safety_identifier = safetyIdentifier;
+    if (inputType !== undefined) body.input_type = inputType;
 
     return this.submitAndPoll(body, budgetMs ?? DEFAULT_GENERATE_BUDGET_MS, "/v1/videos");
   }
