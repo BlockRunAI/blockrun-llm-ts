@@ -114,3 +114,25 @@ describe("VideoClient generate() input validation", () => {
     ).rejects.toThrow("stop-after-body-check");
   });
 });
+
+describe("Seedance reference and output parity", () => {
+  it("forwards mixed references and controls without dropping images", async () => {
+    const client = new VideoClient({ privateKey: TEST_PRIVATE_KEY });
+    const fetch = vi.spyOn(global, "fetch").mockRejectedValue(new Error("captured"));
+    try {
+      await expect(client.generate("test", { model: "bytedance/seedance-2.0", referenceImageUrls: ["https://example.com/person.png"], referenceVideos: [{ url: "https://example.com/motion.mp4" }], referenceAudios: [{ url: "https://example.com/music.mp3" }], bitrateMode: "high", inputType: "reference", safetyIdentifier: "test", returnLastFrame: true })).rejects.toThrow("captured");
+      expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toMatchObject({ reference_image_urls: ["https://example.com/person.png"], reference_videos: [{ url: "https://example.com/motion.mp4" }], reference_audios: [{ url: "https://example.com/music.mp3" }], bitrate_mode: "high", input_type: "reference", safety_identifier: "test", return_last_frame: true });
+    } finally { fetch.mockRestore(); }
+  });
+  it("allows 30 reference images on 2.5 and maps MOV in both client entrypoints", async () => {
+    const client = new VideoClient({ privateKey: TEST_PRIVATE_KEY });
+    const fetch = vi.spyOn(global, "fetch").mockRejectedValue(new Error("captured"));
+    try {
+      await expect(client.generate("test", { model: "bytedance/seedance-2.5", referenceImageUrls: Array(30).fill("https://example.com/person.png"), outputFormat: "mov" })).rejects.toThrow("captured");
+      expect(JSON.parse(fetch.mock.calls[0][1]!.body as string).output_format).toBe("mov");
+      await expect(client.generateFromContent([{ type: "text", text: "test" }], { model: "bytedance/seedance-2.5", outputFormat: "mov", bitrateMode: "standard" })).rejects.toThrow("captured");
+      expect(JSON.parse(fetch.mock.calls[1][1]!.body as string)).toMatchObject({ output_format: "mov", bitrate_mode: "standard" });
+      await expect(client.generate("test", { model: "bytedance/seedance-2.5", referenceImageUrls: Array(31).fill("https://example.com/person.png") })).rejects.toThrow("at most 30");
+    } finally { fetch.mockRestore(); }
+  });
+});
