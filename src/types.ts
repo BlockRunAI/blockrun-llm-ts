@@ -715,6 +715,10 @@ export interface VideoClip {
   request_id?: string;
   /** True when the gateway mirrored the video to its GCS bucket */
   backed_up?: boolean;
+  /** Final frame image when returnLastFrame is requested and the provider returns it. */
+  last_frame_url?: string;
+  /** Whether the final frame was mirrored to BlockRun storage. */
+  last_frame_backed_up?: boolean;
 }
 
 export interface VideoResponse {
@@ -762,18 +766,32 @@ export interface VideoGenerateOptions {
    * First-and-last-frame interpolation: a second image that seeds the FINAL
    * frame so the model tweens from `imageUrl` → `lastFrameUrl`. Requires
    * `imageUrl` (the first frame) and a Seedance model
-   * (bytedance/seedance-1.5-pro, seedance-2.0, or seedance-2.0-fast).
+   * (1.5-pro, 2.0 / Fast / Mini, or 2.5).
    * Priced identically to image-to-video. Mutually exclusive with
    * `realFaceAssetId`.
    */
   lastFrameUrl?: string;
   /**
-   * Omni / multi-reference: up to 9 reference image URLs for character/style
-   * consistency (**Seedance 2.0 only**). Cite them as "image 1", "image 2"
+   * Omni / multi-reference: up to 9 (2.0) or 30 (2.5) reference image URLs for character/style
+   * consistency (Seedance 2.0 and 2.5). Cite them as "image 1", "image 2"
    * in the prompt. Mutually exclusive with `imageUrl` / `lastFrameUrl` /
    * `realFaceAssetId`.
    */
   referenceImageUrls?: string[];
+  /** Up to 3 http(s) motion references on Seedance 2.0; may accompany reference images. */
+  referenceVideos?: Array<{ url: string; role?: "reference" }>;
+  /** Up to 3 http(s) audio references on Seedance 2.0; requires a reference image or video. */
+  referenceAudios?: Array<{ url: string; role?: "reference" }>;
+  /** Seedance 2.x output bitrate mode. */
+  bitrateMode?: "standard" | "high";
+  /** Seedance 2.5 output container. */
+  outputFormat?: "mp4" | "mov";
+  /** Seedance 1.5-pro fixed-camera control. */
+  cameraFixed?: boolean;
+  /** Seedance safety identifier forwarded with the request. */
+  safetyIdentifier?: string;
+  /** Assert the intended input mode; the gateway rejects conflicting media fields. */
+  inputType?: "text" | "image" | "first_last_frame" | "reference";
   /** Duration to bill for (defaults to model's default duration) */
   durationSeconds?: number;
   /** Output aspect ratio. Token360 / Seedance only — silently ignored by xAI Grok. */
