@@ -1,5 +1,27 @@
 # Changelog
 
+## [Unreleased]
+
+### Added — Seedance reference media and output controls
+
+- `VideoClient.generate()` takes `referenceVideos` and `referenceAudios`
+  (1–3 http(s) clips each, Seedance 2.0 / Fast / Mini), which may be combined
+  with `referenceImageUrls`. Seedance 2.5 accepts up to 30 reference images
+  (2.0 stays at 9). Reference media is served by `api.blockrun.ai` only — it
+  needs an account API key; the wallet gateways refuse it with a 400 before
+  payment.
+- New output controls on both `generate()` and `generateFromContent()`:
+  `bitrateMode` (Seedance 2.x), `outputFormat` (2.5), `cameraFixed` (1.5-pro),
+  `safetyIdentifier`, and `inputType`, which makes the gateway 400 instead of
+  rendering a different mode than the one the caller meant.
+- `VideoClip.last_frame_url` / `last_frame_backed_up` surface the final frame
+  when `returnLastFrame` is set and the upstream returns one.
+
+The client refuses a malformed reference request before the 402: clips outside
+1–3, non-http(s) URLs, a `role` other than `"reference"`, reference clips mixed
+with frame seeds, and reference audio without an image or video beside it.
+`returnLastFrame: false` is now sent explicitly instead of being dropped.
+
 ## [3.17.1] - 2026-09-29
 
 ### Fixed — settlement timing on Solana
