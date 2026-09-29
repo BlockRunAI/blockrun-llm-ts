@@ -154,8 +154,40 @@ export class VideoClient {
           "referenceImageUrls is mutually exclusive with imageUrl, lastFrameUrl, and realFaceAssetId."
         );
       }
-      if (options.referenceImageUrls.length > 9) {
-        throw new Error("referenceImageUrls accepts at most 9 images.");
+      const imageLimit = options.model?.replace(/^bytedance\//, "") === "seedance-2.5" ? 30 : 9;
+      if (options.referenceImageUrls.length > imageLimit) {
+        throw new Error(`referenceImageUrls accepts at most ${imageLimit} images.`);
+      }
+    }
+
+    // Reference-to-video (Seedance 2.0): video/audio clips are their own mode,
+    // like referenceImageUrls — never mixed with frame seeds. Mirrors the
+    // gateway's pre-payment checks so a bad request fails before the 402.
+    for (const [field, clips] of [
+      ["referenceVideos", options?.referenceVideos],
+      ["referenceAudios", options?.referenceAudios],
+    ] as const) {
+      if (clips === undefined) continue;
+      if (clips.length < 1 || clips.length > 3) {
+        throw new Error(`${field} accepts 1 to 3 clips.`);
+      }
+      for (const clip of clips) {
+        if (typeof clip?.url !== "string" || !/^https?:\/\//i.test(clip.url)) {
+          throw new Error(`${field} URLs must be http(s).`);
+        }
+        if (clip.role !== undefined && clip.role !== "reference") {
+          throw new Error(`${field} role must be "reference" (or omitted).`);
+        }
+      }
+    }
+    if (options?.referenceVideos?.length || options?.referenceAudios?.length) {
+      if (options.imageUrl || options.lastFrameUrl || options.realFaceAssetId) {
+        throw new Error(
+          "referenceVideos / referenceAudios are mutually exclusive with imageUrl, lastFrameUrl, and realFaceAssetId; combine them with referenceImageUrls instead."
+        );
+      }
+      if (options.referenceAudios?.length && !options.referenceImageUrls?.length && !options.referenceVideos?.length) {
+        throw new Error("referenceAudios requires referenceImageUrls or referenceVideos.");
       }
     }
 
@@ -174,7 +206,14 @@ export class VideoClient {
     if (options?.generateAudio !== undefined) body.generate_audio = options.generateAudio;
     if (options?.seed !== undefined) body.seed = options.seed;
     if (options?.watermark !== undefined) body.watermark = options.watermark;
-    if (options?.returnLastFrame) body.return_last_frame = true;
+    if (options?.returnLastFrame !== undefined) body.return_last_frame = options.returnLastFrame;
+    if (options?.referenceVideos !== undefined) body.reference_videos = options.referenceVideos;
+    if (options?.referenceAudios !== undefined) body.reference_audios = options.referenceAudios;
+    if (options?.bitrateMode !== undefined) body.bitrate_mode = options.bitrateMode;
+    if (options?.outputFormat !== undefined) body.output_format = options.outputFormat;
+    if (options?.cameraFixed !== undefined) body.camera_fixed = options.cameraFixed;
+    if (options?.safetyIdentifier !== undefined) body.safety_identifier = options.safetyIdentifier;
+    if (options?.inputType !== undefined) body.input_type = options.inputType;
 
     const budgetMs = options?.budgetMs ?? DEFAULT_GENERATE_BUDGET_MS;
     return this.submitAndPoll(body, budgetMs);
@@ -184,8 +223,11 @@ export class VideoClient {
    * Generate a video from a standard Seedance `content[]` body.
    *
    * Targets the gateway's `POST /v1/videos` endpoint, which accepts the
-   * mainstream multimodal `content` array (text + a single reference image)
-   * used by other Seedance APIs — so callers already holding a
+   * mainstream multimodal `content` array used by other Seedance APIs. Items
+   * may carry a `role` — `first_frame`, `last_frame`, `reference_image`,
+   * `reference_video`, `reference_audio` — which the gateway maps to the same
+   * validated fields as {@link generate}; a role-less single image keeps its
+   * first-frame meaning — so callers already holding a
    * `content[]`-shaped request can submit it unchanged. The gateway validates
    * unsupported inputs *before* charging, then delegates to the same x402
    * submit+poll pipeline as {@link generate}.
@@ -199,7 +241,8 @@ export class VideoClient {
    *   `{ type: "image_url", image_url: { url: "https://..." } }`.
    * @param options - `model`, `budgetMs`, plus the same camelCase render options
    *   as {@link generate} (`durationSeconds`, `aspectRatio`, `resolution`,
-   *   `generateAudio`, `seed`, `watermark`, `returnLastFrame`). These are mapped
+   *   `generateAudio`, `seed`, `watermark`, `returnLastFrame`, `bitrateMode`,
+   *   `outputFormat`, `cameraFixed`, `safetyIdentifier`, `inputType`). These are mapped
    *   to the gateway's snake_case fields for you. Any other keys you pass are
    *   forwarded verbatim (use snake_case for those, since the gateway reads
    *   snake_case only).
@@ -216,6 +259,11 @@ export class VideoClient {
       seed?: number;
       watermark?: boolean;
       returnLastFrame?: boolean;
+      bitrateMode?: "standard" | "high";
+      outputFormat?: "mp4" | "mov";
+      cameraFixed?: boolean;
+      safetyIdentifier?: string;
+      inputType?: "text" | "image" | "first_last_frame" | "reference";
     } & Record<string, unknown>
   ): Promise<VideoResponse> {
     if (!Array.isArray(content) || content.length === 0) {
@@ -232,6 +280,11 @@ export class VideoClient {
       seed,
       watermark,
       returnLastFrame,
+      bitrateMode,
+      outputFormat,
+      cameraFixed,
+      safetyIdentifier,
+      inputType,
       ...extra
     } = options ?? {};
 
@@ -249,6 +302,11 @@ export class VideoClient {
     if (seed !== undefined) body.seed = seed;
     if (watermark !== undefined) body.watermark = watermark;
     if (returnLastFrame !== undefined) body.return_last_frame = returnLastFrame;
+    if (bitrateMode !== undefined) body.bitrate_mode = bitrateMode;
+    if (outputFormat !== undefined) body.output_format = outputFormat;
+    if (cameraFixed !== undefined) body.camera_fixed = cameraFixed;
+    if (safetyIdentifier !== undefined) body.safety_identifier = safetyIdentifier;
+    if (inputType !== undefined) body.input_type = inputType;
 
     return this.submitAndPoll(body, budgetMs ?? DEFAULT_GENERATE_BUDGET_MS, "/v1/videos");
   }

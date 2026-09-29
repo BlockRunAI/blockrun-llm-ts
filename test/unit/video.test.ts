@@ -114,3 +114,75 @@ describe("VideoClient generate() input validation", () => {
     ).rejects.toThrow("stop-after-body-check");
   });
 });
+
+describe("Seedance reference and output parity", () => {
+  it("forwards mixed references and controls without dropping images", async () => {
+    const client = new VideoClient({ privateKey: TEST_PRIVATE_KEY });
+    const fetch = vi.spyOn(global, "fetch").mockRejectedValue(new Error("captured"));
+    try {
+      await expect(client.generate("test", { model: "bytedance/seedance-2.0", referenceImageUrls: ["https://example.com/person.png"], referenceVideos: [{ url: "https://example.com/motion.mp4" }], referenceAudios: [{ url: "https://example.com/music.mp3" }], bitrateMode: "high", inputType: "reference", safetyIdentifier: "test", returnLastFrame: true })).rejects.toThrow("captured");
+      expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toMatchObject({ reference_image_urls: ["https://example.com/person.png"], reference_videos: [{ url: "https://example.com/motion.mp4" }], reference_audios: [{ url: "https://example.com/music.mp3" }], bitrate_mode: "high", input_type: "reference", safety_identifier: "test", return_last_frame: true });
+    } finally { fetch.mockRestore(); }
+  });
+  it("allows 30 reference images on 2.5 and maps MOV in both client entrypoints", async () => {
+    const client = new VideoClient({ privateKey: TEST_PRIVATE_KEY });
+    const fetch = vi.spyOn(global, "fetch").mockRejectedValue(new Error("captured"));
+    try {
+      await expect(client.generate("test", { model: "bytedance/seedance-2.5", referenceImageUrls: Array(30).fill("https://example.com/person.png"), outputFormat: "mov" })).rejects.toThrow("captured");
+      expect(JSON.parse(fetch.mock.calls[0][1]!.body as string).output_format).toBe("mov");
+      await expect(client.generateFromContent([{ type: "text", text: "test" }], { model: "bytedance/seedance-2.5", outputFormat: "mov", bitrateMode: "standard" })).rejects.toThrow("captured");
+      expect(JSON.parse(fetch.mock.calls[1][1]!.body as string)).toMatchObject({ output_format: "mov", bitrate_mode: "standard" });
+      await expect(client.generate("test", { model: "bytedance/seedance-2.5", referenceImageUrls: Array(31).fill("https://example.com/person.png") })).rejects.toThrow("at most 30");
+    } finally { fetch.mockRestore(); }
+  });
+});
+
+describe("Seedance reference media validation", () => {
+  const clip = { url: "https://example.com/motion.mp4" };
+  let client: VideoClient;
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    client = new VideoClient({ privateKey: TEST_PRIVATE_KEY });
+    fetchSpy = vi.spyOn(global, "fetch") as ReturnType<typeof vi.spyOn>;
+    fetchSpy.mockRejectedValue(new Error("network call not expected"));
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  it.each([
+    ["an empty list", { referenceVideos: [] }, "1 to 3"],
+    ["four clips", { referenceVideos: [clip, clip, clip, clip] }, "1 to 3"],
+    ["a non-http URL", { referenceVideos: [{ url: "data:video/mp4;base64,AA==" }] }, "http(s)"],
+    ["a role other than reference", { referenceVideos: [{ ...clip, role: "first_frame" as "reference" }] }, 'role must be "reference"'],
+    ["a frame seed", { referenceVideos: [clip], imageUrl: "https://example.com/a.jpg" }, "mutually exclusive"],
+    ["audio with no image or video", { referenceAudios: [{ url: "https://example.com/a.mp3" }] }, "requires referenceImageUrls or referenceVideos"],
+  ])("rejects %s before any network call", async (_label, options, message) => {
+    await expect(
+      client.generate("x", { model: "bytedance/seedance-2.0", ...options })
+    ).rejects.toThrow(message);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("caps reference images at 9 below Seedance 2.5", async () => {
+    await expect(
+      client.generate("x", {
+        model: "bytedance/seedance-2.0",
+        referenceImageUrls: Array(10).fill("https://example.com/p.png"),
+      })
+    ).rejects.toThrow("at most 9");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("accepts reference audio next to a reference video", async () => {
+    await expect(
+      client.generate("x", {
+        model: "bytedance/seedance-2.0",
+        referenceVideos: [clip],
+        referenceAudios: [{ url: "https://example.com/a.mp3", role: "reference" }],
+      })
+    ).rejects.toThrow("network call not expected");
+  });
+});
