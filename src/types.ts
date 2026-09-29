@@ -772,25 +772,42 @@ export interface VideoGenerateOptions {
    */
   lastFrameUrl?: string;
   /**
-   * Omni / multi-reference: up to 9 (2.0) or 30 (2.5) reference image URLs for character/style
-   * consistency (Seedance 2.0 and 2.5). Cite them as "image 1", "image 2"
-   * in the prompt. Mutually exclusive with `imageUrl` / `lastFrameUrl` /
-   * `realFaceAssetId`.
+   * Omni / multi-reference: up to 9 (Seedance 2.0 / Fast / Mini) or 30
+   * (Seedance 2.5) reference image URLs for character/style consistency. Cite
+   * them as "image 1", "image 2" in the prompt. Mutually exclusive with
+   * `imageUrl` / `lastFrameUrl` / `realFaceAssetId`.
+   *
+   * **Account API key only.** Reference media is served by `api.blockrun.ai`;
+   * the wallet gateways (blockrun.ai, sol.blockrun.ai) refuse it with a 400
+   * before any payment.
    */
   referenceImageUrls?: string[];
-  /** Up to 3 http(s) motion references on Seedance 2.0; may accompany reference images. */
+  /**
+   * Reference-to-video: 1–3 http(s) motion/style video clips (Seedance 2.0 /
+   * Fast / Mini). May be combined with `referenceImageUrls`; mutually exclusive
+   * with frame seeds. `role` is optional and, when set, must be `"reference"`.
+   * Adds a per-clip surcharge. **Account API key only** (see `referenceImageUrls`).
+   */
   referenceVideos?: Array<{ url: string; role?: "reference" }>;
-  /** Up to 3 http(s) audio references on Seedance 2.0; requires a reference image or video. */
+  /**
+   * Reference audio: 1–3 http(s) clips, each ≤15.2s (Seedance 2.0 / Fast /
+   * Mini). Requires `referenceImageUrls` or `referenceVideos` alongside it.
+   * Adds a per-clip surcharge. **Account API key only** (see `referenceImageUrls`).
+   */
   referenceAudios?: Array<{ url: string; role?: "reference" }>;
-  /** Seedance 2.x output bitrate mode. */
+  /** Output bitrate mode. Seedance 2.0 / Fast / Mini / 2.5 only — other models get a 400. */
   bitrateMode?: "standard" | "high";
-  /** Seedance 2.5 output container. */
+  /** Output container. Seedance 2.5 only — other models get a 400. */
   outputFormat?: "mp4" | "mov";
-  /** Seedance 1.5-pro fixed-camera control. */
+  /** Lock the camera. Seedance 1.5-pro only — other models get a 400. */
   cameraFixed?: boolean;
-  /** Seedance safety identifier forwarded with the request. */
+  /** End-user identifier forwarded for upstream abuse monitoring. Seedance only. */
   safetyIdentifier?: string;
-  /** Assert the intended input mode; the gateway rejects conflicting media fields. */
+  /**
+   * Declare the intended mode. The gateway infers it from the media fields
+   * anyway; when this is set and disagrees, it answers 400 (with the inferred
+   * mode) before payment instead of rendering the wrong thing.
+   */
   inputType?: "text" | "image" | "first_last_frame" | "reference";
   /** Duration to bill for (defaults to model's default duration) */
   durationSeconds?: number;
@@ -811,7 +828,10 @@ export interface VideoGenerateOptions {
   seed?: number;
   /** Embed the upstream watermark on the output. Defaults to false at the gateway. */
   watermark?: boolean;
-  /** Return the last frame as an image alongside the clip — useful for chaining. */
+  /**
+   * Return the last frame as an image alongside the clip — useful for chaining.
+   * Read it from `data[0].last_frame_url` (absent if the upstream omits it).
+   */
   returnLastFrame?: boolean;
 }
 

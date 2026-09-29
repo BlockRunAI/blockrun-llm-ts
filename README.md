@@ -805,11 +805,40 @@ const r4 = await client.generate('the flower blooms in golden morning light', {
   lastFrameUrl: 'https://example.com/bloom.jpg',
 });
 
-// Omni / multi-reference (Seedance 2.0 only): up to 9 reference images
-// for character/style consistency. Cite them as "image 1", "image 2" in
-// the prompt. Mutually exclusive with imageUrl / lastFrameUrl /
-// realFaceAssetId.
-const r5 = await client.generate(
+// Seedance output controls. Each is model-gated at the gateway: an
+// unsupported one is a 400 before payment, never silently dropped.
+const r5 = await client.generate('a paper boat drifting down a rain gutter', {
+  model: 'bytedance/seedance-2.5',
+  bitrateMode: 'high',     // Seedance 2.x
+  outputFormat: 'mov',     // Seedance 2.5 only
+  returnLastFrame: true,
+});
+console.log(r5.data[0].last_frame_url); // present when the upstream returns it
+// cameraFixed: true is Seedance 1.5-pro only.
+```
+
+#### Reference images, video and audio (account API key only)
+
+Seedance reference media is served by `api.blockrun.ai`, so it needs an
+account API key. The wallet gateways (blockrun.ai, sol.blockrun.ai) refuse
+`referenceImageUrls` / `referenceVideos` / `referenceAudios` with a 400 before
+any payment.
+
+| Model | Reference images | Reference video / audio |
+|---|---|---|
+| `bytedance/seedance-2.0` / `-fast` / `-mini` | 1–9 | 1–3 clips of each; audio needs an image or video alongside |
+| `bytedance/seedance-2.5` | 1–30 | — |
+
+Reference mode is its own mode: it cannot be mixed with `imageUrl`,
+`lastFrameUrl` or `realFaceAssetId`. Cite images as "image 1", "image 2" and
+clips as "video 1" in the prompt. Reference clips add a per-clip surcharge;
+reference audio must be ≤15.2s.
+
+```ts
+const client = new VideoClient({ apiKey: process.env.BLOCKRUN_API_KEY });
+
+// Omni / multi-reference: character/style consistency from images
+const r6 = await client.generate(
   'the character from image 1 walks through the city from image 2',
   {
     model: 'bytedance/seedance-2.0',
@@ -817,6 +846,18 @@ const r5 = await client.generate(
       'https://example.com/character.jpg',
       'https://example.com/city.jpg',
     ],
+  }
+);
+
+// Reference-to-video: image 1 for the character, video 1 for the motion
+const r7 = await client.generate(
+  'use image 1 for the character and video 1 for the motion',
+  {
+    model: 'bytedance/seedance-2.0-fast',
+    durationSeconds: 5,
+    referenceImageUrls: ['https://example.com/character.png'],
+    referenceVideos: [{ url: 'https://example.com/motion.mp4' }],
+    inputType: 'reference', // optional: 400 if the fields say otherwise
   }
 );
 ```
