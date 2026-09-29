@@ -950,13 +950,19 @@ export class SolanaLLMClient {
   /**
    * Follow a 202 `{ id, poll_url }` to completion, on Solana.
    *
-   * The Base SDK signs one EIP-3009 authorization and replays it on every poll.
-   * That cannot work here: a Solana payment is a transaction pinned to a recent
-   * blockhash, valid for ~150 blocks (~60s), and a long render outlives it. So
-   * every poll takes a **fresh** 402 and signs again. The gateway binds the job
-   * to the payer address rather than to the signature, which is what makes that
-   * legal — and it settles exactly once, on the poll that returns `completed`,
-   * so signing per poll costs signatures, never money.
+   * Two things differ from Base and both come from the same constraint — a
+   * Solana payment is a transaction pinned to a recent blockhash, valid for
+   * ~150 blocks (~60s), and a long render outlives it:
+   *
+   * 1. **The POST already settled.** Base settles on the completed poll; Solana
+   *    cannot, because by then the signed transaction has expired. So sol
+   *    settles optimistically at submit, and this loop only fetches the result.
+   *    The cost is recorded by the caller at POST, never here — recording it on
+   *    completion would lose the charge whenever a paid job then fails.
+   * 2. **Every poll re-signs.** One authorization cannot be replayed across a
+   *    long render. The gateway binds the job to the payer address rather than
+   *    to the signature, so a fresh signature from the same wallet is accepted
+   *    and is never charged again.
    */
   private async followSolanaJob(
     submitBody: Record<string, unknown>,
@@ -994,7 +1000,7 @@ export class SolanaLLMClient {
         throw new APIError(`Poll failed: ${challenge.status}`, challenge.status, sanitizeErrorResponse(errorBody));
       }
 
-      const { paymentPayload, costUsd } = await this.signPaymentFrom402(
+      const { paymentPayload } = await this.signPaymentFrom402(
         pollUrl,
         challenge,
         true,             // always a fresh blockhash; the last one is stale by now
@@ -1018,8 +1024,7 @@ export class SolanaLLMClient {
         );
       }
       if (paid.status === 200 && lastStatus === "completed") {
-        this.recordSettlement(costUsd);   // the only poll that settles
-        return data;
+        return data;   // already paid for at POST; this poll only delivers
       }
       // 202 queued / in_progress, or a transient 504: keep going. Nothing was
       // charged, so retrying is free.
@@ -1187,6 +1192,10 @@ export class SolanaLLMClient {
     // caller would get a job id where it expected an image, and nothing would
     // ever settle.
     if (retryResponse.status === 202) {
+      // Solana settles at POST, so the charge has ALREADY happened — record it
+      // here, before following the job. Recording on completion instead would
+      // drop the cost whenever a paid job later fails or times out.
+      this.recordSettlement(costUsd);
       const submitted = (await retryResponse.json()) as Record<string, unknown>;
       return this.followSolanaJob(submitted, this.timeout);
     }
