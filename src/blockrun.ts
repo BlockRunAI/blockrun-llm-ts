@@ -153,6 +153,15 @@ export class BlockrunClient {
    * deadline exceeded). Settlement happens only when upstream returns 200 +
    * completed — upstream failure or caller giving up = no charge.
    *
+   * **EVM only, and enforced upstream.** Replaying one signature works because
+   * an EIP-3009 authorization stays valid for as long as it was signed for. A
+   * Solana payment is a transaction pinned to a recent blockhash and expires in
+   * ~150 blocks (~60s), so replaying one could not cover a long render. No
+   * guard is needed here: `signFrom402` already refuses a `solana:` network
+   * outright, so this loop is unreachable on Solana. Use `SolanaLLMClient`,
+   * whose poll loop signs afresh each time; the gateway binds a job to the
+   * payer address rather than to the signature, and still settles exactly once.
+   *
    * If the gateway returns 200 directly on submit (no async surface), this
    * short-circuits and returns the body. Most long-running endpoints (image,
    * video, music, voice) return 202 with a poll_url.
