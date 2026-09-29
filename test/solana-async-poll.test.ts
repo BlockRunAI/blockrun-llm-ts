@@ -77,6 +77,11 @@ describe("Solana async jobs", () => {
     }).requestWithPaymentRaw("/v1/images/generations", { prompt: "a cat" });
 
     expect(out.status).toBe("completed");
+    // Solana settles at POST, not on the completed poll. The cost must be
+    // recorded once, at submit — recording it on completion would drop the
+    // charge whenever a paid job later fails.
+    const spend = (client as unknown as { getSpending(): { totalUsd: number; calls: number } }).getSpending?.();
+    if (spend) expect(spend.calls).toBe(1);
     // one signature for the submit + one per poll, all distinct: nothing replayed
     expect(signed.length).toBeGreaterThanOrEqual(3);
     expect(new Set(signed).size).toBe(signed.length);
