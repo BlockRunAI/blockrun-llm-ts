@@ -210,7 +210,6 @@ longer NVIDIA-only**, so pin these by full model id rather than by an
 | `nvidia/nemotron-3.5-lightning` | 1M | Thinking-mode reasoning at 1M context |
 | `nvidia/nemotron-3-ultra-550b` | 1M | Largest free model — 550B |
 | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Multimodal reasoning — text + images |
-| `nvidia/nemotron-3-nano-30b` | 128K | Compact + fast, good for high-volume light tasks |
 | `nvidia/llama-3.2-11b-vision` | 128K | Vision-language — accepts images |
 | `cohere/north-mini-code` | 256K | Compact coding model, sub-second responses |
 | `poolside/laguna-xs-2.1` | 128K | Coding model |
@@ -303,7 +302,7 @@ step — see [How Payment Works](#phase-2--every-request-pays-itself-automatic-x
 ```typescript
 // Manually pass a fallback chain to chat() / chatCompletion()
 const reply = await client.chat('nvidia/nemotron-3.5-lightning', 'hello', {
-  fallbackModels: ['nvidia/nemotron-3-nano-30b', 'cohere/north-mini-code'],
+  fallbackModels: ['nvidia/nemotron-3-ultra-550b', 'cohere/north-mini-code'],
 });
 // If nemotron-3.5-lightning times out, the SDK retries against the next model
 // and logs each hop to stderr: "[@blockrun/llm] <from> -> <to> (...)".
@@ -589,6 +588,18 @@ README is wrong the day after it lands. See **[blockrun.ai/models](https://block
 for live rates, or read them from the catalog at runtime — `client.listModels()`
 and `client.listImageModels()` return exactly what the gateway is charging.
 
+### OpenAI GPT-6 Family
+
+The GPT-6 generation: Astra is the flagship for long-horizon agentic work and
+computer use, Sol the cost-efficient tier for complex coding, Luna the fast
+low-cost tier.
+
+| Model | Context |
+|---|---|
+| `openai/gpt-6-astra` | 1.05M |
+| `openai/gpt-6-sol` | 1.05M |
+| `openai/gpt-6-luna` | 1.05M |
+
 ### OpenAI GPT-5.6 Family
 
 Three tiers on one 1.05M-context base — Sol (deepest reasoning), Terra
@@ -604,7 +615,7 @@ longer at the same token price.
 | `openai/gpt-5.6-luna` | 1.05M |
 | `openai/gpt-5.6-luna-pro` | 1.05M |
 
-### OpenAI GPT-5.5 / 5.4 / 5.2 Families
+### OpenAI GPT-5.5 / 5.4 / 5.2 / 5.1 Families
 
 | Model | Context | Notes |
 |---|---|---|
@@ -617,6 +628,7 @@ longer at the same token price.
 | `openai/gpt-5.4-nano` | 1.05M |  |
 | `openai/gpt-5.2` | 400K |  |
 | `openai/gpt-5.2-pro` | 400K |  |
+| `openai/gpt-5.1` | 400K | Configurable reasoning effort |
 | `openai/gpt-5.3-codex` | 400K | Coding/agentic SKU |
 | `openai/gpt-5-mini` | 200K |  |
 
@@ -643,11 +655,14 @@ longer at the same token price.
 
 | Model | Context | Notes |
 |---|---|---|
+| `anthropic/claude-fable-5.1` | 1M | Most capable — successor to Fable 5 at the same tier and price |
 | `anthropic/claude-fable-5` | 1M | Mythos-class flagship above Opus — always-on thinking, 128K output |
+| `anthropic/claude-opus-5.5` | 1M | Newest Opus — Opus-class reasoning at a lower price than Opus 5 |
 | `anthropic/claude-opus-5` | 1M | Flagship — the baseline the routing savings claim is measured against |
 | `anthropic/claude-opus-4.8` | 1M | Agentic coding + adaptive thinking, 128K output |
 | `anthropic/claude-opus-4.7` | 1M |  |
 | `anthropic/claude-opus-4.5` | 200K |  |
+| `anthropic/claude-sonnet-5.5` | 1M | Newest Sonnet — everyday coding and agent work, 128K output |
 | `anthropic/claude-sonnet-5` | 1M | Best cost/quality balance for long-context agent turns |
 | `anthropic/claude-sonnet-4.6` | 1M |  |
 | `anthropic/claude-sonnet-4.5` | 200K |  |
@@ -658,6 +673,7 @@ longer at the same token price.
 | Model | Context |
 |---|---|
 | `google/gemini-3.1-pro` | 1M |
+| `google/gemini-3.8-flash` | 1M |
 | `google/gemini-3.6-flash` | 1M |
 | `google/gemini-3.5-flash` | 1M |
 | `google/gemini-3-flash-preview` | 1M |
@@ -689,7 +705,9 @@ only ranks what `/v1/models` lists.
 
 | Model | Context | Notes |
 |---|---|---|
-| `xai/grok-4.5` | 500K | Flagship — reasoning + vision, native Live Search (`search: true`) |
+| `xai/grok-4.7` | 500K | Flagship — reasoning + vision, selectable effort (low → xhigh), native Live Search (`search: true`) |
+| `xai/grok-4.6` | 500K | Reasoning with selectable effort, native Live Search |
+| `xai/grok-4.5` | 500K | Reasoning + vision, native Live Search |
 | `xai/grok-4.3` | 1M | Reasoning + vision, tuned for agentic workflows |
 | `xai/grok-build-0.1` | 256K | Fast agentic coding model |
 
@@ -711,11 +729,10 @@ only ranks what `/v1/models` lists.
 | `qwen/qwen3.8-flash` | 1M |  |
 | `qwen/qwen3.7-flash` | 1M | Cheapest paid chat model in the catalog |
 
-### Tencent, Xiaomi
+### Xiaomi
 
 | Model | Context |
 |---|---|
-| `tencent/hy3` | 256K |
 | `xiaomi/mimo-v2.5` | 1M |
 | `xiaomi/mimo-v2.5-pro` | 1M |
 
@@ -729,7 +746,6 @@ Input and output both $0 — no promo, no rate-limit gimmick. The free tier is
 |---|---|---|
 | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Multimodal reasoning — text + images |
 | `nvidia/nemotron-3.5-lightning` | 1M | Thinking-mode reasoning at 1M context |
-| `nvidia/nemotron-3-nano-30b` | 128K | Compact and fast, good for high-volume light tasks |
 | `nvidia/llama-3.2-11b-vision` | 128K | Vision-language — accepts images |
 | `nvidia/nemotron-3-ultra-550b` | 1M | Largest free model — 550B, 1M context |
 | `cohere/north-mini-code` | 256K | Compact coding model, sub-second responses |
@@ -740,11 +756,14 @@ Input and output both $0 — no promo, no rate-limit gimmick. The free tier is
 |---|---|
 | `openai/gpt-image-1` | Native GPT-4o image generation |
 | `openai/gpt-image-2` | Reasoning-driven — multilingual text rendering, character consistency |
+| `openai/gpt-image-2.5-flare` | GPT Image 2.5 |
+| `openai/gpt-image-2.5-sunburst` | GPT Image 2.5 |
 | `google/nano-banana` | Gemini 2.5 Flash image generation — fast and efficient |
 | `google/nano-banana-2` | Gemini 3.1 Flash — pro-level quality at Flash speed |
 | `google/nano-banana-pro` | Gemini 3 Pro — highest quality, up to 4K |
 | `xai/grok-imagine-image` | Fast, 300 RPM |
 | `xai/grok-imagine-image-pro` | Quality tier, 30 RPM |
+| `xai/grok-imagine-image-2.0` | Grok Imagine 2.0 |
 | `bytedance/seedream-5-pro` | Flagship generation + editing, up to 4K-class, reference images |
 | `zai/cogview-4` | Up to 1440x1440 |
 
