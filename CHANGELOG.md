@@ -1,5 +1,35 @@
 # Changelog
 
+## 3.17.0
+
+### Fixed — Solana async jobs
+
+`SolanaLLMClient` did not follow a 202 job to completion. A slow model answers
+`202 { id, poll_url }` instead of the media, and the wallet path returned that
+envelope as if it were the result: the caller got a job id where it expected an
+image, and nothing ever settled. It now polls to completion.
+
+The poll loop **re-signs on every poll**. A Solana payment is a transaction
+pinned to a recent blockhash and expires in ~150 blocks (~60s), so the Base
+pattern of replaying one EIP-3009 authorization cannot work here. The gateway
+binds a job to the payer address rather than to the signature, which makes
+re-signing legal, and it settles exactly once — on the poll that returns
+`completed` — so signing per poll costs signatures, never money.
+
+Reported by Anchorage Digital, who hit it moving from Base to Solana.
+
+### Added
+
+- `SolanaLLMClient.image(prompt, options)` — plain image generation on Solana.
+  Only `imageEdit` existed before, so generating an image on `sol.blockrun.ai`
+  meant hand-rolling the request.
+
+### Docs
+
+- `BlockrunClient.poll()` now states that it is EVM-only and why: `signFrom402`
+  already refuses a `solana:` network, so the replay loop is unreachable on
+  Solana rather than silently expiring mid-job.
+
 All notable changes to @blockrun/llm will be documented in this file.
 
 ## [3.16.0] - 2026-09-16

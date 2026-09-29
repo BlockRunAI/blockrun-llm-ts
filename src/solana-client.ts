@@ -630,6 +630,22 @@ export class SolanaLLMClient {
   }
 
   /** Edit an image using img2img (Solana payment). */
+  /**
+   * Generate an image on Solana.
+   *
+   * Slow models answer 202 `{ id, poll_url }`; `requestWithPaymentRaw` follows
+   * that to completion, re-signing per poll, and settles once at the end. Fast
+   * models answer 200 inline and settle there.
+   */
+  async image(
+    prompt: string,
+    options: { model?: string; size?: string; n?: number } & Record<string, unknown> = {}
+  ): Promise<ImageResponse> {
+    const body: Record<string, unknown> = { prompt, ...options };
+    const data = await this.requestWithPaymentRaw("/v1/images/generations", body);
+    return data as unknown as ImageResponse;
+  }
+
   async imageEdit(
     prompt: string,
     image: string | string[],
@@ -931,6 +947,95 @@ export class SolanaLLMClient {
    * @returns the header value to replay with, and what it will settle for.
    * @throws PaymentError when the 402 carries no usable Solana requirements.
    */
+  /**
+   * Follow a 202 `{ id, poll_url }` to completion, on Solana.
+   *
+   * The Base SDK signs one EIP-3009 authorization and replays it on every poll.
+   * That cannot work here: a Solana payment is a transaction pinned to a recent
+   * blockhash, valid for ~150 blocks (~60s), and a long render outlives it. So
+   * every poll takes a **fresh** 402 and signs again. The gateway binds the job
+   * to the payer address rather than to the signature, which is what makes that
+   * legal — and it settles exactly once, on the poll that returns `completed`,
+   * so signing per poll costs signatures, never money.
+   */
+  private async followSolanaJob(
+    submitBody: Record<string, unknown>,
+    budgetMs: number,
+    intervalMs = 2_000
+  ): Promise<Record<string, unknown>> {
+    const id = submitBody.id as string | undefined;
+    const pollPath = submitBody.poll_url as string | undefined;
+    if (!id || !pollPath) return submitBody;
+
+    const pollUrl = pollPath.startsWith("http")
+      ? pollPath
+      : `${this.apiUrl}${pollPath.startsWith("/") ? "" : "/"}${pollPath}`;
+
+    const deadline = Date.now() + budgetMs;
+    let lastStatus = (submitBody.status as string) || "queued";
+
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, intervalMs));
+
+      // unpaid GET -> 402 challenge carrying a server-provided blockhash
+      const challenge = await this.fetchWithTimeout(pollUrl, {
+        method: "GET",
+        headers: { "User-Agent": USER_AGENT },
+      });
+
+      if (challenge.status === 200) {
+        // already settled on an earlier poll: URLs come back idempotently
+        const done = (await challenge.json()) as Record<string, unknown>;
+        return done;
+      }
+      if (challenge.status !== 402) {
+        let errorBody: unknown;
+        try { errorBody = await challenge.json(); } catch { errorBody = { error: "Poll failed" }; }
+        throw new APIError(`Poll failed: ${challenge.status}`, challenge.status, sanitizeErrorResponse(errorBody));
+      }
+
+      const { paymentPayload, costUsd } = await this.signPaymentFrom402(
+        pollUrl,
+        challenge,
+        true,             // always a fresh blockhash; the last one is stale by now
+        pollUrl
+      );
+
+      const paid = await this.fetchWithTimeout(pollUrl, {
+        method: "GET",
+        headers: { "User-Agent": USER_AGENT, "PAYMENT-SIGNATURE": paymentPayload },
+      });
+
+      let data: Record<string, unknown> = {};
+      try { data = (await paid.json()) as Record<string, unknown>; } catch { /* keep empty */ }
+      lastStatus = (data.status as string) || lastStatus;
+
+      if (lastStatus === "failed") {
+        throw new APIError(
+          `Upstream job failed: ${(data.error as string) || "unknown"}`,
+          paid.status,
+          sanitizeErrorResponse(data)
+        );
+      }
+      if (paid.status === 200 && lastStatus === "completed") {
+        this.recordSettlement(costUsd);   // the only poll that settles
+        return data;
+      }
+      // 202 queued / in_progress, or a transient 504: keep going. Nothing was
+      // charged, so retrying is free.
+      if (paid.status !== 200 && paid.status !== 202 && paid.status !== 504) {
+        throw new APIError(`Poll failed: ${paid.status}`, paid.status, sanitizeErrorResponse(data));
+      }
+    }
+
+    throw new APIError(
+      `Job did not complete within ${Math.round(budgetMs / 1000)}s (last status: ${lastStatus}). ` +
+        `No payment was taken.`,
+      504,
+      { id, last_status: lastStatus }
+    );
+  }
+
   private async signPaymentFrom402(
     url: string,
     response: Response,
@@ -1076,8 +1181,17 @@ export class SolanaLLMClient {
     });
 
     await this.assertPaid(retryResponse);
-    this.recordSettlement(costUsd);
 
+    // A slow model answers 202 { id, poll_url } instead of the media. Returning
+    // that envelope as the result is the bug this branch exists to prevent: the
+    // caller would get a job id where it expected an image, and nothing would
+    // ever settle.
+    if (retryResponse.status === 202) {
+      const submitted = (await retryResponse.json()) as Record<string, unknown>;
+      return this.followSolanaJob(submitted, this.timeout);
+    }
+
+    this.recordSettlement(costUsd);
     return retryResponse.json() as Promise<Record<string, unknown>>;
   }
 
