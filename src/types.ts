@@ -715,6 +715,10 @@ export interface VideoClip {
   request_id?: string;
   /** True when the gateway mirrored the video to its GCS bucket */
   backed_up?: boolean;
+  /** Final frame image when returnLastFrame is requested and the provider returns it. */
+  last_frame_url?: string;
+  /** Whether the final frame was mirrored to BlockRun storage. */
+  last_frame_backed_up?: boolean;
 }
 
 export interface VideoResponse {
@@ -762,18 +766,49 @@ export interface VideoGenerateOptions {
    * First-and-last-frame interpolation: a second image that seeds the FINAL
    * frame so the model tweens from `imageUrl` → `lastFrameUrl`. Requires
    * `imageUrl` (the first frame) and a Seedance model
-   * (bytedance/seedance-1.5-pro, seedance-2.0, or seedance-2.0-fast).
+   * (1.5-pro, 2.0 / Fast / Mini, or 2.5).
    * Priced identically to image-to-video. Mutually exclusive with
    * `realFaceAssetId`.
    */
   lastFrameUrl?: string;
   /**
-   * Omni / multi-reference: up to 9 reference image URLs for character/style
-   * consistency (**Seedance 2.0 only**). Cite them as "image 1", "image 2"
-   * in the prompt. Mutually exclusive with `imageUrl` / `lastFrameUrl` /
-   * `realFaceAssetId`.
+   * Omni / multi-reference: up to 9 (Seedance 2.0 / Fast / Mini) or 30
+   * (Seedance 2.5) reference image URLs for character/style consistency. Cite
+   * them as "image 1", "image 2" in the prompt. Mutually exclusive with
+   * `imageUrl` / `lastFrameUrl` / `realFaceAssetId`.
+   *
+   * **Account API key only.** Reference media is served by `api.blockrun.ai`;
+   * the wallet gateways (blockrun.ai, sol.blockrun.ai) refuse it with a 400
+   * before any payment.
    */
   referenceImageUrls?: string[];
+  /**
+   * Reference-to-video: 1–3 http(s) motion/style video clips (Seedance 2.0 /
+   * Fast / Mini). May be combined with `referenceImageUrls`; mutually exclusive
+   * with frame seeds. `role` is optional and, when set, must be `"reference"`.
+   * Adds a per-clip surcharge. **Account API key only** (see `referenceImageUrls`).
+   */
+  referenceVideos?: Array<{ url: string; role?: "reference" }>;
+  /**
+   * Reference audio: 1–3 http(s) clips, each ≤15.2s (Seedance 2.0 / Fast /
+   * Mini). Requires `referenceImageUrls` or `referenceVideos` alongside it.
+   * Adds a per-clip surcharge. **Account API key only** (see `referenceImageUrls`).
+   */
+  referenceAudios?: Array<{ url: string; role?: "reference" }>;
+  /** Output bitrate mode. Seedance 2.0 / Fast / Mini / 2.5 only — other models get a 400. */
+  bitrateMode?: "standard" | "high";
+  /** Output container. Seedance 2.5 only — other models get a 400. */
+  outputFormat?: "mp4" | "mov";
+  /** Lock the camera. Seedance 1.5-pro only — other models get a 400. */
+  cameraFixed?: boolean;
+  /** End-user identifier forwarded for upstream abuse monitoring. Seedance only. */
+  safetyIdentifier?: string;
+  /**
+   * Declare the intended mode. The gateway infers it from the media fields
+   * anyway; when this is set and disagrees, it answers 400 (with the inferred
+   * mode) before payment instead of rendering the wrong thing.
+   */
+  inputType?: "text" | "image" | "first_last_frame" | "reference";
   /** Duration to bill for (defaults to model's default duration) */
   durationSeconds?: number;
   /** Output aspect ratio. Token360 / Seedance only — silently ignored by xAI Grok. */
@@ -793,7 +828,10 @@ export interface VideoGenerateOptions {
   seed?: number;
   /** Embed the upstream watermark on the output. Defaults to false at the gateway. */
   watermark?: boolean;
-  /** Return the last frame as an image alongside the clip — useful for chaining. */
+  /**
+   * Return the last frame as an image alongside the clip — useful for chaining.
+   * Read it from `data[0].last_frame_url` (absent if the upstream omits it).
+   */
   returnLastFrame?: boolean;
 }
 
