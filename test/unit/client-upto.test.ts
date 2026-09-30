@@ -217,6 +217,42 @@ describe("LLMClient x402 upto", () => {
     }
   });
 
+  it("concurrent calls: the permit slot is reserved before the RPC read, so exactly ONE carries a permit (the 2026-09-30 nonce-6 revert)", async () => {
+    // Live: Promise.all of 3 on a fresh client all read nonce 6, all signed a permit at 6, 2 reverted.
+    const net = mockChain({ allowance: 0n, nonce: 6n });
+    const client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
+    await Promise.all([1, 2, 3].map(() => client.chat("deepseek/deepseek-chat", "hi")));
+    const sent = net.signatures.map((s) => decode(s));
+    expect(sent).toHaveLength(3);
+    expect(sent.filter((p) => permitNonce(p) !== null).map(permitNonce)).toEqual(["6"]);
+    expect(sent.map((p) => p.accepted.scheme).sort()).toEqual(["exact", "exact", "upto"]);
+  });
+
+  it("concurrent calls with a standing allowance all pay upto, none with a permit", async () => {
+    const net = mockChain({ allowance: 10n ** 12n, nonce: 6n });
+    const client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
+    await Promise.all([1, 2, 3].map(() => client.chat("deepseek/deepseek-chat", "hi")));
+    const sent = net.signatures.map((s) => decode(s));
+    expect(sent.map((p) => p.accepted.scheme)).toEqual(["upto", "upto", "upto"]);
+    expect(sent.map(permitNonce)).toEqual([null, null, null]);
+  });
+
+  it("the slot is released when a call signs no permit or its preflight fails", async () => {
+    const chain = { allowance: 10n ** 12n, nonce: 2n };
+    const net = mockChain(chain);
+    const client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
+    await client.chat("deepseek/deepseek-chat", "hi"); // upto, no permit → slot released
+    const inner = vi.mocked(global.fetch).getMockImplementation()!;
+    vi.mocked(global.fetch).mockImplementationOnce(async (url, init) => inner(url, init)); // unpaid 402
+    vi.mocked(global.fetch).mockImplementationOnce(async () => { throw new Error("rpc down"); }); // preflight fails → exact
+    await client.chat("deepseek/deepseek-chat", "hi");
+    chain.allowance = 0n;
+    await client.chat("deepseek/deepseek-chat", "hi"); // slot free → permit at nonce 2
+    const sent = net.signatures.map((s) => decode(s));
+    expect(sent.map((p) => p.accepted.scheme)).toEqual(["upto", "exact", "upto"]);
+    expect(sent.map(permitNonce)).toEqual([null, null, "2"]);
+  });
+
   it("nonce guard: a standing allowance >= ceiling means upto without a permit even while one is pending", async () => {
     const chain = { allowance: 0n, nonce: 0n };
     const net = mockChain(chain);

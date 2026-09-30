@@ -213,6 +213,16 @@ export class LLMClient {
    * the first was still settling asynchronously. See PendingPermit.
    */
   private pendingPermits = new Map<string, PendingPermit & { signedAt: number }>();
+  /**
+   * `${wallet}:${network}` pairs whose permit slot a call has reserved and not
+   * yet released. Reserved SYNCHRONOUSLY, before the preflight's RPC await:
+   * on 2026-09-30 three concurrent calls (Promise.all on one fresh client) all
+   * read USDC nonce 6 before any of them recorded a pending permit, all signed
+   * a permit at nonce 6, and two reverted on-chain. A call that finds the slot
+   * taken never signs a permit. Released when the call signs no permit or
+   * fails; handed over to `pendingPermits` when it signs one.
+   */
+  private permitSlots = new Set<string>();
   private modelPricingCache: Map<string, ModelPricing> | null = null;
   private modelPricingPromise: Promise<Map<string, ModelPricing>> | null = null;
 
@@ -616,18 +626,27 @@ export class LLMClient {
       forceExact || this.uptoRejected.has(key) ? "exact" : this.paymentScheme;
     const pending = this.pendingPermits.get(key);
     if (pending && Date.now() / 1000 >= pending.deadline) this.pendingPermits.delete(key);
-    const signed = await createEvmPayment(this.privateKey, this.account.address, paymentRequired, {
-      resourceUrl: validateResourceUrl(
-        paymentRequired.resource?.url || fallbackResourceUrl,
-        this.apiUrl
-      ),
-      resourceDescription: paymentRequired.resource?.description || "BlockRun AI API call",
-      paymentScheme: scheme,
-      pendingPermit: this.pendingPermits.get(key),
-    });
-    if (signed.pendingPermitResolved) this.pendingPermits.delete(key);
-    if (signed.permit) this.pendingPermits.set(key, { ...signed.permit, signedAt: Date.now() });
-    return signed;
+    // Reserve the permit slot before any await (see permitSlots).
+    const holdsSlot = scheme !== "exact" && !this.permitSlots.has(key);
+    if (holdsSlot) this.permitSlots.add(key);
+    try {
+      const signed = await createEvmPayment(this.privateKey, this.account.address, paymentRequired, {
+        resourceUrl: validateResourceUrl(
+          paymentRequired.resource?.url || fallbackResourceUrl,
+          this.apiUrl
+        ),
+        resourceDescription: paymentRequired.resource?.description || "BlockRun AI API call",
+        paymentScheme: scheme,
+        pendingPermit: this.pendingPermits.get(key),
+        permitBlocked: !holdsSlot,
+      });
+      if (signed.pendingPermitResolved) this.pendingPermits.delete(key);
+      // The slot becomes the nonce record (released below either way).
+      if (signed.permit) this.pendingPermits.set(key, { ...signed.permit, signedAt: Date.now() });
+      return signed;
+    } finally {
+      if (holdsSlot) this.permitSlots.delete(key);
+    }
   }
 
   private uptoKey(network: string): string {

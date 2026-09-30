@@ -410,6 +410,10 @@ export interface PendingPermit {
  * `pendingResolved` reports that `pending` can be forgotten: the on-chain
  * nonce moved past it (consumed) or its deadline passed (can never execute).
  * Allowance ≥ ceiling means upto without a permit regardless of `pending`.
+ *
+ * `permitBlocked`: a concurrent call from the same client holds the permit
+ * slot (it reserved it before its own RPC read), so this call must not sign a
+ * permit — upto without one if allowance ≥ ceiling, else exact.
  * Any RPC error propagates; the caller turns it into `exact`.
  */
 export async function planUpto(
@@ -419,6 +423,7 @@ export async function planUpto(
   rpcUrls: readonly string[] = evmRpcUrls(upto.network),
   pending?: PendingPermit,
   nowSeconds: number = Math.floor(Date.now() / 1000),
+  permitBlocked = false,
 ): Promise<UptoPlan> {
   if (rpcUrls.length === 0) return { use: false, reason: `no RPC for ${upto.network}` };
   const ownerAddr = getAddress(owner);
@@ -451,6 +456,13 @@ export async function planUpto(
   if (allowance >= ceiling) return { use: true, pendingResolved };
   if (tokenNonce === undefined) {
     return { use: false, reason: `Permit2 allowance ${allowance} is below ${ceiling} and the 402 offers no gas sponsoring`, pendingResolved };
+  }
+  if (permitBlocked) {
+    return {
+      use: false,
+      reason: `another call from this client holds the permit slot (allowance ${allowance} < ${ceiling})`,
+      pendingResolved,
+    };
   }
   if (livePending) {
     return {
@@ -491,6 +503,11 @@ export interface CreateEvmPaymentOptions {
    * instead of a second permit (see PendingPermit).
    */
   pendingPermit?: PendingPermit;
+  /**
+   * Another concurrent call holds this wallet+network's permit slot: never
+   * attach a permit (upto only if allowance already ≥ ceiling, else exact).
+   */
+  permitBlocked?: boolean;
 }
 
 export interface SignedEvmPayment {
@@ -565,6 +582,8 @@ export async function createEvmPayment(
       gasSponsoring,
       options.rpcUrls ?? evmRpcUrls(network),
       options.pendingPermit,
+      Math.floor(Date.now() / 1000),
+      options.permitBlocked ?? false,
     );
     if (!plan.use) {
       debug(`${plan.reason}; signing exact`);

@@ -447,6 +447,19 @@ describe("createEvmPayment selection policy", () => {
       expect(await plan({ tokenNonce: 4n, deadline: NOW + 300 })).toEqual({ use: true, pendingResolved: false });
     });
 
+    it("permitBlocked (another call holds the slot): short allowance → no permit, exact; allowance ok → upto", async () => {
+      mockRpc({ allowance: 0n, nonce: 6n });
+      expect(await planUpto(TEST_ACCOUNT.address, baseUpto(), true, [RPC], undefined, NOW, true)).toMatchObject({
+        use: false,
+        reason: expect.stringMatching(/permit slot/),
+      });
+      mockRpc({ allowance: 12345n, nonce: 6n });
+      expect(await planUpto(TEST_ACCOUNT.address, baseUpto(), true, [RPC], undefined, NOW, true)).toEqual({
+        use: true,
+        pendingResolved: false,
+      });
+    });
+
     it("no pending permit → a permit at the on-chain nonce", async () => {
       mockRpc({ allowance: 0n, nonce: 9n });
       expect(await plan(undefined)).toEqual({ use: true, gasSponsoringTokenNonce: 9n, pendingResolved: false });
