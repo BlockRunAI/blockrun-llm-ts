@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed — Solana settlement timing is per route, not per chain
+
+3.17.1 said every Solana job settles at POST. That holds for **image** routes
+only. Solana **video** verifies at POST and settles on the poll that sees
+`completed`, like Base, so a failed video job is not charged (a stale blockhash
+on that poll gets a fresh 402 to re-sign). No code change: `SolanaLLMClient`
+has no video method, and its poll loop serves image routes, where
+record-at-POST is correct. The comments and the 3.17.1 entry now say so.
+
 ### Added — Seedance reference media and output controls
 
 - `VideoClient.generate()` takes `referenceVideos` and `referenceAudios`
@@ -26,8 +35,8 @@ with frame seeds, and reference audio without an image or video beside it.
 
 ### Fixed — settlement timing on Solana
 
-3.17.0's new poll loop recorded the cost when the job completed. Solana settles
-**at POST**, optimistically, because a signed transaction expires with its
+3.17.0's new poll loop recorded the cost when the job completed. Solana image
+routes settle **at POST**, optimistically, because a signed transaction expires with its
 blockhash (~60-90s) and a long render outlives it — so the charge has already
 happened by the time the first poll runs. Recording it on completion dropped the
 cost from session accounting whenever a paid job then failed or timed out. The
@@ -35,7 +44,8 @@ cost is now recorded at submit, where it is actually incurred, and the poll loop
 only fetches the result.
 
 This is the difference between the two chains and it is not cosmetic: on Base a
-job that fails after submit is not charged; on Solana it is.
+job that fails after submit is not charged; on Solana it is. (Images only —
+Solana video settles on the completed poll; see [Unreleased].)
 
 ## [3.17.0] - 2026-09-29
 

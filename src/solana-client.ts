@@ -948,7 +948,7 @@ export class SolanaLLMClient {
    * @throws PaymentError when the 402 carries no usable Solana requirements.
    */
   /**
-   * Follow a 202 `{ id, poll_url }` to completion, on Solana.
+   * Follow a 202 `{ id, poll_url }` to completion, on Solana **image** routes.
    *
    * Two things differ from Base and both come from the same constraint — a
    * Solana payment is a transaction pinned to a recent blockhash, valid for
@@ -959,6 +959,9 @@ export class SolanaLLMClient {
    *    settles optimistically at submit, and this loop only fetches the result.
    *    The cost is recorded by the caller at POST, never here — recording it on
    *    completion would lose the charge whenever a paid job then fails.
+   *    Solana VIDEO is the exception: it settles on the completed poll and a
+   *    failed job is not charged. Do not route video through this loop as-is —
+   *    it would book spend for jobs that were never charged.
    * 2. **Every poll re-signs.** One authorization cannot be replayed across a
    *    long render. The gateway binds the job to the payer address rather than
    *    to the signature, so a fresh signature from the same wallet is accepted
@@ -1192,7 +1195,7 @@ export class SolanaLLMClient {
     // caller would get a job id where it expected an image, and nothing would
     // ever settle.
     if (retryResponse.status === 202) {
-      // Solana settles at POST, so the charge has ALREADY happened — record it
+      // Solana image routes settle at POST, so the charge has ALREADY happened — record it
       // here, before following the job. Recording on completion instead would
       // drop the cost whenever a paid job later fails or times out.
       this.recordSettlement(costUsd);
