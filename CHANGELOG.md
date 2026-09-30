@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.18.0] - 2026-09-30
+
 ### Fixed — Solana settlement timing is per route, not per chain
 
 3.17.1 said every Solana job settles at POST. That holds for **image** routes
