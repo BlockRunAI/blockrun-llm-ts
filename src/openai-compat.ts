@@ -24,6 +24,7 @@ import { LLMClient, DEFAULT_TIMEOUT } from "./client";
 import type {
   ChatMessage,
   ChatResponse,
+  PaymentScheme,
   ResponseFormat,
   RoutingDecision,
   Tool,
@@ -41,6 +42,8 @@ export interface OpenAIClientOptions extends ApiKeyOptions {
   baseURL?: string;
   /** Request timeout in milliseconds */
   timeout?: number;
+  /** x402 scheme on EVM: "auto" (default, `upto` when offered and usable) or "exact". See LLMClientOptions. */
+  paymentScheme?: PaymentScheme;
 }
 
 export interface OpenAIChatCompletionParams {
@@ -299,6 +302,7 @@ export class OpenAI {
       apiKey: options.apiKey,
       apiUrl,
       timeout,
+      paymentScheme: options.paymentScheme,
     });
 
     this.chat = new Chat(this.client, apiUrl, timeout);

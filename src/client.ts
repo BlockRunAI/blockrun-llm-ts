@@ -42,6 +42,7 @@ import {
   type ExaContentsResponse,
   type ExaFindSimilarOptions,
   type OnrampResult,
+  type PaymentScheme,
   APIError,
   PaymentError,
   RetiredEndpointError,
@@ -103,11 +104,14 @@ function mapRawToImageModel(m: any): ImageModel {
     available: true,
   };
 }
+import { extractPaymentDetails, parsePaymentRequired } from "./x402";
 import {
-  createPaymentPayload,
-  parsePaymentRequired,
-  extractPaymentDetails,
-} from "./x402";
+  bookedCost,
+  createEvmPayment,
+  resolvePaymentScheme,
+  type SignedEvmPayment,
+} from "./x402-upto";
+import { evmRpcUrls } from "./evm-rpc";
 import {
   validatePrivateKey,
   validateApiUrl,
@@ -119,6 +123,28 @@ import { logCost } from "./cost-log";
 import { USER_AGENT } from "./version";
 
 const DEFAULT_API_URL = "https://blockrun.ai/api";
+
+/**
+ * Did the gateway reject the PAYMENT (as opposed to failing the request)?
+ * A 402, or a 4xx whose JSON body names a payment-verification failure
+ * ("Payment verification failed", a `PAYMENT_*` code). The body is read from a
+ * clone, so the response stays readable for whoever surfaces it.
+ */
+async function isPaymentRejection(response: Response): Promise<boolean> {
+  if (response.status === 402) return true;
+  if (response.status < 400 || response.status >= 500) return false;
+  try {
+    const text = await response.clone().text();
+    const body = JSON.parse(text) as { error?: unknown; code?: unknown; message?: unknown };
+    const error = typeof body.error === "string" ? body.error
+      : typeof (body.error as { message?: unknown })?.message === "string" ? (body.error as { message: string }).message
+      : "";
+    return /payment verification failed/i.test(error)
+      || (typeof body.code === "string" && /^PAYMENT_/.test(body.code));
+  } catch {
+    return false;
+  }
+}
 const DEFAULT_MAX_TOKENS = 1024;
 
 /**
@@ -169,6 +195,15 @@ export class LLMClient {
   private timeout: number;
   private sessionTotalUsd: number = 0;
   private sessionCalls: number = 0;
+  /** Part of sessionTotalUsd that is an unconfirmed `upto` ceiling. */
+  private sessionUptoCeilingUsd: number = 0;
+  private paymentScheme: PaymentScheme;
+  /**
+   * `${wallet}:${network}` pairs the gateway has rejected an `upto` payment
+   * for. In memory, for the life of this client: once rejected, every later
+   * call on that network signs `exact` straight away.
+   */
+  private uptoRejected = new Set<string>();
   private modelPricingCache: Map<string, ModelPricing> | null = null;
   private modelPricingPromise: Promise<Map<string, ModelPricing>> | null = null;
 
@@ -214,6 +249,7 @@ export class LLMClient {
     this.apiUrl = apiUrl.replace(/\/$/, "");
 
     this.timeout = options.timeout || DEFAULT_TIMEOUT;
+    this.paymentScheme = resolvePaymentScheme(options.paymentScheme);
   }
 
   /**
@@ -506,7 +542,12 @@ export class LLMClient {
   private recordCost(
     url: string,
     costUsd: number,
-    opts?: { body?: Record<string, unknown>; network?: string },
+    opts?: {
+      body?: Record<string, unknown>;
+      network?: string;
+      scheme?: "exact" | "upto";
+      costBasis?: "settled" | "ceiling";
+    },
   ): void {
     try {
       let endpoint = "";
@@ -520,6 +561,9 @@ export class LLMClient {
         wallet: this.account.address,
         network: opts?.network,
         client_kind: "LLMClient",
+        // Only `upto` entries carry these, so exact rows are byte-identical to
+        // before. cost_basis "ceiling" = an authorization, not a settlement.
+        ...(opts?.scheme === "upto" ? { scheme: "upto" as const, cost_basis: opts.costBasis } : {}),
       });
     } catch { /* never propagate */ }
   }
@@ -545,6 +589,105 @@ export class LLMClient {
       };
     }
     return body;
+  }
+
+  /**
+   * Sign a 402's payment requirements (base64 header) on EVM, choosing
+   * `exact` or `upto` per `paymentScheme` (see createEvmPayment).
+   */
+  private async signPaymentRequired(
+    paymentHeader: string,
+    fallbackResourceUrl: string,
+    forceExact = false,
+  ): Promise<SignedEvmPayment> {
+    const paymentRequired = parsePaymentRequired(paymentHeader);
+    const network = extractPaymentDetails(paymentRequired).network || "eip155:8453";
+    const scheme: PaymentScheme =
+      forceExact || this.uptoRejected.has(this.uptoKey(network)) ? "exact" : this.paymentScheme;
+    return createEvmPayment(this.privateKey, this.account.address, paymentRequired, {
+      resourceUrl: validateResourceUrl(
+        paymentRequired.resource?.url || fallbackResourceUrl,
+        this.apiUrl
+      ),
+      resourceDescription: paymentRequired.resource?.description || "BlockRun AI API call",
+      paymentScheme: scheme,
+    });
+  }
+
+  private uptoKey(network: string): string {
+    return `${this.account.address.toLowerCase()}:${network}`;
+  }
+
+  /**
+   * Sign and send a paid request.
+   *
+   * If an `upto` payment is REJECTED — a 402, or a payment-verification error
+   * body — the gateway has answered before delivering any response body, so
+   * nothing settled. The same request is then re-sent exactly once with a
+   * fresh `exact` payment built from the exact entry of the 402 that offered
+   * upto: the caller gets what it would have got before `upto` existed. If
+   * that exact retry is rejected too, the ORIGINAL rejection is surfaced and
+   * nothing further is retried. A 2xx is never retried (a stream is only
+   * inspected for its status, never mid-body). The rejection is remembered for
+   * this wallet+network for the life of the client, so later calls go
+   * straight to `exact`.
+   */
+  private async signAndSend(
+    paymentHeader: string,
+    fallbackResourceUrl: string,
+    send: (paymentPayload: string) => Promise<Response>,
+  ): Promise<{ signed: SignedEvmPayment; response: Response }> {
+    const signed = await this.signPaymentRequired(paymentHeader, fallbackResourceUrl);
+    const response = await send(signed.paymentPayload);
+    if (signed.scheme !== "upto") return { signed, response };
+
+    if (response.ok) {
+      // A gateway may answer a failed payment with a free-model rescue (200,
+      // X-Free-Fallback: payment-failed). Never retried — it is a 2xx and the
+      // body is the caller's — but upto is not signed on this network again.
+      if (response.headers?.get?.("X-Free-Fallback") === "payment-failed") {
+        this.uptoRejected.add(this.uptoKey(signed.network));
+      }
+      return { signed, response };
+    }
+    if (!(await isPaymentRejection(response))) return { signed, response };
+
+    this.uptoRejected.add(this.uptoKey(signed.network));
+    if (typeof process !== "undefined" && process.env?.BLOCKRUN_DEBUG) {
+      console.debug(`[@blockrun/llm] x402: upto payment rejected (${response.status}); retrying once with exact`);
+    }
+    const exact = await this.signPaymentRequired(paymentHeader, fallbackResourceUrl, true);
+    const retry = await send(exact.paymentPayload);
+    if (!retry.ok && (await isPaymentRejection(retry))) {
+      // Surface the original rejection; do not retry again.
+      return { signed, response };
+    }
+    return { signed: exact, response: retry };
+  }
+
+  /**
+   * Book a paid call into session spending and cost_log. For `upto` the
+   * signed amount is only a CEILING: the settled amount from PAYMENT-RESPONSE
+   * is booked when the gateway reports it, else the ceiling, labelled so.
+   */
+  private bookPayment(
+    signed: SignedEvmPayment,
+    response: Response | undefined,
+    log?: { url: string; body?: Record<string, unknown> },
+  ): number {
+    const { costUsd, basis } = bookedCost(signed, response);
+    this.sessionCalls += 1;
+    this.sessionTotalUsd += costUsd;
+    if (basis === "ceiling") this.sessionUptoCeilingUsd += costUsd;
+    if (log) {
+      this.recordCost(log.url, costUsd, {
+        body: log.body,
+        network: signed.network,
+        scheme: signed.scheme,
+        costBasis: basis === "exact" ? undefined : basis,
+      });
+    }
+    return costUsd;
   }
 
   /**
@@ -633,44 +776,23 @@ export class LLMClient {
       throw new PaymentError("402 response but no payment requirements found");
     }
 
-    // Parse payment requirements
-    const paymentRequired = parsePaymentRequired(paymentHeader);
-
-    // Extract payment details
-    const details = extractPaymentDetails(paymentRequired);
-
-    // Create signed payment payload (v2 format)
-    // Pass through extensions from server (for Bazaar discovery)
-    const extensions = ((paymentRequired as unknown) as Record<string, unknown>).extensions as Record<string, unknown> | undefined;
-    const paymentPayload = await createPaymentPayload(
-      this.privateKey,
-      this.account.address,
-      details.recipient,
-      details.amount,
-      details.network || "eip155:8453",
-      {
-        resourceUrl: validateResourceUrl(
-          details.resource?.url || `${this.apiUrl}/v1/chat/completions`,
-          this.apiUrl
-        ),
-        resourceDescription: details.resource?.description || "BlockRun AI API call",
-        maxTimeoutSeconds: details.maxTimeoutSeconds || 300,
-        extra: details.extra,
-        asset: details.asset,
-        extensions,
-      }
-    );
-
+    // Parse the requirements and sign (exact, or upto when offered and usable).
+    // Server extensions are passed through (Bazaar discovery, builder code).
     // Retry with payment (x402 library expects PAYMENT-SIGNATURE header)
-    const retryResponse = await this.fetchWithTimeout(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": USER_AGENT,
-        "PAYMENT-SIGNATURE": paymentPayload,
-      },
-      body: JSON.stringify(body),
-    });
+    const { signed, response: retryResponse } = await this.signAndSend(
+      paymentHeader,
+      `${this.apiUrl}/v1/chat/completions`,
+      (payload) => this.fetchWithTimeout(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": USER_AGENT,
+          "PAYMENT-SIGNATURE": payload,
+        },
+        body: JSON.stringify(body),
+      }),
+    );
+    const paymentPayload = signed.paymentPayload;
 
     // Auto-retry on transient server errors (502/503) after payment
     if (retryResponse.status === 502 || retryResponse.status === 503) {
@@ -691,10 +813,7 @@ export class LLMClient {
           try { errorBody = await retryResp2.json(); } catch { errorBody = { error: "Request failed" }; }
           throw new APIError(`API error after payment: ${retryResp2.status}`, retryResp2.status, sanitizeErrorResponse(errorBody));
         }
-        const costUsd = parseFloat(details.amount) / 1e6;
-        this.sessionCalls += 1;
-        this.sessionTotalUsd += costUsd;
-        this.recordCost(url, costUsd, { body, network: details.network });
+        this.bookPayment(signed, retryResp2, { url, body });
         return this.parseChatResponse(retryResp2);
       }
     }
@@ -718,11 +837,8 @@ export class LLMClient {
       );
     }
 
-    // Update session spending
-    const costUsd = parseFloat(details.amount) / 1e6; // Convert from micro USDC
-    this.sessionCalls += 1;
-    this.sessionTotalUsd += costUsd;
-    this.recordCost(url, costUsd, { body, network: details.network });
+    // Update session spending (the settled amount for upto when reported)
+    this.bookPayment(signed, retryResponse, { url, body });
 
     return this.parseChatResponse(retryResponse);
   }
@@ -731,30 +847,8 @@ export class LLMClient {
    * Sign a payment header and return the PAYMENT-SIGNATURE value.
    * Extracted to share logic between streaming and non-streaming flows.
    */
-  private async signPayment(paymentHeader: string): Promise<{ paymentPayload: string; costUsd: number }> {
-    const paymentRequired = parsePaymentRequired(paymentHeader);
-    const details = extractPaymentDetails(paymentRequired);
-    const extensions = ((paymentRequired as unknown) as Record<string, unknown>).extensions as Record<string, unknown> | undefined;
-    const paymentPayload = await createPaymentPayload(
-      this.privateKey,
-      this.account.address,
-      details.recipient,
-      details.amount,
-      details.network || "eip155:8453",
-      {
-        resourceUrl: validateResourceUrl(
-          details.resource?.url || `${this.apiUrl}/v1/chat/completions`,
-          this.apiUrl
-        ),
-        resourceDescription: details.resource?.description || "BlockRun AI API call",
-        maxTimeoutSeconds: details.maxTimeoutSeconds || 300,
-        extra: details.extra,
-        asset: details.asset,
-        extensions,
-      }
-    );
-    const costUsd = parseFloat(details.amount) / 1e6;
-    return { paymentPayload, costUsd };
+  private async signPayment(paymentHeader: string): Promise<SignedEvmPayment> {
+    return this.signPaymentRequired(paymentHeader, `${this.apiUrl}/v1/chat/completions`);
   }
 
   /**
@@ -814,19 +908,20 @@ export class LLMClient {
     // --- Try pre-auth (skip 402 round-trip) ---
     if (cached && now - cached.cachedAt < LLMClient.PRE_AUTH_TTL_MS) {
       try {
-        const { paymentPayload, costUsd } = await this.signPayment(cached.paymentHeader);
+        const signed = await this.signPayment(cached.paymentHeader);
         const preAuthResp = await this.fetchWithTimeout(url, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "User-Agent": USER_AGENT,
-            "PAYMENT-SIGNATURE": paymentPayload,
+            "PAYMENT-SIGNATURE": signed.paymentPayload,
           },
           body: JSON.stringify(body),
         });
         if (preAuthResp.status !== 402 && preAuthResp.ok) {
-          this.sessionCalls += 1;
-          this.sessionTotalUsd += costUsd;
+          // A stream settles after its last byte, so an upto stream books
+          // its ceiling (labelled as such in getSpending().uptoCeilingUsd).
+          this.bookPayment(signed, preAuthResp);
           return preAuthResp; // Pre-auth hit — no 402 round-trip
         }
         // Pre-auth rejected (price changed?) — evict and fall through
@@ -865,17 +960,19 @@ export class LLMClient {
     // Cache for pre-auth on future requests
     this.preAuthCache.set(cacheKey, { paymentHeader, cachedAt: now });
 
-    const { paymentPayload, costUsd } = await this.signPayment(paymentHeader);
-
-    const streamResp = await this.fetchWithTimeout(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": USER_AGENT,
-        "PAYMENT-SIGNATURE": paymentPayload,
-      },
-      body: JSON.stringify(body),
-    });
+    const { signed, response: streamResp } = await this.signAndSend(
+      paymentHeader,
+      `${this.apiUrl}/v1/chat/completions`,
+      (payload) => this.fetchWithTimeout(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": USER_AGENT,
+          "PAYMENT-SIGNATURE": payload,
+        },
+        body: JSON.stringify(body),
+      }),
+    );
 
     if (streamResp.status === 402) throw new PaymentError("Payment was rejected. Check your wallet balance.");
     if (!streamResp.ok) {
@@ -884,8 +981,7 @@ export class LLMClient {
       throw new APIError(`API error after payment: ${streamResp.status}`, streamResp.status, sanitizeErrorResponse(errorBody));
     }
 
-    this.sessionCalls += 1;
-    this.sessionTotalUsd += costUsd;
+    this.bookPayment(signed, streamResp);
     return streamResp;
   }
 
@@ -971,38 +1067,20 @@ export class LLMClient {
       throw new PaymentError("402 response but no payment requirements found");
     }
 
-    const paymentRequired = parsePaymentRequired(paymentHeader);
-    const details = extractPaymentDetails(paymentRequired);
-
-    const extensions = ((paymentRequired as unknown) as Record<string, unknown>).extensions as Record<string, unknown> | undefined;
-    const paymentPayload = await createPaymentPayload(
-      this.privateKey,
-      this.account.address,
-      details.recipient,
-      details.amount,
-      details.network || "eip155:8453",
-      {
-        resourceUrl: validateResourceUrl(
-          details.resource?.url || url,
-          this.apiUrl
-        ),
-        resourceDescription: details.resource?.description || "BlockRun AI API call",
-        maxTimeoutSeconds: details.maxTimeoutSeconds || 300,
-        extra: details.extra,
-        asset: details.asset,
-        extensions,
-      }
+    const { signed, response: retryResponse } = await this.signAndSend(
+      paymentHeader,
+      url,
+      (payload) => this.fetchWithTimeout(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": USER_AGENT,
+          "PAYMENT-SIGNATURE": payload,
+        },
+        body: JSON.stringify(body),
+      }),
     );
-
-    const retryResponse = await this.fetchWithTimeout(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": USER_AGENT,
-        "PAYMENT-SIGNATURE": paymentPayload,
-      },
-      body: JSON.stringify(body),
-    });
+    const paymentPayload = signed.paymentPayload;
 
     // Auto-retry on transient server errors (502/503) after payment
     if (retryResponse.status === 502 || retryResponse.status === 503) {
@@ -1023,10 +1101,7 @@ export class LLMClient {
           try { errorBody = await retryResp2.json(); } catch { errorBody = { error: "Request failed" }; }
           throw new APIError(`API error after payment: ${retryResp2.status}`, retryResp2.status, sanitizeErrorResponse(errorBody));
         }
-        const costUsd = parseFloat(details.amount) / 1e6;
-        this.sessionCalls += 1;
-        this.sessionTotalUsd += costUsd;
-        this.recordCost(url, costUsd, { body, network: details.network });
+        this.bookPayment(signed, retryResp2, { url, body });
         return retryResp2.json() as Promise<Record<string, unknown>>;
       }
     }
@@ -1049,10 +1124,7 @@ export class LLMClient {
       );
     }
 
-    const costUsd = parseFloat(details.amount) / 1e6;
-    this.sessionCalls += 1;
-    this.sessionTotalUsd += costUsd;
-    this.recordCost(url, costUsd, { body, network: details.network });
+    this.bookPayment(signed, retryResponse, { url, body });
 
     return retryResponse.json() as Promise<Record<string, unknown>>;
   }
@@ -1138,38 +1210,20 @@ export class LLMClient {
       throw new PaymentError("402 response but no payment requirements found");
     }
 
-    const paymentRequired = parsePaymentRequired(paymentHeader);
-    const details = extractPaymentDetails(paymentRequired);
-
-    const extensions = ((paymentRequired as unknown) as Record<string, unknown>).extensions as Record<string, unknown> | undefined;
-    const paymentPayload = await createPaymentPayload(
-      this.privateKey,
-      this.account.address,
-      details.recipient,
-      details.amount,
-      details.network || "eip155:8453",
-      {
-        resourceUrl: validateResourceUrl(
-          details.resource?.url || url,
-          this.apiUrl
-        ),
-        resourceDescription: details.resource?.description || "BlockRun AI API call",
-        maxTimeoutSeconds: details.maxTimeoutSeconds || 300,
-        extra: details.extra,
-        asset: details.asset,
-        extensions,
-      }
-    );
-
     const query = params ? "?" + new URLSearchParams(params).toString() : "";
     const retryUrl = `${this.apiUrl}${endpoint}${query}`;
-    const retryResponse = await this.fetchWithTimeout(retryUrl, {
-      method: "GET",
-      headers: {
-        "User-Agent": USER_AGENT,
-        "PAYMENT-SIGNATURE": paymentPayload,
-      },
-    });
+    const { signed, response: retryResponse } = await this.signAndSend(
+      paymentHeader,
+      url,
+      (payload) => this.fetchWithTimeout(retryUrl, {
+        method: "GET",
+        headers: {
+          "User-Agent": USER_AGENT,
+          "PAYMENT-SIGNATURE": payload,
+        },
+      }),
+    );
+    const paymentPayload = signed.paymentPayload;
 
     // Auto-retry on transient server errors (502/503) after payment
     if (retryResponse.status === 502 || retryResponse.status === 503) {
@@ -1188,10 +1242,7 @@ export class LLMClient {
           try { errorBody = await retryResp2.json(); } catch { errorBody = { error: "Request failed" }; }
           throw new APIError(`API error after payment: ${retryResp2.status}`, retryResp2.status, sanitizeErrorResponse(errorBody));
         }
-        const costUsd = parseFloat(details.amount) / 1e6;
-        this.sessionCalls += 1;
-        this.sessionTotalUsd += costUsd;
-        this.recordCost(url, costUsd, { network: details.network });
+        this.bookPayment(signed, retryResp2, { url });
         return retryResp2.json() as Promise<Record<string, unknown>>;
       }
     }
@@ -1214,10 +1265,7 @@ export class LLMClient {
       );
     }
 
-    const costUsd = parseFloat(details.amount) / 1e6;
-    this.sessionCalls += 1;
-    this.sessionTotalUsd += costUsd;
-    this.recordCost(url, costUsd, { network: details.network });
+    this.bookPayment(signed, retryResponse, { url });
 
     return retryResponse.json() as Promise<Record<string, unknown>>;
   }
@@ -1483,14 +1531,8 @@ export class LLMClient {
    */
   async getBalance(): Promise<number> {
     const usdcContract = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-    const configuredRpc =
-      typeof process !== "undefined" && process.env ? process.env.BASE_RPC_URL : undefined;
-    const rpcs = [
-      configuredRpc,
-      "https://base-rpc.publicnode.com",
-      "https://mainnet.base.org",
-      "https://base.llamarpc.com",
-    ].filter((rpc): rpc is string => Boolean(rpc));
+    // BASE_RPC_URL first, then the public endpoints (shared with the upto preflight).
+    const rpcs = evmRpcUrls("eip155:8453");
 
     const selector = "0x70a08231";
     const paddedAddress = this.account.address.slice(2).toLowerCase().padStart(64, "0");
@@ -1806,6 +1848,7 @@ export class LLMClient {
     return {
       totalUsd: this.sessionTotalUsd,
       calls: this.sessionCalls,
+      uptoCeilingUsd: this.sessionUptoCeilingUsd,
     };
   }
 

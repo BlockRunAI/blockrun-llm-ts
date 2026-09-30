@@ -518,6 +518,47 @@ rejections, insufficient funds and malformed responses all fail immediately.
 Verification runs strictly before settlement, so a retryable rejection means no
 transaction was broadcast and you cannot be charged twice.
 
+### `upto`: pay what the call actually cost (Base)
+
+By default a Base payment signs a fixed pre-call quote (x402 `exact`). When the
+gateway also offers x402 `upto`, `LLMClient` signs a **ceiling** instead, using
+Uniswap Permit2, and the gateway settles the **actual** cost after the call —
+never more than the ceiling. That is how prompt-cache discounts (e.g. DeepSeek
+cached input) and short answers reach a wallet caller.
+
+`upto` is used only when it cannot leave you worse off than `exact`:
+
+- the 402 offers an `upto` option on the same network, naming its facilitator;
+- one RPC read confirms your USDC balance covers the ceiling; and
+- your wallet already approved Permit2 for at least the ceiling, **or** the
+  gateway sponsors the approval (`eip2612GasSponsoring`): the SDK signs a
+  gasless USDC permit and the facilitator submits it, so a wallet with **no ETH**
+  can still use `upto`.
+
+Anything else, including an RPC or signing error, signs `exact` exactly as
+before. If the gateway rejects an `upto` payment before sending any response
+(a 402 or a payment-verification error — nothing was settled), the same
+request is re-sent exactly once with a fresh `exact` payment, and that client
+signs `exact` on that network from then on. A successful response is never
+retried. Solana
+always pays `exact`. To opt out:
+
+```typescript
+const client = new LLMClient({ paymentScheme: 'exact' });   // or BLOCKRUN_PAYMENT_SCHEME=exact
+```
+
+The balance/allowance check reads Base through `BASE_RPC_URL` when it is set,
+then public endpoints. Set `BLOCKRUN_DEBUG=1` to log why a call fell back to
+`exact`.
+
+**Spend tracking with `upto`.** The signed amount is only an upper bound. When
+the gateway reports what it settled (`amount` in the `PAYMENT-RESPONSE` header),
+that is what `getSpending()` and the cost log record. When it does not
+(streams always, since they settle after the last byte), the ceiling is
+recorded and labelled: `getSpending().uptoCeilingUsd` is the part of `totalUsd`
+that is a ceiling, and cost-log rows carry `scheme: "upto"` with
+`cost_basis: "ceiling"` or `"settled"`.
+
 ### Track spend and verify settlements
 
 ```typescript

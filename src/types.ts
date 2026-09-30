@@ -228,6 +228,14 @@ export interface SearchUsage {
 export interface Spending {
   totalUsd: number;
   calls: number;
+  /**
+   * The part of `totalUsd` that is an x402 `upto` CEILING rather than a
+   * settled amount: calls where the gateway did not report what it actually
+   * settled (streams always, since they settle after the last byte). The real
+   * charge for those calls is at most this. `LLMClient` only; 0 when every
+   * call was `exact` or reported its settlement.
+   */
+  uptoCeilingUsd?: number;
 }
 
 /** Pre-request cost estimate for a chat call */
@@ -283,6 +291,9 @@ export interface PaymentRequirement {
   extra?: {
     name?: string;
     version?: string;
+    /** `upto` only: the facilitator the Permit2 witness binds settlement to. */
+    facilitatorAddress?: string;
+    [key: string]: unknown;
   };
 }
 
@@ -290,6 +301,8 @@ export interface PaymentRequired {
   x402Version: number;
   accepts: PaymentRequirement[];
   resource?: ResourceInfo;
+  /** Server-declared x402 extensions (bazaar, builder-code, eip2612GasSponsoring, ...). */
+  extensions?: Record<string, unknown>;
 }
 
 export interface LLMClientOptions extends ApiKeyOptions {
@@ -299,7 +312,23 @@ export interface LLMClientOptions extends ApiKeyOptions {
   apiUrl?: string;
   /** Request timeout in milliseconds (default: 600000 / 600s; override via BLOCKRUN_CHAT_TIMEOUT env, in seconds) */
   timeout?: number;
+  /**
+   * Which x402 scheme to sign on EVM (wallet mode only).
+   *
+   * - `"auto"` (default): sign `upto` (Permit2) when the 402 offers it and the
+   *   wallet can use it — the gateway then settles the ACTUAL cost after the
+   *   call (≤ the signed ceiling), so prompt-cache discounts reach you. Falls
+   *   back to `exact` whenever `upto` is not offered or cannot be used.
+   * - `"exact"`: always sign the fixed pre-call quote (the behaviour before `upto` support).
+   *
+   * Also settable with the `BLOCKRUN_PAYMENT_SCHEME` env var; this option wins.
+   * Solana always pays `exact`.
+   */
+  paymentScheme?: PaymentScheme;
 }
+
+/** x402 scheme preference for EVM payments. See `LLMClientOptions.paymentScheme`. */
+export type PaymentScheme = "exact" | "auto";
 
 /**
  * OpenAI-compatible response format. `{ type: "json_object" }` enables JSON

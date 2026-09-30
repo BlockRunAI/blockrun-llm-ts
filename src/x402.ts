@@ -243,8 +243,10 @@ export const BLOCKRUN_SERVICE_CODE = "blockrun";
  * extension, preserving any app code (`a`) the server echoed back in its 402.
  * The CDP facilitator reads `builder-code.info.s` and encodes it into the
  * settlement calldata suffix — no CBOR/encoding happens client-side.
+ *
+ * @internal Shared with the `upto` payload builder in x402-upto.ts.
  */
-function withBuilderCodeServiceCode(
+export function withBuilderCodeServiceCode(
   extensions?: Record<string, unknown>,
 ): Record<string, unknown> {
   const merged: Record<string, unknown> = { ...(extensions || {}) };
@@ -610,15 +612,24 @@ export function extractPaymentDetails(
     throw new Error("No payment options in payment required response");
   }
 
+  // This returns the option the `exact` signers (EIP-3009 on EVM, an SPL
+  // transfer on Solana) pay, so among the candidates it prefers one whose
+  // scheme IS "exact". A gateway may list other schemes beside it — blockrun.ai
+  // offers `upto` as accepts[1] — and signing an EIP-3009 authorization against
+  // an `upto` option's terms would be rejected. Where no option says "exact",
+  // the first candidate is returned exactly as before.
+  const preferExact = (options: typeof accepts) =>
+    options.find((opt) => opt.scheme === "exact") || options[0] || null;
+
   // If preferred network specified, try to find matching option
   let option = null;
   if (preferredNetwork) {
-    option = accepts.find((opt) => opt.network === preferredNetwork) || null;
+    option = preferExact(accepts.filter((opt) => opt.network === preferredNetwork));
   }
 
-  // Fall back to first option (always Base for backward compatibility)
+  // Fall back to the first exact option (always Base for backward compatibility)
   if (!option) {
-    option = accepts[0];
+    option = preferExact(accepts);
   }
 
   // Handle both v1 (maxAmountRequired) and v2 (amount) formats

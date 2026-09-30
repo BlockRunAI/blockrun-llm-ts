@@ -125,6 +125,7 @@ export {
   type SearchOptions,
   // Spending tracking
   type Spending,
+  type PaymentScheme,
   type SearchUsage,
   type CostEstimate,
   type SpendingReport,
@@ -181,6 +182,13 @@ export {
   extractPaymentDetails,
   type CreatePaymentOptions,
 } from "./x402";
+export {
+  PERMIT2_ADDRESS,
+  X402_UPTO_PERMIT2_PROXY_ADDRESS,
+  createEvmPayment,
+  type CreateEvmPaymentOptions,
+  type SignedEvmPayment,
+} from "./x402-upto";
 
 // Wallet management utilities
 export {

@@ -6,6 +6,13 @@ Two authentication modes, one API surface:
 - **Account API key** — `apiKey` / `BLOCKRUN_API_KEY` bills a BlockRun account at `https://api.blockrun.ai`. Register, mint keys and top up credits at https://user.blockrun.ai.
 - **Wallet (x402)** — a wallet signature is the authentication; each request settles USDC on Base, Arc (`apiUrl: https://arc.blockrun.ai/api`, same `LLMClient` and key) or Solana. No account needed. The EVM domain signed follows the 402's `network` through `EVM_NETWORKS` in `src/x402.ts`; the 402's `extra` is never trusted for it.
 
+## x402 `upto` (src/x402-upto.ts)
+
+- `LLMClient` signs `upto` (Permit2, settled at the ACTUAL cost ≤ the signed ceiling) only when the 402 offers a usable upto option with `extra.facilitatorAddress` on the exact option's network, ONE batched RPC read (balance, allowance to Permit2, and USDC `nonces` when gas sponsoring is declared) succeeds, balance ≥ ceiling, and either allowance ≥ ceiling or the 402 declares `extensions.eip2612GasSponsoring`. Anything else, including any RPC/signing error, signs `exact` exactly as before. An `upto` payment rejected before any body (402, or a 4xx payment-verification body — `isPaymentRejection`) is re-sent exactly once as `exact` from the same 402 (`signAndSend`); if that is rejected too the ORIGINAL rejection surfaces. Rejection is remembered per wallet+network for the client's life (`uptoRejected`). 2xx is never retried (a `X-Free-Fallback: payment-failed` rescue is not retried but does disable upto). Never make a caller worse off than `exact`.
+- Opt-out: `paymentScheme: "exact"` (also on `OpenAI`) or `BLOCKRUN_PAYMENT_SCHEME=exact`. Solana, Arc (no RPC in `evm-rpc.ts`) and the non-LLMClient clients always pay `exact`; `extractPaymentDetails` prefers the `exact` option so they are unaffected by an upto `accepts[1]`.
+- Semantics are pinned to `@x402/evm` 2.28.0 by hardcoded vectors in `test/unit/x402-upto.test.ts`. The EIP-2612 domain is the SDK's own (`EVM_NETWORKS`), never the 402's `extra`.
+- Spend: the upto amount is a CEILING. `bookPayment` books `PAYMENT-RESPONSE.amount` when present, else the ceiling with `cost_basis: "ceiling"` in cost_log and in `getSpending().uptoCeilingUsd`. Streams always book the ceiling (they settle after the last byte).
+
 ## Commands
 
 ```bash
@@ -43,6 +50,8 @@ src/
 ├── wallet.ts            # EVM wallet management
 ├── solana-wallet.ts     # Solana wallet management
 ├── x402.ts              # x402 payment protocol
+├── x402-upto.ts         # x402 `upto` (Permit2) signing + exact/upto selection policy
+├── evm-rpc.ts           # Batched eth_call with failover (getBalance, upto preflight)
 ├── types.ts             # Type definitions
 ├── validation.ts        # Input validation
 ├── cache.ts             # Response caching

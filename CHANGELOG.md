@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+### Added — x402 `upto` (Permit2) on Base: pay the actual cost
+
+blockrun.ai can offer x402 `upto` beside `exact` (`accepts[1]`). With `exact` a
+payer signs a fixed pre-call quote, so a prompt-cache discount or a short answer
+could never be charged less. With `upto` the payer signs a ceiling and the
+gateway settles the actual amount after the call. `LLMClient` (and the `OpenAI`
+wrapper) now sign `upto` when the 402 offers it with `extra.facilitatorAddress`,
+one batched RPC read shows the balance covers the ceiling, and either the
+Permit2 allowance already covers it or the 402 declares `eip2612GasSponsoring`
+— in which case a gasless USDC EIP-2612 permit rides along and the facilitator
+submits it, so a wallet with no ETH can use `upto`. Any other case, and any RPC
+or signing error, signs `exact` as before. An `upto` payment the gateway rejects
+before any response body (a 402 or a payment-verification error; nothing
+settled) is re-sent exactly once with a fresh `exact` payment from the same
+402; if that is rejected too, the original error surfaces. The rejection is
+remembered per wallet+network for the life of the client. A 2xx is never
+retried. Payload and typed data match the
+official `@x402/evm` 2.28.0 client (pinned by test vectors); the EIP-2612 domain
+is the SDK's own, never the 402's `extra`.
+
+- New option `paymentScheme: "auto" | "exact"` (default `"auto"`) on
+  `LLMClient` and `OpenAI`, and env `BLOCKRUN_PAYMENT_SCHEME=exact`, to opt out.
+- Spend: an `upto` amount is a ceiling. `getSpending()` and `cost_log.jsonl`
+  record the settled amount from `PAYMENT-RESPONSE` when the gateway reports
+  it, else the ceiling, labelled: `Spending.uptoCeilingUsd`, and cost-log rows
+  with `scheme: "upto"` + `cost_basis: "settled" | "ceiling"`. Streams always
+  book the ceiling (they settle after the last byte). Exact rows are unchanged.
+- `extractPaymentDetails()` now prefers the `exact` option when a 402 lists
+  several schemes, so the `exact`-only clients (image, video, Solana, …) keep
+  signing `exact` whatever order the gateway lists its options in.
+
 ## [3.18.0] - 2026-09-30
 
 ### Fixed — Solana settlement timing is per route, not per chain

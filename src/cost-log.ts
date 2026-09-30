@@ -30,6 +30,14 @@ export interface CostEntry {
   network?: string;
   /** Caller kind for analytics — "LLMClient", "ImageClient", "AgentClient", ... */
   client_kind?: string;
+  /** x402 scheme, written only for `upto` payments (absent = exact). */
+  scheme?: "exact" | "upto";
+  /**
+   * `upto` only. "settled": `cost_usd` is what the gateway reported settling.
+   * "ceiling": the gateway did not report it, so `cost_usd` is the signed
+   * CEILING — an upper bound on what was charged, not a payment.
+   */
+  cost_basis?: "settled" | "ceiling";
 }
 
 export function logCost(entry: CostEntry): void {
