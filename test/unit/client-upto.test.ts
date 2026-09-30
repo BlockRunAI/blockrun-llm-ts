@@ -151,55 +151,82 @@ describe("LLMClient x402 upto", () => {
     const payload = decode(net.signatures[0]);
     expect(payload.accepted.scheme).toBe("upto");
     expect(payload.extensions.eip2612GasSponsoring.info).toMatchObject({
-      amount: "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+      amount: "20000",
       nonce: "5",
     });
   });
 
-  it("in-flight guard: after signing a permit, a still-short allowance signs exact (no nonce-colliding second permit) until 120s pass", async () => {
-    // 2026-09-30 mainnet: call 2, ~2s after call 1's permit (async settle, tx 1 unmined),
-    // read allowance 0 / nonce 0 and signed a second permit at a used nonce → revert.
+  /** Like mockNetwork, but allowance and USDC nonce are live-editable. */
+  function mockChain(chain: { allowance: bigint; nonce: bigint }) {
+    const net = mockNetwork({ allowance: 0n, gas: true, paid: () => settled() });
+    const inner = vi.mocked(global.fetch).getMockImplementation()!;
+    vi.mocked(global.fetch).mockImplementation(async (url, init) => {
+      if (String(url) !== RPC) return inner(url, init);
+      const batch = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify(batch.map((c: { id: number; params: [{ data: string }] }) => {
+        const sel = c.params[0].data.slice(0, 10);
+        const v = sel === "0x70a08231" ? 10n ** 12n : sel === "0xdd62ed3e" ? chain.allowance : chain.nonce;
+        return { jsonrpc: "2.0", id: c.id, result: word(v) };
+      })));
+    });
+    return net;
+  }
+  const permitNonce = (p: { extensions: { eip2612GasSponsoring?: { info?: { nonce: string } } } }) =>
+    p.extensions.eip2612GasSponsoring?.info?.nonce ?? null;
+
+  it("nonce guard: while this client's permit is unconsumed, calls pay exact (the 2026-09-30 revert)", async () => {
+    // Call 2 ~2s after call 1, call 1 still settling async: on-chain nonce still 0.
+    const chain = { allowance: 0n, nonce: 0n };
+    const net = mockChain(chain);
+    const client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
+    await client.chat("deepseek/deepseek-chat", "hi");
+    await client.chat("deepseek/deepseek-chat", "hi");
+    const sent = net.signatures.map((s) => decode(s));
+    expect(sent.map((p) => p.accepted.scheme)).toEqual(["upto", "exact"]);
+    expect(permitNonce(sent[0])).toBe("0");
+  });
+
+  it("nonce guard: once the on-chain nonce passes the permit's, the next call signs a new permit at the new nonce", async () => {
+    const chain = { allowance: 0n, nonce: 0n };
+    const net = mockChain(chain);
+    const client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
+    await client.chat("deepseek/deepseek-chat", "hi");
+    chain.nonce = 1n; // permit 0 executed; its transfer spent the allowance again
+    await client.chat("deepseek/deepseek-chat", "hi");
+    const sent = net.signatures.map((s) => decode(s));
+    expect(sent.map((p) => p.accepted.scheme)).toEqual(["upto", "upto"]);
+    expect(sent.map(permitNonce)).toEqual(["0", "1"]);
+  });
+
+  it("nonce guard: past the pending permit's deadline it can never execute, so a new permit is allowed", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
-      const net = mockNetwork({ allowance: 0n, gas: true, paid: () => settled() });
+      const chain = { allowance: 0n, nonce: 0n };
+      const net = mockChain(chain);
       const client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
       await client.chat("deepseek/deepseek-chat", "hi");
+      vi.advanceTimersByTime(299_000);
+      await client.chat("deepseek/deepseek-chat", "hi"); // still before the 300s deadline → exact
       vi.advanceTimersByTime(2_000);
-      await client.chat("deepseek/deepseek-chat", "hi");
-      vi.advanceTimersByTime(119_000); // 121s after the permit: window over
-      await client.chat("deepseek/deepseek-chat", "hi");
+      await client.chat("deepseek/deepseek-chat", "hi"); // past it → new permit, same on-chain nonce
       const sent = net.signatures.map((s) => decode(s));
       expect(sent.map((p) => p.accepted.scheme)).toEqual(["upto", "exact", "upto"]);
-      expect(Boolean(sent[0].extensions.eip2612GasSponsoring?.info)).toBe(true);
-      expect(Boolean(sent[2].extensions.eip2612GasSponsoring?.info)).toBe(true);
+      expect(sent.map(permitNonce)).toEqual(["0", null, "0"]);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("in-flight guard clears once the allowance is seen to cover the ceiling", async () => {
-    let allowance = 0n;
-    const net = mockNetwork({ allowance: 0n, gas: true, paid: () => settled() });
-    const inner = vi.mocked(global.fetch).getMockImplementation()!;
-    vi.mocked(global.fetch).mockImplementation(async (url, init) => {
-      if (String(url) === RPC) {
-        const batch = JSON.parse(String(init?.body));
-        return new Response(JSON.stringify(batch.map((c: { id: number; params: [{ data: string }] }) => {
-          const sel = c.params[0].data.slice(0, 10);
-          return { jsonrpc: "2.0", id: c.id, result: word(sel === "0x70a08231" ? 10n ** 12n : sel === "0xdd62ed3e" ? allowance : 5n) };
-        })));
-      }
-      return inner(url, init);
-    });
+  it("nonce guard: a standing allowance >= ceiling means upto without a permit even while one is pending", async () => {
+    const chain = { allowance: 0n, nonce: 0n };
+    const net = mockChain(chain);
     const client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
-    await client.chat("deepseek/deepseek-chat", "hi"); // permit signed, allowance 0 on-chain
-    allowance = 2n ** 255n; // permit landed
-    await client.chat("deepseek/deepseek-chat", "hi"); // upto, no permit → flag cleared
-    allowance = 0n; // (hypothetical) allowance gone again
-    await client.chat("deepseek/deepseek-chat", "hi"); // not in flight any more → a new permit is allowed
+    await client.chat("deepseek/deepseek-chat", "hi");
+    chain.allowance = 10n ** 12n; // e.g. a one-time approve from a wallet with ETH
+    await client.chat("deepseek/deepseek-chat", "hi");
     const sent = net.signatures.map((s) => decode(s));
-    expect(sent.map((p) => p.accepted.scheme)).toEqual(["upto", "upto", "upto"]);
-    expect(sent.map((p) => Boolean(p.extensions.eip2612GasSponsoring?.info))).toEqual([true, false, true]);
+    expect(sent.map((p) => p.accepted.scheme)).toEqual(["upto", "upto"]);
+    expect(sent.map(permitNonce)).toEqual(["0", null]);
   });
 
   it("no allowance and no gas sponsoring → exact, booked exactly as before (no upto labels)", async () => {

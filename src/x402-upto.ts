@@ -29,7 +29,7 @@
  * The private key is used ONLY for local signing and NEVER leaves the client.
  */
 
-import { decodeFunctionResult, encodeFunctionData, getAddress, isAddress, maxUint256, toHex } from "viem";
+import { decodeFunctionResult, encodeFunctionData, getAddress, isAddress, toHex } from "viem";
 import { signTypedData } from "viem/accounts";
 import type { PaymentRequired, PaymentScheme } from "./types";
 import {
@@ -232,28 +232,11 @@ export interface Eip2612GasSponsoringInfo {
 }
 
 /**
- * The allowance the gas-sponsoring permit grants Permit2: MaxUint256.
+ * Sign a USDC EIP-2612 `Permit` granting Permit2 `amount`, for the facilitator
+ * to submit. The domain is the SDK's own for the network, never the 402's.
  *
- * Why not the per-call ceiling (what @x402/evm's upto path passes by default):
- * a live mainnet run on 2026-09-30 (wallet with ~0 ETH and no Permit2
- * allowance) settled call 1 fine — the facilitator submitted Approval(2000) +
- * Transfer(2000) — and then REVERTED call 2, signed ~2s later. The transfer
- * consumed the whole ceiling-sized allowance, so every upto call needed a new
- * permit; and that wallet settles asynchronously, so call 2's preflight read
- * allowance 0 / nonce 0 before tx 1 mined and signed a second permit at a
- * nonce tx 1 had already used. With MaxUint256 the first permit is the only
- * one: later calls see allowance ≥ ceiling and sign no permit. This is the
- * standard Permit2 pattern (the official erc20ApprovalGasSponsoring path
- * approves maxUint256 too). It is safe because Permit2 moves nothing without
- * a separate, per-transfer signature bounding amount, spender, recipient
- * (witness) and deadline — the upto authorization itself.
- */
-export const GAS_SPONSORED_PERMIT_VALUE = maxUint256;
-
-/**
- * Sign a USDC EIP-2612 `Permit` granting Permit2 `amount` (callers pass
- * GAS_SPONSORED_PERMIT_VALUE), for the facilitator to submit. The domain is
- * the SDK's own for the network, never the 402's.
+ * `amount` MUST be the upto authorization's `permitted.amount` (the per-call
+ * ceiling) — see assertPermitMatchesPermitted. Not MaxUint256.
  */
 export async function signEip2612GasSponsoringPermit(
   privateKey: `0x${string}`,
@@ -289,6 +272,27 @@ export async function signEip2612GasSponsoringPermit(
     signature,
     version: "1",
   };
+}
+
+/**
+ * The x402 upto proxy executes the sponsored permit only if its value equals
+ * the Permit2 authorization's permitted amount —
+ * x402BasePermit2Proxy.sol `_executePermit` (Base 0x4020A4f3…0002, verified on
+ * Sourcify): `if (permit2612.value != permittedAmount) revert Permit2612AmountMismatch();`
+ * A MaxUint256 permit was tried live on 2026-09-30 and CDP verify rejected it
+ * (simulation failed, invalid_exact_evm_permit2_payload_allowance_required).
+ * Refuse to emit a payload the proxy would revert.
+ */
+export function assertPermitMatchesPermitted(
+  info: Pick<Eip2612GasSponsoringInfo, "amount">,
+  permit2Authorization: Pick<Permit2Authorization, "permitted">,
+): void {
+  if (info.amount !== permit2Authorization.permitted.amount) {
+    throw new Error(
+      `EIP-2612 permit value ${info.amount} must equal the Permit2 permitted amount ` +
+        `${permit2Authorization.permitted.amount} (x402 upto proxy: Permit2612AmountMismatch)`,
+    );
+  }
 }
 
 export interface CreateUptoPaymentOptions {
@@ -328,16 +332,16 @@ export async function createUptoPaymentPayload(
   delete echoed[EIP2612_GAS_SPONSORING_KEY];
   const extensions = withBuilderCodeServiceCode(echoed);
   if (options.gasSponsoringTokenNonce !== undefined) {
-    extensions[EIP2612_GAS_SPONSORING_KEY] = {
-      info: await signEip2612GasSponsoringPermit(
-        privateKey,
-        fromAddress,
-        upto.net,
-        GAS_SPONSORED_PERMIT_VALUE.toString(),
-        options.gasSponsoringTokenNonce,
-        permit2Authorization.deadline,
-      ),
-    };
+    const info = await signEip2612GasSponsoringPermit(
+      privateKey,
+      fromAddress,
+      upto.net,
+      permit2Authorization.permitted.amount,
+      options.gasSponsoringTokenNonce,
+      permit2Authorization.deadline,
+    );
+    assertPermitMatchesPermitted(info, permit2Authorization);
+    extensions[EIP2612_GAS_SPONSORING_KEY] = { info };
   }
 
   const paymentData = {
@@ -368,16 +372,26 @@ export async function createUptoPaymentPayload(
 
 /** What the upto preflight decided. */
 export type UptoPlan =
-  | { use: true; gasSponsoringTokenNonce?: bigint }
-  | { use: false; reason: string };
+  | { use: true; gasSponsoringTokenNonce?: bigint; pendingResolved?: boolean }
+  | { use: false; reason: string; pendingResolved?: boolean };
 
 /**
- * How long a permit this client signed is treated as in flight. A second
- * permit signed while the first is unmined reuses its USDC nonce and reverts
- * (see GAS_SPONSORED_PERMIT_VALUE), so within this window a short allowance
- * means "the first permit has not landed yet" and the call signs `exact`.
+ * A gas-sponsored permit this client signed and has not yet seen consumed.
+ *
+ * Each gas-sponsored upto call carries its OWN permit, valued at that call's
+ * ceiling (the proxy requires it — see assertPermitMatchesPermitted), and the
+ * transfer spends that allowance, so the next call needs another permit at
+ * the next USDC nonce. Until the previous one has executed, a new permit would
+ * reuse its nonce: on 2026-09-30 call 2, signed ~2s after call 1 while call 1
+ * was still settling asynchronously, read nonce 0 again and reverted on-chain.
+ * So per wallet at most ONE gas-sponsored upto payment can be in flight.
  */
-export const PERMIT_IN_FLIGHT_MS = 120_000;
+export interface PendingPermit {
+  /** The USDC EIP-2612 nonce the permit was signed at. */
+  tokenNonce: bigint;
+  /** The permit's deadline (unix seconds). Past it, it can never execute. */
+  deadline: number;
+}
 
 /**
  * Decide whether this wallet can pay `upto` right now, with ONE batched RPC
@@ -387,11 +401,15 @@ export const PERMIT_IN_FLIGHT_MS = 120_000;
  * - balance < ceiling → no: the ceiling is what gets verified, and a wallet
  *   that can afford the `exact` quote but not the ceiling must stay on exact.
  * - allowance ≥ ceiling → yes, no permit.
- * - allowance short + gas sponsoring declared → yes, with a permit — unless
- *   `permitInFlight` (this client signed one < PERMIT_IN_FLIGHT_MS ago that
- *   has not landed yet): then no, because a second permit would reuse the
- *   first's USDC nonce and revert.
+ * - allowance short + gas sponsoring declared → yes, with a permit at the
+ *   on-chain USDC nonce — unless `pending` (a permit this client signed) is
+ *   still live: on-chain nonce <= its nonce and now < its deadline. Then no:
+ *   a second permit would reuse or race the same nonce.
  * - otherwise → no.
+ *
+ * `pendingResolved` reports that `pending` can be forgotten: the on-chain
+ * nonce moved past it (consumed) or its deadline passed (can never execute).
+ * Allowance ≥ ceiling means upto without a permit regardless of `pending`.
  * Any RPC error propagates; the caller turns it into `exact`.
  */
 export async function planUpto(
@@ -399,7 +417,8 @@ export async function planUpto(
   upto: UptoRequirement,
   gasSponsoring: boolean,
   rpcUrls: readonly string[] = evmRpcUrls(upto.network),
-  permitInFlight = false,
+  pending?: PendingPermit,
+  nowSeconds: number = Math.floor(Date.now() / 1000),
 ): Promise<UptoPlan> {
   if (rpcUrls.length === 0) return { use: false, reason: `no RPC for ${upto.network}` };
   const ownerAddr = getAddress(owner);
@@ -418,17 +437,28 @@ export async function planUpto(
   const balance = decodeFunctionResult({ abi: ERC20_READ_ABI, functionName: "balanceOf", data: results[0] });
   const allowance = decodeFunctionResult({ abi: ERC20_READ_ABI, functionName: "allowance", data: results[1] });
   const ceiling = BigInt(upto.amount);
+  const tokenNonce = gasSponsoring
+    ? decodeFunctionResult({ abi: ERC20_READ_ABI, functionName: "nonces", data: results[2] })
+    : undefined;
+  const pendingResolved =
+    pending !== undefined &&
+    (nowSeconds >= pending.deadline || (tokenNonce !== undefined && tokenNonce > pending.tokenNonce));
+  const livePending = pending !== undefined && !pendingResolved;
 
-  if (balance < ceiling) return { use: false, reason: `USDC balance ${balance} is below the upto ceiling ${ceiling}` };
-  if (allowance >= ceiling) return { use: true };
-  if (!gasSponsoring) {
-    return { use: false, reason: `Permit2 allowance ${allowance} is below ${ceiling} and the 402 offers no gas sponsoring` };
+  if (balance < ceiling) {
+    return { use: false, reason: `USDC balance ${balance} is below the upto ceiling ${ceiling}`, pendingResolved };
   }
-  if (permitInFlight) {
-    return { use: false, reason: `a gas-sponsored permit from this client is still in flight (allowance ${allowance})` };
+  if (allowance >= ceiling) return { use: true, pendingResolved };
+  if (tokenNonce === undefined) {
+    return { use: false, reason: `Permit2 allowance ${allowance} is below ${ceiling} and the 402 offers no gas sponsoring`, pendingResolved };
   }
-  const tokenNonce = decodeFunctionResult({ abi: ERC20_READ_ABI, functionName: "nonces", data: results[2] });
-  return { use: true, gasSponsoringTokenNonce: tokenNonce };
+  if (livePending) {
+    return {
+      use: false,
+      reason: `a gas-sponsored permit at USDC nonce ${pending!.tokenNonce} is still pending (on-chain nonce ${tokenNonce})`,
+    };
+  }
+  return { use: true, gasSponsoringTokenNonce: tokenNonce, pendingResolved };
 }
 
 /** Resolve the effective scheme preference: explicit option, then BLOCKRUN_PAYMENT_SCHEME, then "auto". */
@@ -456,11 +486,11 @@ export interface CreateEvmPaymentOptions {
   /** Override the RPC list used for the upto preflight (tests, custom nodes). */
   rpcUrls?: readonly string[];
   /**
-   * True when this client signed a gas-sponsoring permit for this wallet and
-   * network less than PERMIT_IN_FLIGHT_MS ago. A short allowance then signs
-   * `exact` instead of a second (nonce-colliding) permit.
+   * A gas-sponsoring permit this caller signed for this wallet+network and has
+   * not seen consumed. While it is live, a short allowance signs `exact`
+   * instead of a second permit (see PendingPermit).
    */
-  permitInFlight?: boolean;
+  pendingPermit?: PendingPermit;
 }
 
 export interface SignedEvmPayment {
@@ -473,12 +503,12 @@ export interface SignedEvmPayment {
    */
   amount: string;
   network: string;
-  /**
-   * True when an EIP-2612 gas-sponsoring permit rides along. For `upto`
-   * without one, the preflight saw allowance ≥ ceiling (any earlier permit
-   * has landed).
-   */
+  /** True when an EIP-2612 gas-sponsoring permit rides along. */
   gasSponsored: boolean;
+  /** The permit that rides along, to pass back as `pendingPermit` next time. */
+  permit?: PendingPermit;
+  /** The preflight saw `pendingPermit` consumed or expired: forget it. */
+  pendingPermitResolved?: boolean;
 }
 
 /**
@@ -534,11 +564,11 @@ export async function createEvmPayment(
       upto,
       gasSponsoring,
       options.rpcUrls ?? evmRpcUrls(network),
-      options.permitInFlight ?? false,
+      options.pendingPermit,
     );
     if (!plan.use) {
       debug(`${plan.reason}; signing exact`);
-      return signExact();
+      return { ...(await signExact()), pendingPermitResolved: plan.pendingResolved };
     }
     const paymentPayload = await createUptoPaymentPayload(privateKey, fromAddress, upto, {
       resourceUrl: options.resourceUrl,
@@ -546,12 +576,21 @@ export async function createEvmPayment(
       extensions,
       gasSponsoringTokenNonce: plan.gasSponsoringTokenNonce,
     });
+    const permit =
+      plan.gasSponsoringTokenNonce !== undefined
+        ? {
+            tokenNonce: plan.gasSponsoringTokenNonce,
+            deadline: Number(JSON.parse(atob(paymentPayload)).payload.permit2Authorization.deadline),
+          }
+        : undefined;
     return {
       paymentPayload,
       scheme: "upto",
       amount: upto.amount,
       network,
-      gasSponsored: plan.gasSponsoringTokenNonce !== undefined,
+      gasSponsored: permit !== undefined,
+      permit,
+      pendingPermitResolved: plan.pendingResolved,
     };
   } catch (e) {
     debug(`upto preflight/signing failed (${e instanceof Error ? e.message : String(e)}); signing exact`);

@@ -106,10 +106,10 @@ function mapRawToImageModel(m: any): ImageModel {
 }
 import { extractPaymentDetails, parsePaymentRequired } from "./x402";
 import {
-  PERMIT_IN_FLIGHT_MS,
   bookedCost,
   createEvmPayment,
   resolvePaymentScheme,
+  type PendingPermit,
   type SignedEvmPayment,
 } from "./x402-upto";
 import { evmRpcUrls } from "./evm-rpc";
@@ -206,12 +206,13 @@ export class LLMClient {
    */
   private uptoRejected = new Set<string>();
   /**
-   * `${wallet}:${network}` → when this client last signed a gas-sponsoring
-   * permit there. See PERMIT_IN_FLIGHT_MS: on 2026-09-30 a second permit
-   * signed ~2s after the first (async settle, tx 1 unmined) reused its USDC
-   * nonce and reverted on-chain.
+   * `${wallet}:${network}` → the gas-sponsoring permit this client signed
+   * there and has not yet seen consumed (USDC nonce + deadline). While it is
+   * live, calls pay `exact`: a second permit would reuse its nonce — on
+   * 2026-09-30 exactly that reverted a call signed ~2s after the first, while
+   * the first was still settling asynchronously. See PendingPermit.
    */
-  private permitSignedAt = new Map<string, number>();
+  private pendingPermits = new Map<string, PendingPermit & { signedAt: number }>();
   private modelPricingCache: Map<string, ModelPricing> | null = null;
   private modelPricingPromise: Promise<Map<string, ModelPricing>> | null = null;
 
@@ -613,9 +614,8 @@ export class LLMClient {
     const key = this.uptoKey(network);
     const scheme: PaymentScheme =
       forceExact || this.uptoRejected.has(key) ? "exact" : this.paymentScheme;
-    const permitAt = this.permitSignedAt.get(key);
-    const permitInFlight = permitAt !== undefined && Date.now() - permitAt < PERMIT_IN_FLIGHT_MS;
-    if (permitAt !== undefined && !permitInFlight) this.permitSignedAt.delete(key);
+    const pending = this.pendingPermits.get(key);
+    if (pending && Date.now() / 1000 >= pending.deadline) this.pendingPermits.delete(key);
     const signed = await createEvmPayment(this.privateKey, this.account.address, paymentRequired, {
       resourceUrl: validateResourceUrl(
         paymentRequired.resource?.url || fallbackResourceUrl,
@@ -623,14 +623,10 @@ export class LLMClient {
       ),
       resourceDescription: paymentRequired.resource?.description || "BlockRun AI API call",
       paymentScheme: scheme,
-      permitInFlight,
+      pendingPermit: this.pendingPermits.get(key),
     });
-    if (signed.scheme === "upto") {
-      // A permit rides along → start the in-flight window. Upto without one →
-      // the preflight saw allowance ≥ ceiling, so any earlier permit landed.
-      if (signed.gasSponsored) this.permitSignedAt.set(key, Date.now());
-      else this.permitSignedAt.delete(key);
-    }
+    if (signed.pendingPermitResolved) this.pendingPermits.delete(key);
+    if (signed.permit) this.pendingPermits.set(key, { ...signed.permit, signedAt: Date.now() });
     return signed;
   }
 

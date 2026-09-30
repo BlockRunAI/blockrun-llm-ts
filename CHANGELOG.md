@@ -12,10 +12,13 @@ wrapper) now sign `upto` when the 402 offers it with `extra.facilitatorAddress`,
 one batched RPC read shows the balance covers the ceiling, and either the
 Permit2 allowance already covers it or the 402 declares `eip2612GasSponsoring`
 — in which case a gasless USDC EIP-2612 permit rides along and the facilitator
-submits it, so a wallet with no ETH can use `upto`. The permit grants Permit2
-MaxUint256 (each transfer is still bounded by its own Permit2 signature), so it
-is signed once per wallet; for 120s after signing one, a still-short allowance
-signs `exact` instead of a second, nonce-colliding permit. Any other case, and any RPC
+submits it, so a wallet with no ETH can use `upto`. Each gas-sponsored call
+carries its own permit, valued at that call's ceiling (the upto proxy reverts
+`Permit2612AmountMismatch` otherwise), so per wallet only one gas-sponsored
+`upto` payment can be in flight: while a permit this client signed is
+unconsumed (on-chain USDC nonce not past it) and before its deadline,
+concurrent or not-yet-settled calls pay `exact`. A wallet with a standing
+Permit2 approval (one-time `approve`, needs ETH) has no such limit. Any other case, and any RPC
 or signing error, signs `exact` as before. An `upto` payment the gateway rejects
 before any response body (a 402 or a payment-verification error; nothing
 settled) is re-sent exactly once with a fresh `exact` payment from the same
