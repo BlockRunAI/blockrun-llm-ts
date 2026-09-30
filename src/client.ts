@@ -106,6 +106,7 @@ function mapRawToImageModel(m: any): ImageModel {
 }
 import { extractPaymentDetails, parsePaymentRequired } from "./x402";
 import {
+  PERMIT_IN_FLIGHT_MS,
   bookedCost,
   createEvmPayment,
   resolvePaymentScheme,
@@ -204,6 +205,13 @@ export class LLMClient {
    * call on that network signs `exact` straight away.
    */
   private uptoRejected = new Set<string>();
+  /**
+   * `${wallet}:${network}` → when this client last signed a gas-sponsoring
+   * permit there. See PERMIT_IN_FLIGHT_MS: on 2026-09-30 a second permit
+   * signed ~2s after the first (async settle, tx 1 unmined) reused its USDC
+   * nonce and reverted on-chain.
+   */
+  private permitSignedAt = new Map<string, number>();
   private modelPricingCache: Map<string, ModelPricing> | null = null;
   private modelPricingPromise: Promise<Map<string, ModelPricing>> | null = null;
 
@@ -602,16 +610,28 @@ export class LLMClient {
   ): Promise<SignedEvmPayment> {
     const paymentRequired = parsePaymentRequired(paymentHeader);
     const network = extractPaymentDetails(paymentRequired).network || "eip155:8453";
+    const key = this.uptoKey(network);
     const scheme: PaymentScheme =
-      forceExact || this.uptoRejected.has(this.uptoKey(network)) ? "exact" : this.paymentScheme;
-    return createEvmPayment(this.privateKey, this.account.address, paymentRequired, {
+      forceExact || this.uptoRejected.has(key) ? "exact" : this.paymentScheme;
+    const permitAt = this.permitSignedAt.get(key);
+    const permitInFlight = permitAt !== undefined && Date.now() - permitAt < PERMIT_IN_FLIGHT_MS;
+    if (permitAt !== undefined && !permitInFlight) this.permitSignedAt.delete(key);
+    const signed = await createEvmPayment(this.privateKey, this.account.address, paymentRequired, {
       resourceUrl: validateResourceUrl(
         paymentRequired.resource?.url || fallbackResourceUrl,
         this.apiUrl
       ),
       resourceDescription: paymentRequired.resource?.description || "BlockRun AI API call",
       paymentScheme: scheme,
+      permitInFlight,
     });
+    if (signed.scheme === "upto") {
+      // A permit rides along → start the in-flight window. Upto without one →
+      // the preflight saw allowance ≥ ceiling, so any earlier permit landed.
+      if (signed.gasSponsored) this.permitSignedAt.set(key, Date.now());
+      else this.permitSignedAt.delete(key);
+    }
+    return signed;
   }
 
   private uptoKey(network: string): string {

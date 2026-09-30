@@ -29,7 +29,7 @@
  * The private key is used ONLY for local signing and NEVER leaves the client.
  */
 
-import { decodeFunctionResult, encodeFunctionData, getAddress, isAddress, toHex } from "viem";
+import { decodeFunctionResult, encodeFunctionData, getAddress, isAddress, maxUint256, toHex } from "viem";
 import { signTypedData } from "viem/accounts";
 import type { PaymentRequired, PaymentScheme } from "./types";
 import {
@@ -232,8 +232,28 @@ export interface Eip2612GasSponsoringInfo {
 }
 
 /**
- * Sign a USDC EIP-2612 `Permit` granting Permit2 `amount`, for the facilitator
- * to submit. The domain is the SDK's own for the network, never the 402's.
+ * The allowance the gas-sponsoring permit grants Permit2: MaxUint256.
+ *
+ * Why not the per-call ceiling (what @x402/evm's upto path passes by default):
+ * a live mainnet run on 2026-09-30 (wallet with ~0 ETH and no Permit2
+ * allowance) settled call 1 fine — the facilitator submitted Approval(2000) +
+ * Transfer(2000) — and then REVERTED call 2, signed ~2s later. The transfer
+ * consumed the whole ceiling-sized allowance, so every upto call needed a new
+ * permit; and that wallet settles asynchronously, so call 2's preflight read
+ * allowance 0 / nonce 0 before tx 1 mined and signed a second permit at a
+ * nonce tx 1 had already used. With MaxUint256 the first permit is the only
+ * one: later calls see allowance ≥ ceiling and sign no permit. This is the
+ * standard Permit2 pattern (the official erc20ApprovalGasSponsoring path
+ * approves maxUint256 too). It is safe because Permit2 moves nothing without
+ * a separate, per-transfer signature bounding amount, spender, recipient
+ * (witness) and deadline — the upto authorization itself.
+ */
+export const GAS_SPONSORED_PERMIT_VALUE = maxUint256;
+
+/**
+ * Sign a USDC EIP-2612 `Permit` granting Permit2 `amount` (callers pass
+ * GAS_SPONSORED_PERMIT_VALUE), for the facilitator to submit. The domain is
+ * the SDK's own for the network, never the 402's.
  */
 export async function signEip2612GasSponsoringPermit(
   privateKey: `0x${string}`,
@@ -313,7 +333,7 @@ export async function createUptoPaymentPayload(
         privateKey,
         fromAddress,
         upto.net,
-        upto.amount,
+        GAS_SPONSORED_PERMIT_VALUE.toString(),
         options.gasSponsoringTokenNonce,
         permit2Authorization.deadline,
       ),
@@ -352,6 +372,14 @@ export type UptoPlan =
   | { use: false; reason: string };
 
 /**
+ * How long a permit this client signed is treated as in flight. A second
+ * permit signed while the first is unmined reuses its USDC nonce and reverts
+ * (see GAS_SPONSORED_PERMIT_VALUE), so within this window a short allowance
+ * means "the first permit has not landed yet" and the call signs `exact`.
+ */
+export const PERMIT_IN_FLIGHT_MS = 120_000;
+
+/**
  * Decide whether this wallet can pay `upto` right now, with ONE batched RPC
  * round trip: USDC balance, USDC allowance to Permit2, and (only when the 402
  * declares gas sponsoring) the USDC EIP-2612 nonce.
@@ -359,7 +387,10 @@ export type UptoPlan =
  * - balance < ceiling → no: the ceiling is what gets verified, and a wallet
  *   that can afford the `exact` quote but not the ceiling must stay on exact.
  * - allowance ≥ ceiling → yes, no permit.
- * - allowance short + gas sponsoring declared → yes, with a permit.
+ * - allowance short + gas sponsoring declared → yes, with a permit — unless
+ *   `permitInFlight` (this client signed one < PERMIT_IN_FLIGHT_MS ago that
+ *   has not landed yet): then no, because a second permit would reuse the
+ *   first's USDC nonce and revert.
  * - otherwise → no.
  * Any RPC error propagates; the caller turns it into `exact`.
  */
@@ -368,6 +399,7 @@ export async function planUpto(
   upto: UptoRequirement,
   gasSponsoring: boolean,
   rpcUrls: readonly string[] = evmRpcUrls(upto.network),
+  permitInFlight = false,
 ): Promise<UptoPlan> {
   if (rpcUrls.length === 0) return { use: false, reason: `no RPC for ${upto.network}` };
   const ownerAddr = getAddress(owner);
@@ -391,6 +423,9 @@ export async function planUpto(
   if (allowance >= ceiling) return { use: true };
   if (!gasSponsoring) {
     return { use: false, reason: `Permit2 allowance ${allowance} is below ${ceiling} and the 402 offers no gas sponsoring` };
+  }
+  if (permitInFlight) {
+    return { use: false, reason: `a gas-sponsored permit from this client is still in flight (allowance ${allowance})` };
   }
   const tokenNonce = decodeFunctionResult({ abi: ERC20_READ_ABI, functionName: "nonces", data: results[2] });
   return { use: true, gasSponsoringTokenNonce: tokenNonce };
@@ -420,6 +455,12 @@ export interface CreateEvmPaymentOptions {
   paymentScheme?: PaymentScheme;
   /** Override the RPC list used for the upto preflight (tests, custom nodes). */
   rpcUrls?: readonly string[];
+  /**
+   * True when this client signed a gas-sponsoring permit for this wallet and
+   * network less than PERMIT_IN_FLIGHT_MS ago. A short allowance then signs
+   * `exact` instead of a second (nonce-colliding) permit.
+   */
+  permitInFlight?: boolean;
 }
 
 export interface SignedEvmPayment {
@@ -432,7 +473,11 @@ export interface SignedEvmPayment {
    */
   amount: string;
   network: string;
-  /** True when an EIP-2612 gas-sponsoring permit rides along. */
+  /**
+   * True when an EIP-2612 gas-sponsoring permit rides along. For `upto`
+   * without one, the preflight saw allowance ≥ ceiling (any earlier permit
+   * has landed).
+   */
   gasSponsored: boolean;
 }
 
@@ -484,7 +529,13 @@ export async function createEvmPayment(
 
   try {
     const gasSponsoring = Boolean(extensions && extensions[EIP2612_GAS_SPONSORING_KEY]);
-    const plan = await planUpto(fromAddress, upto, gasSponsoring, options.rpcUrls ?? evmRpcUrls(network));
+    const plan = await planUpto(
+      fromAddress,
+      upto,
+      gasSponsoring,
+      options.rpcUrls ?? evmRpcUrls(network),
+      options.permitInFlight ?? false,
+    );
     if (!plan.use) {
       debug(`${plan.reason}; signing exact`);
       return signExact();

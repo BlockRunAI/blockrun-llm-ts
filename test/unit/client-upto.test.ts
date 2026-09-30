@@ -150,7 +150,56 @@ describe("LLMClient x402 upto", () => {
     await client.chat("deepseek/deepseek-chat", "hi");
     const payload = decode(net.signatures[0]);
     expect(payload.accepted.scheme).toBe("upto");
-    expect(payload.extensions.eip2612GasSponsoring.info).toMatchObject({ amount: "20000", nonce: "5" });
+    expect(payload.extensions.eip2612GasSponsoring.info).toMatchObject({
+      amount: "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+      nonce: "5",
+    });
+  });
+
+  it("in-flight guard: after signing a permit, a still-short allowance signs exact (no nonce-colliding second permit) until 120s pass", async () => {
+    // 2026-09-30 mainnet: call 2, ~2s after call 1's permit (async settle, tx 1 unmined),
+    // read allowance 0 / nonce 0 and signed a second permit at a used nonce → revert.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const net = mockNetwork({ allowance: 0n, gas: true, paid: () => settled() });
+      const client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
+      await client.chat("deepseek/deepseek-chat", "hi");
+      vi.advanceTimersByTime(2_000);
+      await client.chat("deepseek/deepseek-chat", "hi");
+      vi.advanceTimersByTime(119_000); // 121s after the permit: window over
+      await client.chat("deepseek/deepseek-chat", "hi");
+      const sent = net.signatures.map((s) => decode(s));
+      expect(sent.map((p) => p.accepted.scheme)).toEqual(["upto", "exact", "upto"]);
+      expect(Boolean(sent[0].extensions.eip2612GasSponsoring?.info)).toBe(true);
+      expect(Boolean(sent[2].extensions.eip2612GasSponsoring?.info)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("in-flight guard clears once the allowance is seen to cover the ceiling", async () => {
+    let allowance = 0n;
+    const net = mockNetwork({ allowance: 0n, gas: true, paid: () => settled() });
+    const inner = vi.mocked(global.fetch).getMockImplementation()!;
+    vi.mocked(global.fetch).mockImplementation(async (url, init) => {
+      if (String(url) === RPC) {
+        const batch = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify(batch.map((c: { id: number; params: [{ data: string }] }) => {
+          const sel = c.params[0].data.slice(0, 10);
+          return { jsonrpc: "2.0", id: c.id, result: word(sel === "0x70a08231" ? 10n ** 12n : sel === "0xdd62ed3e" ? allowance : 5n) };
+        })));
+      }
+      return inner(url, init);
+    });
+    const client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
+    await client.chat("deepseek/deepseek-chat", "hi"); // permit signed, allowance 0 on-chain
+    allowance = 2n ** 255n; // permit landed
+    await client.chat("deepseek/deepseek-chat", "hi"); // upto, no permit → flag cleared
+    allowance = 0n; // (hypothetical) allowance gone again
+    await client.chat("deepseek/deepseek-chat", "hi"); // not in flight any more → a new permit is allowed
+    const sent = net.signatures.map((s) => decode(s));
+    expect(sent.map((p) => p.accepted.scheme)).toEqual(["upto", "upto", "upto"]);
+    expect(sent.map((p) => Boolean(p.extensions.eip2612GasSponsoring?.info))).toEqual([true, false, true]);
   });
 
   it("no allowance and no gas sponsoring → exact, booked exactly as before (no upto labels)", async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { hashTypedData, verifyTypedData } from "viem";
+import { hashTypedData, maxUint256, verifyTypedData } from "viem";
 import {
   EIP2612_PERMIT_TYPES,
   PERMIT2_ADDRESS,
@@ -24,7 +24,11 @@ import { TEST_PRIVATE_KEY, TEST_ACCOUNT, TEST_RECIPIENT } from "../helpers/testH
  * (`new UptoEvmScheme(signer).createPaymentPayload(2, requirements, ctx)`),
  * with Date.now() pinned to 1_790_000_000_000, crypto.getRandomValues filling
  * 0x11, the Hardhat #0 key, and a signer whose readContract answers
- * allowance=0 / nonces=7 with ctx.extensions = { eip2612GasSponsoring: {} }.
+ * allowance=0 / nonces=7. The EIP-2612 vector is the reference's
+ * `trySignEip2612PermitExtension(signer, undefined, requirements, result,
+ * { extensions: { eip2612GasSponsoring: {} } }, maxUint256.toString())` —
+ * the permit grants Permit2 MaxUint256, not the per-call ceiling (see
+ * GAS_SPONSORED_PERMIT_VALUE for the 2026-09-30 mainnet revert behind that).
  * If this SDK's typed data drifts from the reference by one field, one type
  * name or one address, the signatures below stop matching.
  */
@@ -53,16 +57,16 @@ const REF = {
       from: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
       asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
       spender: "0x000000000022D473030F116dDEE9F6B43aC78BA3",
-      amount: "12345",
+      amount: "115792089237316195423570985008687907853269984665640564039457584007913129639935",
       nonce: "7",
       deadline: "1790000300",
       signature:
-        "0x9a0ca3482539196127ebe253192efcc05e9548a5ab8df649a84f21b4a40f4d413e9e15ab5f16a8958122b829cbfe4044e2cda16d88f23932d0af9c3cfcf248af1c",
+        "0xd7019b960bfc6bb9d120dd33f9dc6b0f309c54be0f8145dbecbd4d3d96afa4601d5dda99dccbf1cfe0117d098262e999308855c7fd0415845d8acedf7fd8cab31c",
       version: "1",
     },
   },
   digest: "0xdd2a026392d1b847625a1d56cb946fff1e1e2ee8307557d06ee1ece992363397",
-  permitDigest: "0xd9a7d20da6657721c11f4eabfe34e5d54c4083550394b346cca69c63209c9881",
+  permitDigest: "0xcd9a109229ef791497b8da966b1d78d79c9ccabcc22b84f7df35cef78dbdf2b6",
 };
 
 const BASE = "eip155:8453";
@@ -363,7 +367,7 @@ describe("createEvmPayment selection policy", () => {
       from: TEST_ACCOUNT.address,
       asset: USDC_BASE,
       spender: PERMIT2_ADDRESS,
-      amount: "12345",
+      amount: maxUint256.toString(),
       nonce: "42",
       deadline: d.payload.permit2Authorization.deadline,
       version: "1",
@@ -385,6 +389,28 @@ describe("createEvmPayment selection policy", () => {
       }),
     ).toBe(true);
     expect(batches[0].map((c) => c.params[0].data.slice(0, 10))).toEqual(["0x70a08231", "0xdd62ed3e", "0x7ecebe00"]);
+  });
+
+  it("allowance short + a permit from this client still in flight → exact, no second permit", async () => {
+    mockRpc({ allowance: 0n, nonce: 1n });
+    const signed = await createEvmPayment(TEST_PRIVATE_KEY, TEST_ACCOUNT.address, required([exactOption(), uptoOption()], GAS), {
+      resourceUrl: "https://blockrun.ai/api/v1/chat/completions",
+      resourceDescription: "chat",
+      rpcUrls: [RPC],
+      permitInFlight: true,
+    });
+    expect(signed.scheme).toBe("exact");
+  });
+
+  it("allowance covers the ceiling while a permit is in flight → upto without a permit", async () => {
+    mockRpc({ allowance: maxUint256 });
+    const signed = await createEvmPayment(TEST_PRIVATE_KEY, TEST_ACCOUNT.address, required([exactOption(), uptoOption()], GAS), {
+      resourceUrl: "https://blockrun.ai/api/v1/chat/completions",
+      resourceDescription: "chat",
+      rpcUrls: [RPC],
+      permitInFlight: true,
+    });
+    expect(signed).toMatchObject({ scheme: "upto", gasSponsored: false });
   });
 
   it("allowance short and NO gas sponsoring → exact", async () => {

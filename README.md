@@ -533,7 +533,11 @@ cached input) and short answers reach a wallet caller.
 - your wallet already approved Permit2 for at least the ceiling, **or** the
   gateway sponsors the approval (`eip2612GasSponsoring`): the SDK signs a
   gasless USDC permit and the facilitator submits it, so a wallet with **no ETH**
-  can still use `upto`.
+  can still use `upto`. That permit is signed once: it grants Permit2 an
+  unlimited allowance (the standard Permit2 pattern — Permit2 still needs a
+  separate, amount-bounded signature for every transfer), so later calls need
+  no permit. While a permit this client signed is still landing (up to 120s),
+  calls sign `exact` rather than a second permit that would collide with it.
 
 Anything else, including an RPC or signing error, signs `exact` exactly as
 before. If the gateway rejects an `upto` payment before sending any response
