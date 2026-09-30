@@ -77,7 +77,7 @@ describe("Solana async jobs", () => {
     }).requestWithPaymentRaw("/v1/images/generations", { prompt: "a cat" });
 
     expect(out.status).toBe("completed");
-    // Solana settles at POST, not on the completed poll. The cost must be
+    // Solana image routes settle at POST, not on the completed poll. The cost must be
     // recorded once, at submit — recording it on completion would drop the
     // charge whenever a paid job later fails.
     const spend = (client as unknown as { getSpending(): { totalUsd: number; calls: number } }).getSpending?.();
