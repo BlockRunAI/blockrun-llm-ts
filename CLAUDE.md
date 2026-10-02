@@ -102,7 +102,9 @@ src/
 - Opt-in via `SolanaLLMClient({ batch: { operators, maxDeposit } })`; drives the official
   `@x402/svm` 2.28 `BatchSvmScheme` (server-signed/operator mode) through `@x402/core`'s
   `x402HTTPClient`. Peers are optional and lazily imported; tsup keeps them external.
-- **Trust is the caller's:** no default operator key ships in the SDK. `maxDeposit` bounds
+- **Trust is the caller's:** batch is off unless the caller lists an operator. BlockRun's key is
+  exported as `BLOCKRUN_SOL_OPERATOR` (5YKPQUFj…1vm3, production, both channel roles) but is
+  never applied by default, and the 402's `extra.operator` is never trusted. `maxDeposit` bounds
   what the operator could claim.
 - **Fails open to `exact`, never double-pays:** fallback only on creation failure, a 402, or a
   `batch_*` 400/403/409/503 (the gateway charged nothing). Any other non-2xx after a batch

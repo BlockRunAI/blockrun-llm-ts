@@ -207,7 +207,7 @@ export {
 
 // Solana client
 export { SolanaLLMClient, solanaClient, type SolanaLLMClientOptions } from "./solana-client";
-export type { SolanaBatchOptions } from "./solana-batch";
+export { BLOCKRUN_SOL_OPERATOR, type SolanaBatchOptions } from "./solana-batch";
 
 // Solana wallet utilities
 export {

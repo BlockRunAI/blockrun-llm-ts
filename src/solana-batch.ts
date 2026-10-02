@@ -37,6 +37,21 @@ import type { PaymentRequired } from "./types";
 
 export const BATCH_SCHEME = "batch-settlement";
 
+/**
+ * BlockRun's batch-settlement operator public key on sol.blockrun.ai.
+ *
+ * The production key that signs vouchers on BlockRun's Solana channels (it is
+ * also the channels' receiver authorizer). Pin it in
+ * `batch.operators` to let this client open channels with BlockRun:
+ *
+ *   new SolanaLLMClient({ batch: { operators: [BLOCKRUN_SOL_OPERATOR] } })
+ *
+ * It is a constant on purpose: a client must never trust the operator a 402
+ * names. If the key is ever rotated, both keys are valid for an overlap
+ * period, and `operators` takes a list for exactly that case.
+ */
+export const BLOCKRUN_SOL_OPERATOR = "5YKPQUFjw5WQqhSUkEGKNNfYYVqnRRNbpYyL71qQ1vm3";
+
 /** Opt-in configuration for Solana batch-settlement. */
 export interface SolanaBatchOptions {
   /**
