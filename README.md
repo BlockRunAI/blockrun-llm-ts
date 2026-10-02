@@ -443,6 +443,57 @@ const tweet = await client.chat('xai/grok-4.5', 'What is trending on X?', { sear
 **Supported endpoint:** `https://sol.blockrun.ai/api`
 **Payment:** Solana USDC (SPL, mainnet)
 
+### Metered billing with x402 batch-settlement (opt-in)
+
+By default every Solana call is an `exact` payment: one SPL transfer per call, priced at the call's **ceiling** (the quote for your `maxTokens`), settled on-chain before the model answers. With `batch-settlement` you lock a small deposit in a payment channel once. After that, each call carries only a signed authorization for its ceiling. The gateway serves the call, meters what it **actually** cost, and charges that, never more than the ceiling. It then redeems the charges on-chain in batches.
+
+```typescript
+import { SolanaLLMClient } from '@blockrun/llm';
+
+const client = new SolanaLLMClient({
+  privateKey: process.env.SOLANA_WALLET_KEY,
+  batch: {
+    // BlockRun's published operator public key. The SDK ships no default:
+    // you decide which operator may sign vouchers against your deposit.
+    operators: ['<BlockRun operator public key>'],
+    // Most USDC this client will ever lock in the channel (deposit + top-ups),
+    // and so the most an operator could claim. Default "$1".
+    maxDeposit: '$5',
+  },
+});
+
+// Call 1 opens the channel. The SDK deposits 5x the ceiling (capped at
+// maxDeposit), and this one call is charged its quoted price, as with exact.
+await client.chat('openai/gpt-4o-mini', 'gm');
+
+// Every later call is metered: you pay for the tokens actually generated.
+const reply = await client.chat('anthropic/claude-sonnet-4.6', 'Summarize x402 in one line', {
+  maxTokens: 2048, // ceiling only: a 40-token answer is billed as 40 tokens
+});
+
+console.log(client.getSpending()); // { totalUsd: <actual charges>, calls: 2 }
+
+// Done for good? Close the channel and take the unused escrow back.
+await client.closeBatchChannel();
+```
+
+Install the optional peers it runs on: `npm install @x402/core@~2.28.0 @x402/svm@~2.28.0 @solana/kit`.
+
+How it behaves:
+
+- **Opt-in and trust-pinned.** In server-signed mode BlockRun's operator key signs the vouchers, so it could claim up to the whole unspent deposit. The SDK only enters a channel for an operator you list in `operators`, and only up to `maxDeposit`. A 402 that asks for any other operator is paid with `exact`.
+- **Never worse than `exact`.** These cases all pay with `exact` instead:
+  - the 402 has no batch accept;
+  - the deposit would exceed `maxDeposit`;
+  - the gateway refuses batch (payer not admitted, admission paused, verifier unavailable);
+  - another batch call for the same wallet is in flight.
+
+  Parallel calls never queue behind the channel. A gateway refusal charges nothing, so the `exact` retry is the only charge.
+- **Scope.** Batch covers non-streaming chat: `chat`, `chatCompletion`, `smartChat`, and `smartChatCompletion`. `stream()` and the image and media jobs still pay with `exact`.
+- **One channel per wallet.** Every `SolanaLLMClient` for a wallet in one process shares a single channel. A second client with different `batch` options pays `exact`. On disk, one live process owns a wallet's channel file through a pid lock; other processes pay `exact` until that process exits.
+- **State.** The open channel is saved to `~/.blockrun/solana-batch/<wallet>.json` (mode `0600`), so a restart reuses it. A custom `channelStore` path must also be per wallet. With `channelStore: false` the channel is kept in memory only and found again on-chain, and nothing coordinates processes, so use it for a single process per wallet. If a channel open or top-up gets no clean answer, or after `closeBatchChannel()`, the SDK forgets the saved channel and reads the real one from the chain. The channel uses your `rpcUrl` / `SOLANA_RPC_URL`.
+- **Rollout.** sol.blockrun.ai lists `exact` first, and offers `batch-settlement` only once BlockRun enables it. Until then, and for any payer not yet admitted, a client with `batch` set simply keeps paying `exact`.
+
 ## Arc Support
 
 The same `LLMClient` pays on [Circle's Arc](https://www.arc.network) via [arc.blockrun.ai](https://arc.blockrun.ai) — point `apiUrl` at it and hold USDC on Arc in the same EVM wallet:
@@ -530,7 +581,7 @@ const summary = getCostSummary();                  // across sessions (~/.blockr
 console.log(`Lifetime: $${summary.totalUsd.toFixed(2)} over ${summary.calls} calls`);
 ```
 
-In wallet mode, every paid request is a real on-chain USDC transfer — look up your wallet address on [Basescan](https://basescan.org) (or a Solana explorer) to verify each settlement independently.
+In wallet mode, every paid request is a real on-chain USDC transfer — look up your wallet address on [Basescan](https://basescan.org) (or a Solana explorer) to verify each settlement independently. The exception is Solana [batch-settlement](#metered-billing-with-x402-batch-settlement-opt-in): there the on-chain records are the channel deposit and BlockRun's batched redemptions, and each call is a signed voucher.
 
 **Non-custodial by design: your private key never leaves your machine** — it is only used for local signing, and no funds are ever held by BlockRun.
 

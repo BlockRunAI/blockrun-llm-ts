@@ -47,6 +47,8 @@ import {
   SOLANA_NETWORK,
 } from "./x402";
 import { solanaKeyToBytes, solanaPublicKey } from "./solana-wallet";
+import { BATCH_SCHEME, SolanaBatchPayer, type SolanaBatchOptions } from "./solana-batch";
+import type { PaymentRequired } from "./types";
 import {
   sanitizeErrorResponse,
   validateApiUrl,
@@ -193,6 +195,14 @@ export interface SolanaLLMClientOptions extends ApiKeyOptions {
   rpcHeaders?: Record<string, string>;
   /** Request timeout in milliseconds (default: 60000) */
   timeout?: number;
+  /**
+   * Opt in to x402 batch-settlement (metered billing) for chat completions.
+   * Each call is charged what it actually cost, at most its quoted ceiling,
+   * from a deposit-backed payment channel instead of a per-call transfer.
+   * Needs the optional peers `@x402/core`, `@x402/svm` and `@solana/kit`.
+   * Ignored in API-key mode. See {@link SolanaBatchOptions}.
+   */
+  batch?: SolanaBatchOptions;
 }
 
 /**
@@ -246,6 +256,7 @@ export class SolanaLLMClient {
   private addressCache: string | null = null;
   private modelPricingCache: Map<string, ModelPricing> | null = null;
   private modelPricingPromise: Promise<Map<string, ModelPricing>> | null = null;
+  private batchPayer?: SolanaBatchPayer;
 
   constructor(options: SolanaLLMClientOptions = {}) {
     this.apiAuth = resolveApiKeyAuth(options);
@@ -272,6 +283,27 @@ export class SolanaLLMClient {
     this.rpcUrl = rpc.url;
     this.rpcHeaders = rpc.headers;
     this.timeout = options.timeout || DEFAULT_TIMEOUT;
+
+    if (options.batch && !this.apiAuth) {
+      this.batchPayer = new SolanaBatchPayer({
+        options: options.batch,
+        secretKey: () => solanaKeyToBytes(this.privateKey),
+        address: () => this.getWalletAddress(),
+        rpcUrl: this.rpcUrl,
+      });
+    }
+  }
+
+  /**
+   * Close this wallet's batch-settlement channel and return its unused escrow.
+   *
+   * The gateway closes it cooperatively when it can; otherwise this starts a
+   * payer-forced close and the escrow comes back after the channel's grace
+   * period. Only meaningful with the `batch` option.
+   */
+  async closeBatchChannel(): Promise<unknown> {
+    if (!this.batchPayer) throw new Error("closeBatchChannel() requires the `batch` option in wallet mode");
+    return this.batchPayer.close(`${this.apiUrl}/v1/chat/completions`);
   }
 
   /** Get Solana wallet address (public key in base58). */
@@ -908,7 +940,26 @@ export class SolanaLLMClient {
 
       if (response.status === 402) {
         try {
-          return await this.handlePaymentAndRetry(url, body, response, staleRetries > 0);
+          const paymentRequired = await this.readPaymentRequired(response);
+          if (this.batchPayer && staleRetries === 0) {
+            const batch = await this.batchPayer.pay(paymentRequired, (paymentHeaders) =>
+              this.fetchWithTimeout(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT, ...paymentHeaders },
+                body: JSON.stringify(body),
+              })
+            );
+            if (batch.kind === "paid") {
+              this.recordSettlement(batch.chargedUsd);
+              return batch.response.json() as Promise<ChatResponse>;
+            }
+            if (batch.kind === "failed") {
+              let errorBody: unknown;
+              try { errorBody = await batch.response.json(); } catch { errorBody = { error: "Request failed" }; }
+              throw new APIError(`API error after payment: ${batch.response.status}`, batch.response.status, sanitizeErrorResponse(errorBody));
+            }
+          }
+          return await this.handlePaymentAndRetry(url, body, paymentRequired, staleRetries > 0);
         } catch (error) {
           if (
             !(error instanceof SafeStaleBlockhashError) ||
@@ -1050,6 +1101,16 @@ export class SolanaLLMClient {
     forceFreshBlockhash: boolean,
     resourceFallback = url
   ): Promise<{ paymentPayload: string; costUsd: number }> {
+    return this.signExactPayment(
+      url,
+      await this.readPaymentRequired(response),
+      forceFreshBlockhash,
+      resourceFallback
+    );
+  }
+
+  /** Read a `402`'s payment requirements from its header, or its JSON body. */
+  private async readPaymentRequired(response: Response): Promise<PaymentRequired> {
     let paymentHeader = response.headers.get("payment-required");
 
     if (!paymentHeader) {
@@ -1065,8 +1126,22 @@ export class SolanaLLMClient {
       throw new PaymentError("402 response but no payment requirements found");
     }
 
-    const paymentRequired = parsePaymentRequired(paymentHeader);
-    const details = extractPaymentDetails(paymentRequired, SOLANA_NETWORK);
+    return parsePaymentRequired(paymentHeader);
+  }
+
+  /** Sign the `exact` accept of a 402 as an SPL TransferChecked payment. */
+  private async signExactPayment(
+    url: string,
+    paymentRequired: PaymentRequired,
+    forceFreshBlockhash: boolean,
+    resourceFallback = url
+  ): Promise<{ paymentPayload: string; costUsd: number }> {
+    // A batch-settlement accept is a channel authorization, not a transfer.
+    // The gateway lists it after exact, but never sign a transfer against one.
+    const details = extractPaymentDetails(
+      { ...paymentRequired, accepts: paymentRequired.accepts.filter((accept) => accept.scheme !== BATCH_SCHEME) },
+      SOLANA_NETWORK
+    );
 
     if (!details.network?.startsWith("solana:")) {
       throw new PaymentError(
@@ -1108,12 +1183,12 @@ export class SolanaLLMClient {
   private async handlePaymentAndRetry(
     url: string,
     body: Record<string, unknown>,
-    response: Response,
+    paymentRequired: PaymentRequired,
     forceFreshBlockhash = false
   ): Promise<ChatResponse> {
-    const { paymentPayload, costUsd } = await this.signPaymentFrom402(
+    const { paymentPayload, costUsd } = await this.signExactPayment(
       url,
-      response,
+      paymentRequired,
       forceFreshBlockhash,
       `${this.apiUrl}/v1/chat/completions`
     );

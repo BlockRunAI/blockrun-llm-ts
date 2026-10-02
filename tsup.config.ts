@@ -25,6 +25,10 @@ export default defineConfig({
     "@anthropic-ai/sdk",
     "@solana/web3.js",
     "@solana/spl-token",
+    // Batch-settlement peers: optional, loaded lazily by src/solana-batch.ts.
+    "@x402/core",
+    "@x402/svm",
+    "@solana/kit",
     "bs58",
   ],
 });
