@@ -531,6 +531,14 @@ describe("SolanaLLMClient batch-settlement", () => {
   });
 });
 
+describe("BLOCKRUN_SOL_OPERATOR", () => {
+  it("is a 32-byte base58 Solana public key, exported from the package root", async () => {
+    const { BLOCKRUN_SOL_OPERATOR } = await import("../../src/index");
+    expect(BLOCKRUN_SOL_OPERATOR).toBe("5YKPQUFjw5WQqhSUkEGKNNfYYVqnRRNbpYyL71qQ1vm3");
+    expect(bs58.decode(BLOCKRUN_SOL_OPERATOR)).toHaveLength(32);
+  });
+});
+
 describe("batch channel storage", () => {
   let tmp: string;
   beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), "br-batch-store-")); });

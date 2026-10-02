@@ -454,14 +454,15 @@ npm install @x402/core@~2.28.0 @x402/svm@~2.28.0 @solana/kit
 ```
 
 ```typescript
-import { SolanaLLMClient } from '@blockrun/llm';
+import { SolanaLLMClient, BLOCKRUN_SOL_OPERATOR } from '@blockrun/llm';
 
 const client = new SolanaLLMClient({
   privateKey: process.env.SOLANA_WALLET_KEY,
   batch: {
-    // BlockRun's published operator public key. The SDK ships no default:
-    // you decide which operator may sign vouchers against your deposit.
-    operators: ['<BlockRun operator public key>'],
+    // BlockRun's operator public key, 5YKPQUFjw5WQqhSUkEGKNNfYYVqnRRNbpYyL71qQ1vm3.
+    // Batch stays off until you list it: you decide which operator may sign
+    // vouchers against your deposit.
+    operators: [BLOCKRUN_SOL_OPERATOR],
     // Most USDC this client will ever lock in the channel (deposit + top-ups),
     // and so the most an operator could claim. Default "$1".
     maxDeposit: '$5',
@@ -488,7 +489,7 @@ await client.closeBatchChannel();
 
 How it behaves:
 
-- **Opt-in and trust-pinned.** In server-signed mode BlockRun's operator key signs the vouchers, so it could claim up to the whole unspent deposit. The SDK only enters a channel for an operator you list in `operators`, and only up to `maxDeposit`. A 402 that asks for any other operator is paid with `exact`.
+- **Opt-in and trust-pinned.** In server-signed mode BlockRun's operator key signs the vouchers, so it could claim up to the whole unspent deposit. The SDK only enters a channel for an operator you list in `operators`, and only up to `maxDeposit`. A 402 that asks for any other operator is paid with `exact`. BlockRun's key is exported as `BLOCKRUN_SOL_OPERATOR` (`5YKPQUFjw5WQqhSUkEGKNNfYYVqnRRNbpYyL71qQ1vm3`). The SDK pins it and never takes it from a 402. If BlockRun ever rotates the key, the old and new keys overlap, and `operators` takes a list for that case.
 - **Never worse than `exact`.** These cases all pay with `exact` instead:
   - the 402 has no batch accept;
   - the deposit would exceed `maxDeposit`;

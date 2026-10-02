@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added — BlockRun's Solana batch operator key
+
+- `BLOCKRUN_SOL_OPERATOR` exports BlockRun's production batch-settlement
+  operator public key, `5YKPQUFjw5WQqhSUkEGKNNfYYVqnRRNbpYyL71qQ1vm3`. It is
+  the same key in both channel roles: voucher signer and receiver authorizer.
+  To opt in, pass `batch: { operators: [BLOCKRUN_SOL_OPERATOR] }`. Batch still
+  needs that explicit opt-in: the SDK never trusts the operator a 402 names.
+
 ## [3.19.0] - 2026-10-02
 
 ### Added — Solana x402 batch-settlement (metered billing), opt-in
