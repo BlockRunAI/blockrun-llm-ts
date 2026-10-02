@@ -447,6 +447,12 @@ const tweet = await client.chat('xai/grok-4.5', 'What is trending on X?', { sear
 
 By default every Solana call is an `exact` payment: one SPL transfer per call, priced at the call's **ceiling** (the quote for your `maxTokens`), settled on-chain before the model answers. With `batch-settlement` you lock a small deposit in a payment channel once. After that, each call carries only a signed authorization for its ceiling. The gateway serves the call, meters what it **actually** cost, and charges that, never more than the ceiling. It then redeems the charges on-chain in batches.
 
+Batch mode runs on three optional peer dependencies:
+
+```bash
+npm install @x402/core@~2.28.0 @x402/svm@~2.28.0 @solana/kit
+```
+
 ```typescript
 import { SolanaLLMClient } from '@blockrun/llm';
 
@@ -462,22 +468,23 @@ const client = new SolanaLLMClient({
   },
 });
 
-// Call 1 opens the channel. The SDK deposits 5x the ceiling (capped at
-// maxDeposit), and this one call is charged its quoted price, as with exact.
+// The first call opens the channel. By default the SDK deposits 5x this
+// call's ceiling (never more than maxDeposit), and the call that opens or tops
+// up the channel is charged its quoted price, as it would be with exact.
 await client.chat('openai/gpt-4o-mini', 'gm');
 
-// Every later call is metered: you pay for the tokens actually generated.
+// Every later call is metered: you pay for the tokens the call actually used.
 const reply = await client.chat('anthropic/claude-sonnet-4.6', 'Summarize x402 in one line', {
-  maxTokens: 2048, // ceiling only: a 40-token answer is billed as 40 tokens
+  maxTokens: 2048, // a ceiling, not a price: a short answer is not billed for 2,048 tokens
 });
 
 console.log(client.getSpending()); // { totalUsd: <actual charges>, calls: 2 }
 
-// Done for good? Close the channel and take the unused escrow back.
+// Done for good? Close the channel to get the unused escrow back.
+// BlockRun closes it cooperatively when it can; otherwise this starts a
+// payer-forced close and the escrow returns after the channel's grace period.
 await client.closeBatchChannel();
 ```
-
-Install the optional peers it runs on: `npm install @x402/core@~2.28.0 @x402/svm@~2.28.0 @solana/kit`.
 
 How it behaves:
 
