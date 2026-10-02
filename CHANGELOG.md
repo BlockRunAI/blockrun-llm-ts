@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.19.0] - 2026-10-02
+
 ### Added — Solana x402 batch-settlement (metered billing), opt-in
 
 `SolanaLLMClient` takes a `batch` option. It pays chat completions through a
