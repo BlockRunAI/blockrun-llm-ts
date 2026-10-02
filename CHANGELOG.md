@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.19.1] - 2026-10-02
+
 ### Added — BlockRun's Solana batch operator key
 
 - `BLOCKRUN_SOL_OPERATOR` exports BlockRun's production batch-settlement
