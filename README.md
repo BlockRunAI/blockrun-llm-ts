@@ -100,7 +100,21 @@ without them throws an error naming the exact install command.
 
 The Anthropic SDK is a runtime dependency because the public compatibility wrapper exposes its types. Solana signing dependencies remain optional and are unnecessary for account billing.
 
-## Quick Start: API Key
+## Quick Start
+
+Choose one billing mode. The chat and routing APIs are the same in every mode.
+
+| Mode | Credential | Settlement | Best for |
+|------|------------|------------|----------|
+| **Account** | `BLOCKRUN_API_KEY` | BlockRun account credit | Applications and teams that want the simplest setup |
+| **Solana wallet** | `SOLANA_WALLET_KEY` | Per-request USDC over x402 | Agents and non-custodial workloads; recommended wallet chain |
+| **Base wallet** | `BASE_CHAIN_WALLET_KEY` | Per-request USDC over x402 | Existing EVM wallets and Base-native applications |
+
+Credential precedence is deterministic: an explicit `apiKey` or `privateKey`
+wins; otherwise `BLOCKRUN_API_KEY` wins over wallet environment variables.
+Passing both explicit credentials is an error.
+
+### Account API key
 
 1. [Sign up or sign in](https://user.blockrun.ai).
 2. Create a key on [API Keys](https://user.blockrun.ai/dashboard/keys) and add credit on [Credits](https://user.blockrun.ai/dashboard/credits).
@@ -144,7 +158,7 @@ To switch back to a wallet, unset `BLOCKRUN_API_KEY` and create a new wallet cli
 address/balance helpers require a wallet. Account credit does not sign trades or
 transfer wallet funds. Service availability depends on the account gateway and model.
 
-## Quick Start: Solana (Recommended Wallet Chain)
+### Solana wallet
 
 ```typescript
 import { setupAgentClient, SolanaLLMClient } from '@blockrun/llm';
@@ -158,7 +172,7 @@ console.log(await client.smartChat('Explain photosynthesis.'));
 const solana = new SolanaLLMClient({ privateKey: process.env.SOLANA_WALLET_KEY });
 ```
 
-## Quick Start: Base Wallet
+### Base wallet
 
 ```typescript
 import { LLMClient } from '@blockrun/llm';
@@ -214,18 +228,17 @@ longer NVIDIA-only**, so pin these by full model id rather than by an
 | `cohere/north-mini-code` | 256K | Compact coding model, sub-second responses |
 | `poolside/laguna-xs-2.1` | 128K | Coding model |
 
-## Quick Start (Solana)
+## Documentation map
 
-```typescript
-import { SolanaLLMClient } from '@blockrun/llm';
-
-// SOLANA_WALLET_KEY env var (bs58-encoded Solana secret key)
-const client = new SolanaLLMClient();
-const response = await client.chat('openai/gpt-4o', 'gm Solana');
-console.log(response);
-```
-
-Set `SOLANA_WALLET_KEY` to your bs58-encoded Solana secret key. Payments are automatic via x402 — your key never leaves your machine.
+| If you want to… | Start here |
+|-----------------|------------|
+| Let the SDK choose the cheapest capable model | [Smart Routing](#smart-routing-router-core-v3) |
+| Pay from a Solana wallet | [Solana Support](#solana-support) |
+| Enable metered batch settlement | [Batch settlement](#batch-settlement-optional-metered-billing) |
+| Understand wallet payments and settlement | [How Payment Works](#how-payment-works) |
+| Use the OpenAI or Anthropic SDK surface | [Streaming](#streaming) and [Anthropic SDK Compatibility](#anthropic-sdk-compatibility) |
+| Generate media or query data services | [Models and service APIs](#models-and-service-apis) |
+| Configure production credentials safely | [Configuration](#configuration) and [Security](#security) |
 
 ## Smart Routing (Router Core V3)
 
@@ -443,11 +456,25 @@ const tweet = await client.chat('xai/grok-4.5', 'What is trending on X?', { sear
 **Supported endpoint:** `https://sol.blockrun.ai/api`
 **Payment:** Solana USDC (SPL, mainnet)
 
-### Metered billing with x402 batch-settlement (opt-in)
+### Batch settlement (optional metered billing)
 
-By default every Solana call is an `exact` payment: one SPL transfer per call, priced at the call's **ceiling** (the quote for your `maxTokens`), settled on-chain before the model answers. With `batch-settlement` you lock a small deposit in a payment channel once. After that, each call carries only a signed authorization for its ceiling. The gateway serves the call, meters what it **actually** cost, and charges that, never more than the ceiling. It then redeems the charges on-chain in batches.
+By default, every Solana call uses x402 `exact`: one SPL transfer per call,
+priced at the request ceiling and settled before the model answers. Batch
+settlement replaces those per-call transfers with a bounded payment channel.
+The client locks a small deposit once, each request authorizes no more than its
+quoted ceiling, and the gateway charges the metered cost after the response.
 
-Batch mode runs on three optional peer dependencies:
+> **No operator key needs to be created, copied, or stored in an environment
+> variable.** `BLOCKRUN_SOL_OPERATOR` is a public constant exported by this SDK.
+> Adding it to `batch.operators` is the explicit opt-in: it tells the client that
+> this wallet trusts BlockRun's operator to sign vouchers against the channel,
+> up to `maxDeposit`.
+
+Without a `batch` option, behavior is unchanged and every request uses `exact`.
+If batch is unavailable or unsafe for a request, the SDK falls back to `exact`.
+
+In addition to the Solana wallet dependencies from [Installation](#installation),
+batch mode needs three optional peer dependencies:
 
 ```bash
 npm install @x402/core@~2.28.0 @x402/svm@~2.28.0 @solana/kit
@@ -459,12 +486,9 @@ import { SolanaLLMClient, BLOCKRUN_SOL_OPERATOR } from '@blockrun/llm';
 const client = new SolanaLLMClient({
   privateKey: process.env.SOLANA_WALLET_KEY,
   batch: {
-    // BlockRun's operator public key, 5YKPQUFjw5WQqhSUkEGKNNfYYVqnRRNbpYyL71qQ1vm3.
-    // Batch stays off until you list it: you decide which operator may sign
-    // vouchers against your deposit.
+    // Provided by @blockrun/llm. This explicit trust decision enables batch.
     operators: [BLOCKRUN_SOL_OPERATOR],
-    // Most USDC this client will ever lock in the channel (deposit + top-ups),
-    // and so the most an operator could claim. Default "$1".
+    // Maximum total escrow for this channel. Default: "$1".
     maxDeposit: '$5',
   },
 });
@@ -487,11 +511,23 @@ console.log(client.getSpending()); // { totalUsd: <actual charges>, calls: 2 }
 await client.closeBatchChannel();
 ```
 
-How it behaves:
+#### Trust and spending boundary
 
-- **Opt-in and trust-pinned.** In server-signed mode BlockRun's operator key signs the vouchers, so it could claim up to the whole unspent deposit. The SDK only enters a channel for an operator you list in `operators`, and only up to `maxDeposit`. A 402 that asks for any other operator is paid with `exact`. BlockRun's key is exported as `BLOCKRUN_SOL_OPERATOR` (`5YKPQUFjw5WQqhSUkEGKNNfYYVqnRRNbpYyL71qQ1vm3`). The SDK pins it and never takes it from a 402. If BlockRun ever rotates the key, the old and new keys overlap, and `operators` takes a list for that case.
-- **Never worse than `exact`.** These cases all pay with `exact` instead:
+- **Explicit trust.** `operators` is required and has no implicit default. The
+  package exports BlockRun's production public key as `BLOCKRUN_SOL_OPERATOR`
+  (`5YKPQUFjw5WQqhSUkEGKNNfYYVqnRRNbpYyL71qQ1vm3`) so applications do not
+  duplicate it. The SDK never learns a trusted key from an untrusted 402.
+- **Bounded exposure.** `maxDeposit` caps the total USDC locked by this client,
+  including top-ups. In server-signed mode, that is also the maximum the
+  selected operator could claim without another authorization from the payer.
+- **Key rotation.** `operators` accepts a list so an old and new BlockRun key can
+  overlap during a controlled rotation.
+
+#### Runtime behavior
+
+- **Safe fallback.** These cases use `exact` instead:
   - the 402 has no batch accept;
+  - the 402 names an operator outside `operators`;
   - the deposit would exceed `maxDeposit`;
   - the gateway refuses batch (payer not admitted, admission paused, verifier unavailable);
   - another batch call for the same wallet is in flight.
@@ -500,7 +536,10 @@ How it behaves:
 - **Scope.** Batch covers non-streaming chat: `chat`, `chatCompletion`, `smartChat`, and `smartChatCompletion`. `stream()` and the image and media jobs still pay with `exact`.
 - **One channel per wallet.** Every `SolanaLLMClient` for a wallet in one process shares a single channel. A second client with different `batch` options pays `exact`. On disk, one live process owns a wallet's channel file through a pid lock; other processes pay `exact` until that process exits.
 - **State.** The open channel is saved to `~/.blockrun/solana-batch/<wallet>.json` (mode `0600`), so a restart reuses it. A custom `channelStore` path must also be per wallet. With `channelStore: false` the channel is kept in memory only and found again on-chain, and nothing coordinates processes, so use it for a single process per wallet. If a channel open or top-up gets no clean answer, or after `closeBatchChannel()`, the SDK forgets the saved channel and reads the real one from the chain. The channel uses your `rpcUrl` / `SOLANA_RPC_URL`.
-- **Rollout.** sol.blockrun.ai lists `exact` first, and offers `batch-settlement` only once BlockRun enables it. Until then, and for any payer not yet admitted, a client with `batch` set simply keeps paying `exact`.
+- **Rollout.** `sol.blockrun.ai` lists `exact` first and advertises
+  `batch-settlement` only when it is enabled. A configured client remains fully
+  compatible while rollout is paused or restricted because it falls back to
+  `exact`.
 
 ## Arc Support
 
@@ -589,7 +628,7 @@ const summary = getCostSummary();                  // across sessions (~/.blockr
 console.log(`Lifetime: $${summary.totalUsd.toFixed(2)} over ${summary.calls} calls`);
 ```
 
-In wallet mode, every paid request is a real on-chain USDC transfer — look up your wallet address on [Basescan](https://basescan.org) (or a Solana explorer) to verify each settlement independently. The exception is Solana [batch-settlement](#metered-billing-with-x402-batch-settlement-opt-in): there the on-chain records are the channel deposit and BlockRun's batched redemptions, and each call is a signed voucher.
+In wallet mode, every paid request is a real on-chain USDC transfer — look up your wallet address on [Basescan](https://basescan.org) (or a Solana explorer) to verify each settlement independently. The exception is Solana [batch settlement](#batch-settlement-optional-metered-billing): there the on-chain records are the channel deposit and BlockRun's batched redemptions, and each call is a signed voucher.
 
 **Non-custodial by design: your private key never leaves your machine** — it is only used for local signing, and no funds are ever held by BlockRun.
 
@@ -640,12 +679,24 @@ The per-API client classes (`LLMClient`, `ImageClient`, `VideoClient`,
 `PriceClient`, `SurfClient`) all remain — they will be soft-deprecated in 2.6 (rewritten as
 shims over `BlockrunClient`) and removed in 3.0.
 
-## Available Models
+## Models and service APIs
+
+The live catalog is the source of truth for availability, context windows, and
+pricing: call `client.listModels()` or visit
+[Models & Pricing](https://blockrun.ai/models). The reference below documents
+the SDK's model families and non-chat client surfaces; it is intentionally
+secondary to the runtime catalog.
 
 **Prices are not listed here.** They change often, and a number copied into a
 README is wrong the day after it lands. See **[blockrun.ai/models](https://blockrun.ai/models)**
 for live rates, or read them from the catalog at runtime — `client.listModels()`
 and `client.listImageModels()` return exactly what the gateway is charging.
+
+<details>
+<summary><strong>Model and service catalog</strong> — chat families, media, search, market data, DeFi, and RPC</summary>
+
+The tables and examples in this section are an SDK surface reference. Use the
+live catalog for runtime availability and prices.
 
 ### OpenAI GPT-6 Family
 
@@ -1056,6 +1107,9 @@ console.log(result.summary);
 for (const url of result.citations ?? []) console.log(url);
 ```
 
+The same endpoint is available as `client.search()` on `LLMClient` and
+`SolanaLLMClient` when the selected gateway supports it.
+
 ### Surf Crypto Data
 
 `SurfClient` exposes the full `/v1/surf/*` catalog — 84+ pay-per-call
@@ -1215,28 +1269,7 @@ gateway cache — same price, lower latency.
 
 *Testnet models use flat pricing (no token counting) for simplicity.*
 
-## Standalone Search
-
-Search web, X/Twitter, and news without using a chat model:
-
-```typescript
-import { LLMClient } from '@blockrun/llm';
-
-const client = new LLMClient();
-
-const result = await client.search('latest AI agent frameworks 2026');
-console.log(result.summary);
-for (const cite of result.citations ?? []) {
-  console.log(`  - ${cite}`);
-}
-
-// Filter by source type and date range
-const filtered = await client.search('BlockRun x402', {
-  sources: ['web', 'x'],
-  fromDate: '2026-01-01',
-  maxResults: 5,
-});
-```
+</details>
 
 ## Image Editing (img2img)
 
@@ -1579,6 +1612,10 @@ const client = new LLMClient({
 `BLOCKRUN_API_KEY` takes precedence: if it is set alongside a wallet key env var and
 you pass no explicit credential, the client runs in account mode. Pass an explicit
 `privateKey` to force wallet mode.
+
+`BLOCKRUN_SOL_OPERATOR` is **not** an environment variable or a secret. It is an
+SDK export used for the explicit batch-settlement trust configuration shown in
+[Solana Support](#batch-settlement-optional-metered-billing).
 
 ## Error Handling
 
