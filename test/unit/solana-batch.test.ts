@@ -122,7 +122,9 @@ function decodePayment(init: RequestInit | undefined): Record<string, any> {
 
 /**
  * A served batch call: 200 with the operator-signed voucher for the channel's
- * new cumulative total, the receipt the official server scheme returns.
+ * new cumulative total, the receipt the official server scheme returns. As on
+ * sol.blockrun.ai, the per-call charge is `extra.chargedAmount`; the
+ * top-level `amount` is empty.
  */
 async function servedWithVoucher(
   operator: KeyPairSigner,
@@ -135,9 +137,10 @@ async function servedWithVoucher(
     success: true,
     transaction: "",
     network: NETWORK,
-    amount: charged.toString(),
+    amount: "",
     extra: {
       voucher,
+      chargedAmount: charged.toString(),
       commitmentId: `commit-${cumulative}`,
       channelState: { channelId, chargedCumulativeAmount: cumulative.toString() },
     },
@@ -316,6 +319,54 @@ describe("SolanaLLMClient batch-settlement", () => {
     expect((gatewayCalls[2].init?.headers as Record<string, string>)["PAYMENT-SIGNATURE"]).toBe("exact-payload");
     // Only the exact payment is booked: the refused batch attempt charged nothing.
     expect(c.getSpending()).toEqual({ totalUsd: 0.005, calls: 1 });
+  });
+
+  it("books the charge of a receipt the gateway rebuilt after confirming its commit", async () => {
+    const c = client({});
+    const exact = stubExact(c);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // No voucher, no extra: the scheme cannot reconcile it, but the call was charged.
+    const receipt = { success: true, transaction: "", network: NETWORK, amount: "700" };
+    gateway.push(
+      () => quote402([exactAccept(), batchAccept(operator.address)]),
+      () =>
+        new Response(JSON.stringify(CHAT_OK), {
+          status: 200,
+          headers: { "PAYMENT-RESPONSE": Buffer.from(JSON.stringify(receipt)).toString("base64") },
+        })
+    );
+
+    await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+    expect(exact).not.toHaveBeenCalled();
+    expect(c.getSpending()).toEqual({ totalUsd: 0.0007, calls: 1 });
+  });
+
+  it("never books the ceiling when a receipt states no charge", async () => {
+    const c = client({});
+    stubExact(c);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    gateway.push(
+      () => quote402([exactAccept(), batchAccept(operator.address)]),
+      () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+    );
+
+    await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+    expect(c.getSpending()).toEqual({ totalUsd: 0, calls: 1 });
+  });
+
+  it("raises payment_outcome_unknown instead of paying again with exact", async () => {
+    const c = client({});
+    const exact = stubExact(c);
+    gateway.push(
+      () => quote402([exactAccept(), batchAccept(operator.address)]),
+      () => new Response(JSON.stringify({ error: "payment_outcome_unknown" }), { status: 409 })
+    );
+
+    await expect(c.chat("openai/gpt-4o-mini", "gm")).rejects.toBeInstanceOf(APIError);
+    expect(exact).not.toHaveBeenCalled();
+    expect(gatewayCalls).toHaveLength(2);
   });
 
   it("surfaces a model error after a batch payment instead of paying again", async () => {

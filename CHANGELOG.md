@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed — batch-settlement spend is the metered charge, not the ceiling
+
+- `getSpending()` booked each batch call at its ceiling (the `max_tokens`
+  quote). sol.blockrun.ai reports the metered charge in the receipt's
+  `extra.chargedAmount` and leaves the top-level `amount` empty, so the
+  ceiling fallback was what got recorded. The charge now comes from
+  `extra.chargedAmount`, then from a non-empty top-level `amount` (a receipt
+  the gateway rebuilt after confirming its commit). It is never taken from the
+  ceiling. Accounting only: what the gateway charged was always correct.
+
 ## [3.19.1] - 2026-10-02
 
 ### Added — BlockRun's Solana batch operator key

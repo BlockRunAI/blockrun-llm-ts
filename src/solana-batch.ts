@@ -84,17 +84,22 @@ export type BatchAttempt =
 
 /** Structural slice of `@x402/core`'s x402HTTPClient that this module uses. */
 interface HttpPaymentClient {
+  getPaymentSettleResponse(getHeader: (name: string) => string | null | undefined): SettleResponseLike;
   createPaymentPayload(paymentRequired: PaymentRequired): Promise<PaymentPayloadLike>;
   encodePaymentSignatureHeader(payload: PaymentPayloadLike): Record<string, string>;
   processPaymentResult(
     payload: PaymentPayloadLike,
     getHeader: (name: string) => string | null | undefined,
     status: number,
-  ): Promise<{ recovered: boolean; settleResponse?: { success?: boolean; amount?: string } }>;
+  ): Promise<{ recovered: boolean; settleResponse?: SettleResponseLike }>;
+}
+interface SettleResponseLike {
+  success?: boolean;
+  amount?: string;
+  extra?: { chargedAmount?: unknown };
 }
 interface PaymentPayloadLike {
   x402Version: number;
-  accepted?: { amount?: string };
   payload?: { type?: string };
 }
 interface StoredRecord {
@@ -285,8 +290,30 @@ export function offersBatch(paymentRequired: PaymentRequired): boolean {
 }
 
 /** Atomic USDC string to USD. */
-function atomicToUsd(amount: string | undefined): number | undefined {
-  return amount !== undefined && /^\d+$/.test(amount) ? Number(amount) / 1e6 : undefined;
+function atomicToUsd(amount: unknown): number | undefined {
+  return typeof amount === "string" && /^\d+$/.test(amount) ? Number(amount) / 1e6 : undefined;
+}
+
+/**
+ * What one served call was charged, in USD, read from its PAYMENT-RESPONSE.
+ *
+ * The gateway reports the metered charge in `extra.chargedAmount`; the
+ * top-level `amount` is `""` on an authorization, and only carries the charge
+ * on a receipt the gateway rebuilt after confirming a commit landed (that one
+ * has no `extra`). The ceiling (`accepted.amount`) is never used: it is what
+ * the call could have cost, not what it did.
+ *
+ * Decoded straight from the header rather than taken from the scheme, so a
+ * receipt the scheme refuses to reconcile is still counted.
+ */
+function chargedUsd(getReceipt: () => SettleResponseLike): number {
+  let receipt: SettleResponseLike;
+  try {
+    receipt = getReceipt();
+  } catch {
+    return 0;
+  }
+  return atomicToUsd(receipt?.extra?.chargedAmount) ?? atomicToUsd(receipt?.amount) ?? 0;
 }
 
 /**
@@ -489,8 +516,7 @@ export class SolanaBatchPayer {
       // receipt: only a confirmed receipt proves what the channel now holds.
       if (deposit && !(response.ok && settled?.success === true)) await this.forget(wallet);
       if (response.ok) {
-        const charged = atomicToUsd(settled?.amount) ?? atomicToUsd(payload.accepted?.amount) ?? 0;
-        return { kind: "paid", response, chargedUsd: charged };
+        return { kind: "paid", response, chargedUsd: chargedUsd(() => http.getPaymentSettleResponse(getHeader)) };
       }
       const refusal = await isBatchRefusal(response);
       if (refusal) {
@@ -515,7 +541,7 @@ export class SolanaBatchPayer {
     payload: PaymentPayloadLike,
     getHeader: (name: string) => string | null | undefined,
     status: number,
-  ): Promise<{ success?: boolean; amount?: string } | undefined> {
+  ): Promise<SettleResponseLike | undefined> {
     try {
       return (await http.processPaymentResult(payload, getHeader, status)).settleResponse;
     } catch (err) {
