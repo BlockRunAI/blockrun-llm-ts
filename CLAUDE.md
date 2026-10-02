@@ -24,6 +24,7 @@ src/
 ├── index.ts             # Package exports
 ├── client.ts            # LLMClient (EVM: Base, Arc — the 402's network picks the chain)
 ├── solana-client.ts     # SolanaLLMClient
+├── solana-batch.ts      # Opt-in x402 batch-settlement (metered) payer for SolanaLLMClient
 ├── router-adapter.ts    # Bundled Router Core V3 adapter (smartChat / blockrun/* aliases)
 ├── api-key.ts           # Account API-key auth: resolveApiKeyAuth / ApiKeyAuth transport + poll
 ├── blockrun.ts          # BlockrunClient — universal x402 primitive (get/post/poll/stream)
@@ -95,6 +96,26 @@ src/
 - `setupAgentClient()` picks account mode when a key is configured, otherwise honours a saved
   `~/.blockrun/payment-chain` preference, keeps Base-only installs on Base, and defaults new
   wallets to Solana. `setupAgentWallet()` / `setupAgentSolanaWallet()` stay chain-specific.
+
+## Solana batch-settlement (`src/solana-batch.ts`)
+
+- Opt-in via `SolanaLLMClient({ batch: { operators, maxDeposit } })`; drives the official
+  `@x402/svm` 2.28 `BatchSvmScheme` (server-signed/operator mode) through `@x402/core`'s
+  `x402HTTPClient`. Peers are optional and lazily imported; tsup keeps them external.
+- **Trust is the caller's:** no default operator key ships in the SDK. `maxDeposit` bounds
+  what the operator could claim.
+- **Fails open to `exact`, never double-pays:** fallback only on creation failure, a 402, or a
+  `batch_*` 400/403/409/503 (the gateway charged nothing). Any other non-2xx after a batch
+  payment is raised as `APIError`.
+- State is per WALLET, not per client: a module registry shares one scheme + in-flight flag
+  across clients of a wallet, and a pid lockfile gives one process the channel file. Two
+  owners = two channels or top-ups past `maxDeposit`. One batch request in flight per wallet;
+  concurrent calls pay `exact`, they do not queue.
+- A deposit/top-up without a clean receipt, and a successful close, `forget()` the channel
+  (memory + file) so the next call re-reads it on-chain — never restore a deposit figure.
+- Only `requestWithPayment` (non-stream chat) uses it. Streams have no `PAYMENT-RESPONSE` to
+  reconcile, and media jobs are charged on a later poll — keep both on `exact` unless the
+  gateway contract changes.
 
 ## Supported chains
 

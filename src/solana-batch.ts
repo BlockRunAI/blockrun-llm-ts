@@ -1,0 +1,545 @@
+/**
+ * Solana x402 batch-settlement (metered billing) for {@link SolanaLLMClient}.
+ *
+ * `exact` signs one SPL transfer per call, priced at the call's CEILING (the
+ * quote for `max_tokens`), and that transfer settles on-chain before the model
+ * answers. `batch-settlement` opens a deposit-backed payment channel once, then
+ * each call carries only a signed authorization for a ceiling. The gateway
+ * serves the call, meters what it actually cost, and signs a voucher for that
+ * amount — never more than the ceiling. Vouchers are redeemed on-chain in
+ * batches by the gateway's worker. You pay for the tokens you used, and there
+ * is one on-chain transaction for many calls instead of one per call.
+ *
+ * The protocol is the official `@x402/svm` `batch-settlement` client in
+ * server-signed ("operator") mode. In that mode the channel's on-chain voucher
+ * signer is BlockRun's operator key, which could claim up to the whole unspent
+ * deposit. So this is OPT-IN, twice over:
+ *   - the caller names the operator keys it trusts (`operators`). A 402 that
+ *     asks for any other operator is never paid in batch mode;
+ *   - the caller caps the total escrow locked in the channel (`maxDeposit`).
+ *     That cap is the most a dishonest operator could ever take.
+ *
+ * Everything here fails OPEN to `exact`: a missing batch accept, an untrusted
+ * operator, a deposit over the cap, a channel that is busy with another
+ * request, or a gateway refusal that charged nothing all pay the same request
+ * with the `exact` scheme instead. Batch problems can make a call cost what it
+ * costs today. They cannot make it fail.
+ *
+ * Only non-streaming chat completions use it. Streamed responses commit their
+ * charge after the headers are sent, so they carry no `PAYMENT-RESPONSE`
+ * receipt for the client to reconcile against, and media jobs are charged on a
+ * later poll. Both keep paying with `exact`.
+ */
+import * as fs from "fs";
+import * as path from "path";
+import { paths as corePaths } from "@blockrun/core";
+import type { PaymentRequired } from "./types";
+
+export const BATCH_SCHEME = "batch-settlement";
+
+/** Opt-in configuration for Solana batch-settlement. */
+export interface SolanaBatchOptions {
+  /**
+   * Base58 operator public keys you trust to sign vouchers against your
+   * channel. A batch accept naming any other operator is ignored, and the
+   * call pays with `exact`. Required: there is no built-in default key.
+   */
+  operators: string[];
+  /**
+   * Total escrow, in USD, this client will lock in one channel (the first
+   * deposit plus every top-up). This is the most an operator could take
+   * without another signature from you. Accepts `"$5"`, `"5"` or `5`.
+   * Default `"$1"` (the `@x402/svm` default).
+   */
+  maxDeposit?: string | number;
+  /**
+   * Where open-channel state is persisted between processes.
+   * - default: `~/.blockrun/solana-batch/<wallet address>.json` (mode 0600)
+   * - a path: that file
+   * - `false`: in memory only. On restart the client finds its channel again
+   *   by scanning the chain for it.
+   */
+  channelStore?: string | false;
+}
+
+/** The outcome of one batch attempt. */
+export type BatchAttempt =
+  | { kind: "paid"; response: Response; chargedUsd: number }
+  | { kind: "fallback"; reason: string };
+
+/** Structural slice of `@x402/core`'s x402HTTPClient that this module uses. */
+interface HttpPaymentClient {
+  createPaymentPayload(paymentRequired: PaymentRequired): Promise<PaymentPayloadLike>;
+  encodePaymentSignatureHeader(payload: PaymentPayloadLike): Record<string, string>;
+  processPaymentResult(
+    payload: PaymentPayloadLike,
+    getHeader: (name: string) => string | null | undefined,
+    status: number,
+  ): Promise<{ recovered: boolean; settleResponse?: { success?: boolean; amount?: string } }>;
+}
+interface PaymentPayloadLike {
+  x402Version: number;
+  accepted?: { amount?: string };
+  payload?: { type?: string };
+}
+interface StoredRecord {
+  channelConfig: { voucherSigner?: string };
+  hasConfirmedState?: boolean;
+  pending?: unknown;
+  [key: string]: unknown;
+}
+interface ChannelStorage {
+  get(key: string): Promise<StoredRecord | undefined>;
+  set(key: string, record: StoredRecord): Promise<void>;
+  delete(key: string): Promise<void>;
+}
+interface BuiltClient {
+  http: HttpPaymentClient;
+  refund: (url: string) => Promise<unknown>;
+}
+
+const INSTALL_HINT = "npm install @x402/core@~2.28.0 @x402/svm@~2.28.0 @solana/kit";
+
+async function load<T>(pkg: string, importer: () => Promise<T>): Promise<T> {
+  try {
+    return await importer();
+  } catch (err) {
+    throw new Error(
+      `@blockrun/llm: Solana batch-settlement requires the optional peer dependency "${pkg}", ` +
+        `which is not installed.\n\n  ${INSTALL_HINT}\n\n` +
+        `Original error: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
+}
+
+/**
+ * JSON-file channel storage: one file per wallet, written atomically, 0600.
+ *
+ * Records can hold signed, not-yet-acknowledged payment payloads, so the file
+ * is private to the user like the wallet key beside it.
+ */
+export class FileChannelStorage implements ChannelStorage {
+  constructor(private readonly file: string) {}
+
+  private read(): Record<string, StoredRecord> {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(this.file, "utf8")) as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, StoredRecord>)
+        : {};
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
+      throw err;
+    }
+  }
+
+  private write(all: Record<string, StoredRecord>): void {
+    fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
+    const tmp = `${this.file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(all, null, 2), { mode: 0o600 });
+    fs.renameSync(tmp, this.file);
+  }
+
+  async get(key: string): Promise<StoredRecord | undefined> {
+    return this.read()[key];
+  }
+
+  async set(key: string, record: StoredRecord): Promise<void> {
+    const all = this.read();
+    all[key] = record;
+    this.write(all);
+  }
+
+  async delete(key: string): Promise<void> {
+    const all = this.read();
+    if (!(key in all)) return;
+    delete all[key];
+    this.write(all);
+  }
+
+  /** Forget every channel in this file. */
+  clear(): void {
+    try {
+      fs.unlinkSync(this.file);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+  }
+}
+
+/** Whether a process with this pid is running. */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+const heldLocks = new Set<string>();
+let exitHookInstalled = false;
+
+/**
+ * Take exclusive ownership of a channel file for this process.
+ *
+ * Two owners of one channel file each keep their own view of the deposit, so
+ * each tops up from a stale balance and together they can lock more than
+ * `maxDeposit`, or open two channels. One process owns the file; the lock
+ * holds its pid, and a lock whose process is gone is taken over.
+ *
+ * @returns undefined when the lock is ours, or the live owner's pid.
+ */
+export function lockChannelFile(file: string): number | undefined {
+  if (heldLocks.has(file)) return undefined;
+  const lock = `${file}.lock`;
+  fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      fs.writeFileSync(lock, String(process.pid), { flag: "wx", mode: 0o600 });
+      heldLocks.add(file);
+      if (!exitHookInstalled) {
+        exitHookInstalled = true;
+        process.once("exit", () => {
+          for (const held of heldLocks) {
+            try { fs.unlinkSync(`${held}.lock`); } catch { /* already gone */ }
+          }
+        });
+      }
+      return undefined;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+    const owner = Number(fs.readFileSync(lock, "utf8").trim());
+    if (Number.isInteger(owner) && owner > 0 && owner !== process.pid && processAlive(owner)) return owner;
+    // Stale (its process is gone) or left by an earlier run of this pid.
+    try { fs.unlinkSync(lock); } catch { /* raced with another taker */ }
+  }
+  return -1;
+}
+
+/** True when a stored pending entry was a channel open or top-up. */
+function pendingDeposit(pending: unknown): boolean {
+  const entries = Array.isArray(pending) ? pending : [pending];
+  return entries.some(
+    (entry) => (entry as { payment?: { payload?: { type?: string } } })?.payment?.payload?.type === "deposit",
+  );
+}
+
+/**
+ * Wrap storage so a request a dead process never heard back about cannot
+ * wedge the channel.
+ *
+ * In server-signed mode the scheme refuses a new request while one is pending,
+ * and a pending entry is only cleared by that request's response. A process
+ * that died mid-request leaves one on disk, and every later process would then
+ * refuse batch forever. The channel file is owned by one live process at a
+ * time ({@link lockChannelFile}), and that process tracks its own requests in
+ * memory, so a pending entry read from disk belongs to a process that is gone.
+ *
+ * - A pending authorization is dropped and the confirmed state kept. That can
+ *   only under-count what was charged, which the next voucher corrects.
+ * - A pending DEPOSIT (open or top-up) drops the whole record. The gateway
+ *   funds a deposit before it serves anything, so the on-chain deposit may be
+ *   larger than the confirmed state says. Keeping the stale figure would let
+ *   the next top-up lock more than `maxDeposit`. Without a record, the scheme
+ *   reads the real channel from the chain.
+ */
+export function dropOrphanedPending(storage: ChannelStorage): ChannelStorage {
+  return {
+    get: async (key) => {
+      const record = await storage.get(key);
+      if (!record?.pending || record.channelConfig?.voucherSigner !== "server") return record;
+      if (!record.hasConfirmedState || pendingDeposit(record.pending)) {
+        await storage.delete(key);
+        return undefined;
+      }
+      const { pending: _pending, hasConfirmedState: _confirmed, ...confirmed } = record;
+      await storage.set(key, confirmed as StoredRecord);
+      return confirmed as StoredRecord;
+    },
+    set: (key, record) => storage.set(key, record),
+    delete: (key) => storage.delete(key),
+  };
+}
+
+/** True when a 402 offers a batch-settlement accept. */
+export function offersBatch(paymentRequired: PaymentRequired): boolean {
+  return (paymentRequired.accepts ?? []).some((accept) => accept.scheme === BATCH_SCHEME);
+}
+
+/** Atomic USDC string to USD. */
+function atomicToUsd(amount: string | undefined): number | undefined {
+  return amount !== undefined && /^\d+$/.test(amount) ? Number(amount) / 1e6 : undefined;
+}
+
+/**
+ * A gateway answer to a batch payment that charged nothing and asks for
+ * `exact` instead: any 402, a `batch_*` refusal (payer not admitted,
+ * admission paused, lane unavailable, operator mode required), or the
+ * verifier being unreachable (`PAYMENT_VERIFICATION_UNAVAILABLE`).
+ */
+async function isBatchRefusal(response: Response): Promise<string | undefined> {
+  if (response.status === 402) return "payment_required";
+  if (![400, 403, 409, 503].includes(response.status)) return undefined;
+  let body: unknown;
+  try {
+    body = await response.clone().json();
+  } catch {
+    return undefined;
+  }
+  const { error, code } = (body ?? {}) as { error?: unknown; code?: unknown };
+  if (code === "PAYMENT_VERIFICATION_UNAVAILABLE") return code;
+  return typeof error === "string" && error.startsWith("batch_") ? error : undefined;
+}
+
+export interface SolanaBatchPayerInit {
+  options: SolanaBatchOptions;
+  secretKey: () => Promise<Uint8Array>;
+  address: () => Promise<string>;
+  rpcUrl: string;
+}
+
+/**
+ * Batch state shared by every client of one wallet in this process.
+ *
+ * Each SolanaLLMClient builds its own payer, and a client per request is a
+ * common pattern. If each kept its own scheme, two of them could open two
+ * channels for one wallet, or top up one channel from two stale balances and
+ * lock more than `maxDeposit` between them. So the scheme, the in-flight flag
+ * and the channel file belong to the wallet, not to the client.
+ */
+interface WalletBatch {
+  config: string;
+  client?: Promise<BuiltClient>;
+  busy: boolean;
+  warned: Set<string>;
+}
+const wallets = new Map<string, WalletBatch>();
+
+/**
+ * One wallet's batch-settlement payer. Owned by a SolanaLLMClient.
+ *
+ * At most one batch request is in flight per wallet: the server-signed scheme
+ * allows a single pending authorization per channel. Concurrent calls do not
+ * queue behind it, they pay with `exact`, so batch never makes a parallel
+ * workload slower than it is today.
+ */
+export class SolanaBatchPayer {
+  private state?: Promise<WalletBatch | string>;
+
+  constructor(private readonly init: SolanaBatchPayerInit) {
+    const { operators } = init.options;
+    if (!Array.isArray(operators) || operators.length === 0 || operators.some((o) => typeof o !== "string" || !o)) {
+      throw new Error("batch.operators must list at least one base58 operator public key");
+    }
+  }
+
+  private async storeFile(): Promise<string | undefined> {
+    const { channelStore } = this.init.options;
+    if (channelStore === false) return undefined;
+    return path.resolve(channelStore ?? path.join(corePaths().dir, "solana-batch", `${await this.init.address()}.json`));
+  }
+
+  /**
+   * This wallet's shared batch state, or why this client cannot use batch:
+   * another client in this process holds the wallet with a different trust
+   * configuration, or another live process owns its channel file.
+   */
+  private wallet(): Promise<WalletBatch | string> {
+    this.state ??= (async () => {
+      const address = await this.init.address();
+      const file = await this.storeFile();
+      const { operators, maxDeposit } = this.init.options;
+      const config = JSON.stringify([[...operators].sort(), String(maxDeposit ?? ""), file ?? null, this.init.rpcUrl]);
+      const existing = wallets.get(address);
+      if (existing) {
+        return existing.config === config
+          ? existing
+          : "another client in this process uses this wallet with different batch options";
+      }
+      if (file) {
+        const owner = lockChannelFile(file);
+        if (owner !== undefined) return `channel store ${file} is in use by process ${owner}`;
+      }
+      const created: WalletBatch = { config, busy: false, warned: new Set() };
+      wallets.set(address, created);
+      return created;
+    })();
+    return this.state;
+  }
+
+  private build(wallet: WalletBatch): Promise<BuiltClient> {
+    wallet.client ??= (async () => {
+      const [core, svm, kit] = await Promise.all([
+        load("@x402/core", () => import("@x402/core/client")),
+        load("@x402/svm", () => import("@x402/svm/batch-settlement/client")),
+        load("@solana/kit", () => import("@solana/kit")),
+      ]);
+      const signer = await kit.createKeyPairSignerFromBytes(await this.init.secretKey());
+      const file = await this.storeFile();
+      const storage = file ? dropOrphanedPending(new FileChannelStorage(file)) : undefined;
+      const scheme = new svm.BatchSvmScheme(signer, {
+        rpcUrl: this.init.rpcUrl,
+        serverSignedChannelsPolicy: {
+          allowedOperators: this.init.options.operators,
+          maxDeposit: this.init.options.maxDeposit ?? svm.DEFAULT_SERVER_SIGNED_MAX_DEPOSIT,
+        },
+        ...(storage ? { channelStorage: storage as never } : {}),
+      });
+      // Only the batch scheme is registered: exact stays on this SDK's own
+      // signer, so a 402 without a usable batch accept throws here and the
+      // caller pays it exactly as before. The per-call ceiling is bounded by
+      // the gateway; the escrow is bounded by maxDeposit, not by core's $1
+      // per-payment default.
+      const client = new core.x402Client()
+        .register("solana:*", scheme)
+        .registerPolicy(scheme.paymentPolicy);
+      client.setSpendControls({ maxAmountPerPayment: false });
+      return {
+        http: new core.x402HTTPClient(client) as unknown as HttpPaymentClient,
+        refund: (url: string) => scheme.refund(url),
+      };
+    })();
+    wallet.client.catch(() => { wallet.client = undefined; });
+    return wallet.client;
+  }
+
+  /**
+   * Drop everything this wallet knows about its channel, on disk and in
+   * memory. The next call rebuilds the scheme, which reads the channel's real
+   * state (deposit, open or closed) from the chain.
+   */
+  private async forget(wallet: WalletBatch): Promise<void> {
+    wallet.client = undefined;
+    const file = await this.storeFile();
+    if (file) new FileChannelStorage(file).clear();
+  }
+
+  private warn(wallet: WalletBatch | undefined, reason: string): void {
+    if (wallet?.warned.has(reason)) return;
+    wallet?.warned.add(reason);
+    console.error(`[@blockrun/llm] batch-settlement unavailable (${reason}); paying with exact`);
+  }
+
+  /**
+   * Pay one 402 with batch-settlement, or say why the caller should use exact.
+   *
+   * `send` replays the original request with the payment headers. The
+   * returned response is 2xx; any other answer either becomes a fallback (the
+   * gateway charged nothing) or is returned to the caller's own error path.
+   */
+  async pay(
+    paymentRequired: PaymentRequired,
+    send: (headers: Record<string, string>) => Promise<Response>,
+  ): Promise<BatchAttempt | { kind: "failed"; response: Response }> {
+    if (!offersBatch(paymentRequired)) return { kind: "fallback", reason: "not_offered" };
+    const wallet = await this.wallet();
+    if (typeof wallet === "string") {
+      this.warn(undefined, wallet);
+      return { kind: "fallback", reason: wallet };
+    }
+    if (wallet.busy) return { kind: "fallback", reason: "channel_busy" };
+    wallet.busy = true;
+    try {
+      let http: HttpPaymentClient;
+      let payload: PaymentPayloadLike;
+      try {
+        http = (await this.build(wallet)).http;
+        payload = await http.createPaymentPayload(paymentRequired);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        this.warn(wallet, reason);
+        return { kind: "fallback", reason };
+      }
+      const deposit = payload.payload?.type === "deposit";
+
+      let response: Response;
+      try {
+        response = await send(http.encodePaymentSignatureHeader(payload));
+      } catch (err) {
+        // No answer. A deposit is funded before anything is served, so it may
+        // have landed: re-read the channel from the chain rather than restore
+        // a deposit figure that could be too low. Otherwise release the
+        // pending slot; if the gateway did charge, its next voucher carries it.
+        if (deposit) await this.forget(wallet);
+        else await this.settle(http, payload, () => null, 0);
+        throw err;
+      }
+
+      const getHeader = (name: string) => response.headers.get(name);
+      const settled = await this.settle(http, payload, getHeader, response.status);
+      // The same holds for a deposit the gateway answered without a clean
+      // receipt: only a confirmed receipt proves what the channel now holds.
+      if (deposit && !(response.ok && settled?.success === true)) await this.forget(wallet);
+      if (response.ok) {
+        const charged = atomicToUsd(settled?.amount) ?? atomicToUsd(payload.accepted?.amount) ?? 0;
+        return { kind: "paid", response, chargedUsd: charged };
+      }
+      const refusal = await isBatchRefusal(response);
+      if (refusal) {
+        this.warn(wallet, refusal);
+        return { kind: "fallback", reason: refusal };
+      }
+      return { kind: "failed", response };
+    } finally {
+      wallet.busy = false;
+    }
+  }
+
+  /**
+   * Hand the gateway's answer to the scheme, which verifies the operator's
+   * voucher and advances (or rolls back) the channel's local state.
+   *
+   * A malformed receipt must not lose a response the caller has been served,
+   * so a scheme error is logged rather than thrown.
+   */
+  private async settle(
+    http: HttpPaymentClient,
+    payload: PaymentPayloadLike,
+    getHeader: (name: string) => string | null | undefined,
+    status: number,
+  ): Promise<{ success?: boolean; amount?: string } | undefined> {
+    try {
+      return (await http.processPaymentResult(payload, getHeader, status)).settleResponse;
+    } catch (err) {
+      console.error(
+        `[@blockrun/llm] batch-settlement receipt not reconciled: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return undefined;
+    }
+  }
+
+  /**
+   * Close the channel and return its unused escrow to the wallet.
+   *
+   * The scheme keeps a closed channel in its records, and would go on paying
+   * into it, so a successful close forgets the channel. The next batch call
+   * finds no open channel on-chain and opens a new one.
+   *
+   * @param url - any batch-enabled route on the gateway the channel was opened with.
+   */
+  async close(url: string): Promise<unknown> {
+    const wallet = await this.wallet();
+    if (typeof wallet === "string") throw new Error(`batch-settlement unavailable: ${wallet}`);
+    if (wallet.busy) throw new Error("batch-settlement channel has a request in flight; close it when the call returns");
+    wallet.busy = true;
+    try {
+      const result = await (await this.build(wallet)).refund(url);
+      await this.forget(wallet);
+      return result;
+    } finally {
+      wallet.busy = false;
+    }
+  }
+}
+
+/** Tests only: forget the per-process wallet registry and held locks. */
+export function __resetBatchWalletsForTests(): void {
+  wallets.clear();
+  for (const file of heldLocks) {
+    try { fs.unlinkSync(`${file}.lock`); } catch { /* already gone */ }
+  }
+  heldLocks.clear();
+}

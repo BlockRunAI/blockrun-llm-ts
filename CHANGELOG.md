@@ -2,6 +2,52 @@
 
 ## [Unreleased]
 
+### Added — Solana x402 batch-settlement (metered billing), opt-in
+
+`SolanaLLMClient` takes a `batch` option. It pays chat completions through a
+deposit-backed payment channel, using the official `@x402/svm` 2.28
+`batch-settlement` client in server-signed (operator) mode, which
+sol.blockrun.ai now serves on its LLM routes. Each call is charged what it
+actually cost, at most its quoted ceiling, instead of the ceiling as one SPL
+transfer.
+
+- `batch.operators` (required) lists the operator public keys you trust. The
+  SDK ships no default key. `batch.maxDeposit` (default `"$1"`) caps the total
+  escrow, and with it the most an operator could claim.
+- Fails open to `exact`, which charges only once:
+  - the 402 has no batch accept, or names an untrusted operator;
+  - the deposit would exceed the cap;
+  - the gateway answers with a `batch_*` refusal, a 402, or
+    `PAYMENT_VERIFICATION_UNAVAILABLE`, none of which charges;
+  - a second call for the wallet arrives while one is in flight.
+
+  A model error after a batch payment is raised, not re-paid.
+- One channel per wallet. Clients of the same wallet in a process share it, and
+  a pid lock gives one live process ownership of the channel file. Otherwise
+  two owners could open two channels, or top up from stale balances past
+  `maxDeposit`.
+- Scope: `chat`, `chatCompletion`, `smartChat`, `smartChatCompletion`.
+  `stream()` and media jobs stay on `exact`. Streamed responses carry no
+  `PAYMENT-RESPONSE` receipt to reconcile the channel against.
+- Channel state persists to `~/.blockrun/solana-batch/<wallet>.json` (0600).
+  `channelStore: false` keeps it in memory and rediscovers the channel
+  on-chain. A pending request left by a dead process is dropped on load, so
+  it cannot wedge the channel.
+- If a deposit (open or top-up) gets no clean receipt, the SDK forgets the
+  saved channel and re-reads it from the chain. That deposit may have landed,
+  and topping up from the stale figure could exceed `maxDeposit`.
+- `closeBatchChannel()` closes the channel, refunds the unused escrow, and
+  forgets the channel, so later calls open a new one instead of paying into
+  the closed one.
+- New optional peers: `@x402/core` and `@x402/svm` (~2.28.0), `@solana/kit`.
+  They are loaded only when `batch` is set.
+
+### Changed
+
+- The Solana `exact` signer now skips `batch-settlement` accepts explicitly,
+  so it never signs a transfer against a channel accept, whatever the 402's
+  order.
+
 ## [3.18.0] - 2026-09-30
 
 ### Fixed — Solana settlement timing is per route, not per chain

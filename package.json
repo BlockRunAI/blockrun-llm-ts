@@ -52,15 +52,18 @@
     "url": "https://github.com/BlockRunAI/blockrun-llm-ts/issues"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.123.0",
     "bs58": "^6.0.0",
-    "viem": "^2.56.3",
-    "@anthropic-ai/sdk": "^0.123.0"
+    "viem": "^2.56.3"
   },
   "devDependencies": {
     "@blockrun/core": "^0.1.0",
     "@blockrun/router-core": "https://codeload.github.com/BlockRunAI/router-core/tar.gz/814fd3b6bc7880a84bbe030bd08c98e8670031e7",
     "@eslint/js": "^10.0.1",
+    "@solana/kit": "^5.5.1",
     "@types/node": "^26.4.1",
+    "@x402/core": "2.28.0",
+    "@x402/svm": "2.28.0",
     "eslint": "^10.9.1",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
@@ -81,14 +84,26 @@
   },
   "packageManager": "pnpm@9.15.4",
   "peerDependencies": {
+    "@solana/kit": ">=5.1.0",
     "@solana/spl-token": "^0.4.15",
-    "@solana/web3.js": "^1.98.4"
+    "@solana/web3.js": "^1.98.4",
+    "@x402/core": "~2.28.0",
+    "@x402/svm": "~2.28.0"
   },
   "peerDependenciesMeta": {
+    "@solana/kit": {
+      "optional": true
+    },
     "@solana/spl-token": {
       "optional": true
     },
     "@solana/web3.js": {
+      "optional": true
+    },
+    "@x402/core": {
+      "optional": true
+    },
+    "@x402/svm": {
       "optional": true
     }
   }
