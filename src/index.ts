@@ -210,7 +210,16 @@ export {
 
 // Solana client
 export { SolanaLLMClient, solanaClient, type SolanaLLMClientOptions } from "./solana-client";
-export { BLOCKRUN_SOL_OPERATOR, type SolanaBatchOptions } from "./solana-batch";
+export {
+  BLOCKRUN_SOL_OPERATOR,
+  DEFAULT_BATCH_RATE_LIMIT,
+  BatchPaymentUnresolvedError,
+  type BatchUnresolvedReason,
+  type BatchPayloadKind,
+  type SolanaBatchOptions,
+  type SolanaBatchEvent,
+  type SolanaBatchStats,
+} from "./solana-batch";
 
 // Solana wallet utilities
 export {

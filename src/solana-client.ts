@@ -47,7 +47,7 @@ import {
   SOLANA_NETWORK,
 } from "./x402";
 import { solanaKeyToBytes, solanaPublicKey } from "./solana-wallet";
-import { BATCH_SCHEME, SolanaBatchPayer, type SolanaBatchOptions } from "./solana-batch";
+import { BATCH_SCHEME, SolanaBatchPayer, type Rechallenge, type SolanaBatchOptions, type SolanaBatchStats } from "./solana-batch";
 import type { PaymentRequired } from "./types";
 import {
   sanitizeErrorResponse,
@@ -315,6 +315,17 @@ export class SolanaLLMClient {
   async closeBatchChannel(): Promise<unknown> {
     if (!this.batchPayer) throw new Error("closeBatchChannel() requires the `batch` option in wallet mode");
     return this.batchPayer.close(`${this.apiUrl}/v1/chat/completions`);
+  }
+
+  /**
+   * This client's batch-settlement counters: calls that fell back to `exact`
+   * (in total and by reason), 429 backoffs, batch retries, and recoveries.
+   * Every one of those is also logged to stderr and passed to `batch.onEvent`.
+   * Only meaningful with the `batch` option.
+   */
+  getBatchStats(): SolanaBatchStats {
+    if (!this.batchPayer) throw new Error("getBatchStats() requires the `batch` option in wallet mode");
+    return this.batchPayer.stats();
   }
 
   /** Get Solana wallet address (public key in base58). */
@@ -967,28 +978,48 @@ export class SolanaLLMClient {
           } catch (error) {
             throw withDisposition(error, "unpaid");
           }
+          let exactRequired = paymentRequired;
           if (this.batchPayer && staleRetries === 0) {
-            const batch = await this.batchPayer.pay(paymentRequired, (paymentHeaders) =>
-              this.fetchWithTimeout(url, {
-                method: "POST",
-                headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT, ...paymentHeaders },
-                body: JSON.stringify(body),
-              })
+            const batch = await this.batchPayer.pay(
+              paymentRequired,
+              (paymentHeaders) =>
+                this.fetchWithTimeout(url, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT, ...paymentHeaders },
+                  body: JSON.stringify(body),
+                }),
+              // A fresh, unpaid challenge after a 429 wait: the request itself,
+              // sent again without a payment. Every error it throws is unpaid.
+              async (): Promise<Rechallenge> => {
+                const challenge = await this.sendUnpaid(url, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
+                  body: JSON.stringify(body),
+                });
+                if (challenge.status === 402) {
+                  try {
+                    return { kind: "challenge", paymentRequired: await this.readPaymentRequired(challenge) };
+                  } catch (error) {
+                    throw withDisposition(error, "unpaid");
+                  }
+                }
+                if (challenge.ok) return { kind: "served", response: challenge };
+                throw await unpaidApiError(challenge);
+              }
             );
+            // Paid; served by the fresh unpaid challenge; failed before any
+            // payment (an "unpaid" error); or proven not charged (fallback).
+            // A batch payment in doubt throws BatchPaymentUnresolvedError
+            // ("paid-or-in-doubt").
             if (batch.kind === "paid") {
               this.recordSettlement(batch.chargedUsd);
               return await this.readPaidJson<ChatResponse>(batch.response);
             }
-            if (batch.kind === "failed") {
-              let errorBody: unknown;
-              try { errorBody = await batch.response.json(); } catch { errorBody = { error: "Request failed" }; }
-              throw withDisposition(
-                new APIError(`API error after payment: ${batch.response.status}`, batch.response.status, sanitizeErrorResponse(errorBody)),
-                "paid-or-in-doubt"
-              );
-            }
+            if (batch.kind === "served") return await this.readUnpaidJson<ChatResponse>(batch.response);
+            if (batch.kind === "failed") throw batch.error;
+            exactRequired = batch.paymentRequired ?? paymentRequired;
           }
-          return await this.handlePaymentAndRetry(url, body, paymentRequired, staleRetries > 0);
+          return await this.handlePaymentAndRetry(url, body, exactRequired, staleRetries > 0);
         } catch (error) {
           if (
             !(error instanceof SafeStaleBlockhashError) ||
