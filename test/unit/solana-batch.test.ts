@@ -1020,6 +1020,34 @@ describe("SolanaLLMClient batch-settlement", () => {
       expect(BigInt(storedRecord().deposit)).toBe(confirmed);
     });
 
+    it("pays exact and re-reads the channel when the chain holds more than the record before a top-up", async () => {
+      const c = kept({ maxDeposit: "$1" });
+      const exact = stubExact(c);
+      const channelId = await openChannel(c);
+      const payer = await c.getWalletAddress();
+      // A deposit the record never heard about landed (say, before a crash).
+      chain.set(channelId, channelAccount({ payer, operator: operator.address, deposit: 60000n }));
+      gateway.push(
+        () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 }),
+        () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          // Sized from the chain's 60000, which already covers the call: no top-up.
+          expect(payment.payload.type).toBe("authorization");
+          return servedWithVoucher(operator, channelId, 31000n, 30000n);
+        }
+      );
+
+      await c.chat("openai/gpt-4o-mini", "gm");
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(events.at(-1)).toMatchObject({ type: "fallback", reason: "channel_resync_pending" });
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(events.at(-1)).toMatchObject({ type: "resync", reason: "deposit_unrecorded" });
+      expect(storedRecord()).toMatchObject({ channelId, deposit: "60000" });
+    });
+
     it.each([
       ["owned by another program", (acct: ReturnType<typeof channelAccount>) => ({ ...acct, owner: TOKEN_PROGRAM })],
       ["too short for a channel", (acct: ReturnType<typeof channelAccount>) => ({ ...acct, data: [Buffer.alloc(40).toString("base64"), "base64"] })],
@@ -1185,6 +1213,83 @@ describe("SolanaLLMClient batch-settlement", () => {
       expect(exact).not.toHaveBeenCalled();
       expect(events.map((e) => [e.type, e.reason])).toEqual([["unresolved", reason], ["resync", "deposit_failed"]]);
       expect(storedRecord()).toMatchObject({ channelId, deposit: "25000", chargedCumulativeAmount: "2000" });
+    });
+
+    it("drops a stored channel the chain shows closed, signs no top-up into it, and opens afresh", async () => {
+      const c = kept({ maxDeposit: "$1" });
+      const exact = stubExact(c);
+      const channelId = await openChannel(c);
+      // The channel was closed (say, a payer-forced close from another device).
+      chain.set(channelId, channelAccount({ payer: await c.getWalletAddress(), operator: operator.address, deposit: 25000n, status: 1, closureStartedAt: 1_759_000_000n }));
+      let journaled: Record<string, any> = {};
+      gateway.push(
+        // A ceiling the stored record cannot cover: it would be a top-up.
+        () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("deposit");
+          [journaled] = Object.values(JSON.parse(fs.readFileSync(path.join(tmp, "channels.json.deposit-intents"), "utf8")).intents) as Array<Record<string, any>>;
+          return servedWithVoucher(operator, channelIdOf(payment), 30000n, 30000n);
+        }
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      // A fresh open, never a top-up of the closed channel.
+      expect(journaled).toMatchObject({ kind: "open", cumulative: "0" });
+      expect(journaled.knownDeposit).toBeUndefined();
+      expect(exact).not.toHaveBeenCalled();
+      expect(events).toEqual([
+        expect.objectContaining({ type: "resync", reason: "channel_unusable", detail: expect.stringContaining("closing or closed; record dropped") }),
+      ]);
+      expect(storedRecord()).toMatchObject({ chargedCumulativeAmount: "30000", deposit: journaled.expectDeposit });
+    });
+
+    it.each([
+      ["owned by another program", (acct: ReturnType<typeof channelAccount>) => ({ ...acct, owner: TOKEN_PROGRAM })],
+      ["too short for a channel", (acct: ReturnType<typeof channelAccount>) => ({ ...acct, data: [Buffer.alloc(40).toString("base64"), "base64"] })],
+      ["in an unsupported encoding", (acct: ReturnType<typeof channelAccount>) => ({ ...acct, data: ["3Bxs4h24hBtQy9rw", "base58"] })],
+    ])("signs no top-up when the stored channel's account is %s, and keeps its record", async (_label, corrupt) => {
+      const c = kept({ maxDeposit: "$1" });
+      const exact = stubExact(c);
+      const channelId = await openChannel(c);
+      const saved = fs.readFileSync(path.join(tmp, "channels.json"), "utf8");
+      const account = channelAccount({ payer: await c.getWalletAddress(), operator: operator.address, deposit: 25000n });
+      chain.set(channelId, corrupt(account) as ReturnType<typeof channelAccount>);
+      gateway.push(
+        // A ceiling the stored record cannot cover: it would be a top-up.
+        () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect((gatewayCalls.at(-1)?.init?.headers as Record<string, string>)["PAYMENT-SIGNATURE"]).toBe("exact-payload");
+      expect(events).toEqual([
+        expect.objectContaining({ type: "fallback", reason: "channel_unreadable", detail: expect.stringContaining(channelId) }),
+      ]);
+      expect(fs.readFileSync(path.join(tmp, "channels.json"), "utf8")).toBe(saved);
+    });
+
+    it("signs no top-up into a stored channel the chain shows is another payer's, and keeps its record", async () => {
+      const c = kept({ maxDeposit: "$1" });
+      const exact = stubExact(c);
+      const channelId = await openChannel(c);
+      const saved = fs.readFileSync(path.join(tmp, "channels.json"), "utf8");
+      const stranger = (await generateKeyPairSigner()).address;
+      chain.set(channelId, channelAccount({ payer: stranger, operator: operator.address, deposit: 25000n }));
+      gateway.push(
+        () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect((gatewayCalls.at(-1)?.init?.headers as Record<string, string>)["PAYMENT-SIGNATURE"]).toBe("exact-payload");
+      expect(events).toEqual([expect.objectContaining({ type: "fallback", reason: "channel_unreadable" })]);
+      expect(fs.readFileSync(path.join(tmp, "channels.json"), "utf8")).toBe(saved);
     });
 
     it("re-verifies a pending top-up left by a dead process instead of deleting the channel", async () => {
@@ -1603,6 +1708,255 @@ describe("SolanaLLMClient batch-settlement", () => {
         authorizedSigner: operator.address,
         mint: USDC,
       });
+    });
+  });
+
+  describe("maxDeposit caps the escrow at stake", () => {
+    let events: SolanaBatchEvent[];
+
+    beforeEach(() => {
+      events = [];
+      vi.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    /**
+     * maxDeposit $0.05 = 50000. Open with 25000 (5 x the 5000 ceiling), then a
+     * 25000-ceiling call tops up by the 25000 room left: lifetime deposits are
+     * now 50000, the whole cap. Returns the channel id.
+     */
+    async function fillLifetimeCap(c: SolanaLLMClient): Promise<string> {
+      let channelId = "";
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.deposit.amount).toBe("25000");
+          channelId = channelIdOf(payment);
+          return servedWithVoucher(operator, channelId, 5000n, 5000n);
+        },
+        () => quote402([exactAccept("25000"), batchAccept(operator.address, "25000")]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("deposit");
+          expect(payment.payload.deposit.amount).toBe("25000");
+          return servedWithVoucher(operator, channelId, 30000n, 25000n);
+        }
+      );
+      await c.chat("openai/gpt-4o-mini", "gm");
+      await c.chat("openai/gpt-4o-mini", "gm");
+      const [record] = Object.values(JSON.parse(fs.readFileSync(path.join(tmp, "channels.json"), "utf8"))) as Array<Record<string, string>>;
+      expect(record).toMatchObject({ deposit: "50000", chargedCumulativeAmount: "30000" });
+      return channelId;
+    }
+
+    it("keeps topping up past lifetime deposits >= maxDeposit while (deposit - settled) + topUp <= maxDeposit", async () => {
+      const c = client({ maxDeposit: "$0.05", onEvent: (e) => events.push(e) });
+      const exact = stubExact(c);
+      const channelId = await fillLifetimeCap(c);
+      // The gateway has settled 30000 of the 50000 on-chain: 20000 is at stake.
+      chain.set(channelId, channelAccount({ payer: await c.getWalletAddress(), operator: operator.address, deposit: 50000n, settled: 30000n }));
+      gateway.push(
+        () => quote402([exactAccept("25000"), batchAccept(operator.address, "25000")]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("deposit");
+          expect(channelIdOf(payment)).toBe(channelId);
+          // The room is 50000 - (50000 - 30000) = 30000, all of it used (5 x 25000 is more).
+          expect(payment.payload.deposit.amount).toBe("30000");
+          return servedWithVoucher(operator, channelId, 55000n, 25000n);
+        }
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      expect(exact).not.toHaveBeenCalled();
+      expect(events).toEqual([]);
+      const [record] = Object.values(JSON.parse(fs.readFileSync(path.join(tmp, "channels.json"), "utf8"))) as Array<Record<string, string>>;
+      expect(record).toMatchObject({ deposit: "80000", chargedCumulativeAmount: "55000" });
+      // At stake after the top-up: 80000 - 30000 settled = 50000, exactly maxDeposit.
+      expect(BigInt(record.deposit) - 30000n).toBe(50000n);
+    });
+
+    it("widens the cap only with the settled amount of the exact channel being topped up", async () => {
+      const c = client({ maxDeposit: "$0.05", onEvent: (e) => events.push(e) });
+      const exact = stubExact(c);
+      const channelId = await fillLifetimeCap(c);
+      const file = path.join(tmp, "channels.json");
+      const stored = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, Record<string, unknown>>;
+      const [[key, record]] = Object.entries(stored);
+      // Another channel to the same receiver, operator and asset, through a
+      // different fee payer, with the same deposit, listed first in the store.
+      const otherFeePayer = (await generateKeyPairSigner()).address;
+      const otherChannel = (await generateKeyPairSigner()).address;
+      const otherKey = key.replace(`:${FEE_PAYER}:`, `:${otherFeePayer}:`);
+      expect(otherKey).not.toBe(key);
+      fs.writeFileSync(file, JSON.stringify({ [otherKey]: { ...record, channelId: otherChannel }, [key]: record }));
+      const payer = await c.getWalletAddress();
+      // The other channel is mostly settled; this one has settled nothing.
+      chain.set(otherChannel, channelAccount({ payer, operator: operator.address, deposit: 50000n, settled: 40000n }));
+      chain.set(channelId, channelAccount({ payer, operator: operator.address, deposit: 50000n, settled: 0n }));
+      gateway.push(
+        () => quote402([exactAccept("25000"), batchAccept(operator.address, "25000")]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+
+      await c.chat("openai/gpt-4o-mini", "gm");
+
+      // All 50000 of this channel is still at stake: no top-up fits, so exact.
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(events.map((e) => e.reason)).toEqual(["deposit_over_cap"]);
+      expect(rpcCalls.some((r) => r.method === "getAccountInfo" && r.params[0] === otherChannel)).toBe(false);
+    });
+
+    it("drops an orphaned pending authorization before sizing a top-up after a restart", async () => {
+      const first = client({ maxDeposit: "$0.05" });
+      stubExact(first);
+      const channelId = await fillLifetimeCap(first);
+      const payer = await first.getWalletAddress();
+      const file = path.join(tmp, "channels.json");
+      const [[key, record]] = Object.entries(JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, Record<string, unknown>>);
+      // The process died with an authorization in flight (not a deposit).
+      fs.writeFileSync(file, JSON.stringify({
+        [key]: {
+          ...record,
+          hasConfirmedState: true,
+          pending: [{ amount: "5000", chargedCumulativeAmount: "35000", deposit: "50000", operationKey: `${key}\u0000req`, payment: { x402Version: 2, payload: { type: "authorization" } } }],
+        },
+      }));
+      chain.set(channelId, channelAccount({ payer, operator: operator.address, deposit: 50000n, settled: 30000n }));
+      __resetBatchWalletsForTests();
+
+      const c = client({ maxDeposit: "$0.05", onEvent: (e) => events.push(e) });
+      const exact = stubExact(c);
+      gateway.push(
+        () => quote402([exactAccept("25000"), batchAccept(operator.address, "25000")]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("deposit");
+          expect(payment.payload.deposit.amount).toBe("30000");
+          return servedWithVoucher(operator, channelId, 55000n, 25000n);
+        }
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exact).not.toHaveBeenCalled();
+      expect(events).toEqual([]);
+    });
+
+    it("pays exact, depositing nothing, when @x402/svm's channel layout is not the one the SDK decodes", async () => {
+      const first = client({ maxDeposit: "$0.05" });
+      stubExact(first);
+      const channelId = await fillLifetimeCap(first);
+      const file = path.join(tmp, "channels.json");
+      const saved = fs.readFileSync(file, "utf8");
+      // 30000 settled: a decode the SDK trusted would allow a 30000 top-up (see above).
+      chain.set(channelId, channelAccount({ payer: await first.getWalletAddress(), operator: operator.address, deposit: 50000n, settled: 30000n }));
+      // A restart with a peer @x402/svm whose channel account layout moved.
+      svmLayout.shifted = true;
+      __resetBatchWalletsForTests();
+      rpcCalls.length = 0;
+
+      const c = client({ maxDeposit: "$0.05", onEvent: (e) => events.push(e) });
+      const exact = stubExact(c);
+      gateway.push(
+        () => quote402([exactAccept("25000"), batchAccept(operator.address, "25000")]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect((gatewayCalls.at(-1)?.init?.headers as Record<string, string>)["PAYMENT-SIGNATURE"]).toBe("exact-payload");
+      expect(events).toEqual([
+        expect.objectContaining({ type: "fallback", reason: "channel_unreadable", detail: expect.stringContaining("layout") }),
+      ]);
+      // The channel account was never decoded, and the record is kept as it was.
+      expect(rpcCalls.some((r) => r.method === "getAccountInfo" && r.params[0] === channelId)).toBe(false);
+      expect(fs.readFileSync(file, "utf8")).toBe(saved);
+    });
+
+    it("sizes the top-up to the room left, never past the cap", async () => {
+      const c = client({ maxDeposit: "$0.05" });
+      stubExact(c);
+      const channelId = await fillLifetimeCap(c);
+      chain.set(channelId, channelAccount({ payer: await c.getWalletAddress(), operator: operator.address, deposit: 50000n, settled: 10000n }));
+      gateway.push(
+        () => quote402([exactAccept("25000"), batchAccept(operator.address, "25000")]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          // 50000 - (50000 - 10000) = 10000: enough for the 5000 shortfall, and no more.
+          expect(payment.payload.deposit.amount).toBe("10000");
+          return servedWithVoucher(operator, channelId, 55000n, 25000n);
+        }
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+    });
+
+    it("pays exact when even the unsettled room cannot cover the top-up, or settled is unknown", async () => {
+      const c = client({ maxDeposit: "$0.05", onEvent: (e) => events.push(e) });
+      const exact = stubExact(c);
+      const channelId = await fillLifetimeCap(c);
+      // Nothing settled yet: all 50000 is at stake, so no top-up fits.
+      chain.set(channelId, channelAccount({ payer: await c.getWalletAddress(), operator: operator.address, deposit: 50000n, settled: 0n }));
+      gateway.push(
+        () => quote402([exactAccept("25000"), batchAccept(operator.address, "25000")]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+      await c.chat("openai/gpt-4o-mini", "gm");
+      // The chain cannot show the channel: nothing is assumed settled.
+      chain.delete(channelId);
+      gateway.push(
+        () => quote402([exactAccept("25000"), batchAccept(operator.address, "25000")]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+      await c.chat("openai/gpt-4o-mini", "gm");
+
+      expect(exact).toHaveBeenCalledTimes(2);
+      expect(events.map((e) => e.reason)).toEqual(["deposit_over_cap", "deposit_over_cap"]);
+    });
+
+    it.each([
+      ["the 402's extra.minDeposit first", "15000", "$1", "15000"],
+      ["5 x the ceiling when the 402 names none", undefined, "$1", "25000"],
+      ["capped by the room maxDeposit leaves", "2000000", "$0.02", "20000"],
+    ])("sizes an open from %s", async (_label, minDeposit, maxDeposit, expected) => {
+      const c = client({ maxDeposit });
+      stubExact(c);
+      const accept = batchAccept(operator.address);
+      if (minDeposit) (accept.extra as Record<string, unknown>).minDeposit = minDeposit;
+      gateway.push(
+        () => quote402([exactAccept(), accept]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.deposit.amount).toBe(expected);
+          return servedWithVoucher(operator, channelIdOf(payment), 1000n, 1000n);
+        }
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+    });
+
+    it("reads the chain only when a call needs a top-up", async () => {
+      const c = client({ maxDeposit: "$1" });
+      stubExact(c);
+      const channelId = await (async () => {
+        let id = "";
+        gateway.push(
+          () => quote402([exactAccept(), batchAccept(operator.address)]),
+          async (_url, init) => {
+            id = channelIdOf(decodePayment(init));
+            return servedWithVoucher(operator, id, 1000n, 1000n);
+          },
+          () => quote402([exactAccept(), batchAccept(operator.address)]),
+          async () => servedWithVoucher(operator, id, 2000n, 1000n)
+        );
+        await c.chat("openai/gpt-4o-mini", "gm");
+        await c.chat("openai/gpt-4o-mini", "gm");
+        return id;
+      })();
+
+      expect(rpcCalls.filter((r) => r.method === "getAccountInfo" && r.params[0] === channelId)).toHaveLength(0);
     });
   });
 
@@ -2976,6 +3330,63 @@ describe("SolanaLLMClient batch-settlement", () => {
 
     /** What each gateway call carried: undefined for the unpaid request, else the payment header. */
     const signatures = () => gatewayCalls.map((call) => (call.init?.headers as Record<string, string> | undefined)?.["PAYMENT-SIGNATURE"]);
+
+    it.each([
+      ["omits voucherSigner", undefined],
+      ['says voucherSigner "client"', "client" as const],
+    ])("pays exact, sending no batch payment, when the only batch accept %s", async (_label, voucherSigner) => {
+      const c = observed();
+      const exact = stubExact(c);
+      gateway.push(
+        () => quote402([exactAccept(), clientSignedAccept(voucherSigner)]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(signatures()).toEqual([undefined, "exact-payload"]);
+      expect(events).toEqual([expect.objectContaining({ type: "fallback", reason: "client_signed_not_supported" })]);
+      expect(c.getBatchStats().fallbacksByReason).toEqual({ client_signed_not_supported: 1 });
+      expect(logs.some((l) => l.includes("event=fallback reason=client_signed_not_supported") && l.includes("next=exact"))).toBe(true);
+      // No channel was opened, so there is nothing a close could not refund.
+      expect(fs.existsSync(path.join(tmp, "channels.json"))).toBe(false);
+    });
+
+    it("never falls back to a client-signed twin of an untrusted operator's accept", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      const stranger = await generateKeyPairSigner();
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(stranger.address), clientSignedAccept()]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(signatures()).toEqual([undefined, "exact-payload"]);
+      expect(events).toEqual([expect.objectContaining({ type: "fallback", reason: "untrusted_operator" })]);
+    });
+
+    it("pays the trusted server-signed accept when a client-signed one is listed before it", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      gateway.push(
+        () => quote402([exactAccept(), clientSignedAccept("client"), batchAccept(operator.address)]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.accepted.extra.voucherSigner).toBe("server");
+          expect(payment.payload.channelConfig.voucherSigner).toBe("server");
+          return servedWithVoucher(operator, channelIdOf(payment), 1000n, 1000n);
+        }
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      expect(exact).not.toHaveBeenCalled();
+      expect(events).toEqual([]);
+    });
 
     it("ignores an onEvent callback that throws", async () => {
       const c = client({ onEvent: () => { throw new Error("boom"); } });

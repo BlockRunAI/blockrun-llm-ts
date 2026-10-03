@@ -16,13 +16,16 @@
  * deposit. So this is OPT-IN, twice over:
  *   - the caller names the operator keys it trusts (`operators`). A 402 that
  *     asks for any other operator is never paid in batch mode;
- *   - the caller caps the total escrow locked in the channel (`maxDeposit`).
- *     That cap is the most a dishonest operator could ever take.
+ *   - the caller caps the escrow at stake in the channel (`maxDeposit`): the
+ *     deposit not yet settled on-chain. That cap is the most a dishonest
+ *     operator could take beyond what has already been settled.
  *
  * Before anything is sent, everything here fails OPEN to `exact`: a missing
- * batch accept, an untrusted operator, a deposit over the cap, a channel that
- * is busy with another request, or a channel the SDK is unsure about all pay
- * the same request with the `exact` scheme instead.
+ * batch accept, a client-signed one (only server-signed channels are paid,
+ * since only those can be refunded through this SDK), an untrusted operator,
+ * a deposit over the cap, a channel that is busy with another request, or a
+ * channel the SDK is unsure about all pay the same request with the `exact`
+ * scheme instead.
  *
  * Once a batch payment is sent, one function decides what its answer proves
  * (`SolanaBatchPayer.sendOnce`): charged, not charged, or in doubt. Only the
@@ -58,7 +61,7 @@ import * as fs from "fs";
 import * as path from "path";
 import bs58 from "bs58";
 import { paths as corePaths } from "@blockrun/core";
-import { APIError, PaymentError, withDisposition, type PaymentRequired } from "./types";
+import { APIError, PaymentError, withDisposition, type PaymentRequired, type PaymentRequirement } from "./types";
 import { sanitizeErrorResponse } from "./validation";
 
 export const BATCH_SCHEME = "batch-settlement";
@@ -87,10 +90,13 @@ export interface SolanaBatchOptions {
    */
   operators: string[];
   /**
-   * Total escrow, in USD, this client will lock in one channel (the first
-   * deposit plus every top-up). This is the most an operator could take
-   * without another signature from you. Accepts `"$5"`, `"5"` or `5`.
-   * Default `"$1"` (the `@x402/svm` default).
+   * Most escrow, in USD, this client keeps at stake in one channel: the
+   * deposit not yet settled on-chain. A top-up is allowed while
+   * `(deposit - settled) + topUp <= maxDeposit`, so a long-lived channel keeps
+   * topping up as the gateway settles what it charged. This is the most an
+   * operator could claim beyond what has already been settled without
+   * another signature from you. Accepts `"$5"`, `"5"` or `5`. Default `"$1"`
+   * (the `@x402/svm` default).
    */
   maxDeposit?: string | number;
   /**
@@ -156,7 +162,7 @@ export interface SolanaBatchEvent {
   type: "fallback" | "backoff" | "recovered" | "resync" | "unresolved";
   /**
    * A short, stable code: `rate_limited`, `cooldown`, `not_offered`,
-   * `channel_busy`, `untrusted_operator`, `deposit_over_cap`,
+   * `client_signed_not_supported`, `channel_busy`, `untrusted_operator`, `deposit_over_cap`,
    * `channel_pending`, `peer_dependency_missing`, `payment_creation_failed`,
    * `wallet_config_conflict`, `channel_store_locked`, `payment_required`,
    * `channel_resync_pending`, `channel_resync_failed`, `channel_unreadable`,
@@ -166,7 +172,8 @@ export interface SolanaBatchEvent {
    * `PAYMENT_VERIFICATION_UNAVAILABLE`). An `unresolved` event's reason is a
    * {@link BatchUnresolvedReason}. A `resync` event's reason is
    * `deposit_unanswered`, `deposit_failed`, `deposit_rate_limited`,
-   * `receipt_missing`, `receipt_unreconciled` or `orphaned_deposit`.
+   * `receipt_missing`, `receipt_unreconciled`, `orphaned_deposit`,
+   * `deposit_unrecorded` or `channel_unusable`.
    */
   reason: string;
   /** HTTP status of the gateway answer behind the event, when there was one. */
@@ -938,7 +945,9 @@ interface ResyncTarget {
     | "deposit_rate_limited"
     | "receipt_missing"
     | "receipt_unreconciled"
-    | "orphaned_deposit";
+    | "orphaned_deposit"
+    | "deposit_unrecorded"
+    | "channel_unusable";
 }
 
 /** Thrown into the scheme when a stored record needs a chain re-read before it can be used. */
@@ -1159,9 +1168,9 @@ export class ChannelLayoutError extends Error {
 
 /**
  * Read one channel account from the chain, at `finalized` commitment: the
- * SDK settles deposits in doubt only from state no fork can take back. Every
- * read first checks that `@x402/svm`'s channel layout is the one decoded
- * here.
+ * SDK sizes top-ups, enforces `maxDeposit` and settles deposits in doubt
+ * only from state no fork can take back. Every read first checks that
+ * `@x402/svm`'s channel layout is the one decoded here.
  *
  * @param options.minContextSlot - refuse an answer from a node that has not
  *   reached this slot (the RPC errors instead).
@@ -1303,11 +1312,48 @@ export function offersBatch(paymentRequired: PaymentRequired): boolean {
 }
 
 /**
+ * A client-signed batch accept (`extra.voucherSigner` omitted or `"client"`).
+ *
+ * This SDK pays batch only into server-signed (operator) channels: those are
+ * the ones it tracks, re-reads and refunds (`closeBatchChannel()` closes
+ * against the gateway's trusted server-signed accept). `@x402/svm` could open
+ * a client-signed channel, but nothing here could refund it.
+ */
+function clientSignedBatch(accept: PaymentRequirement): boolean {
+  return accept.scheme === BATCH_SCHEME && (accept.extra as { voucherSigner?: unknown } | undefined)?.voucherSigner !== "server";
+}
+
+/**
  * Why a 402 cannot be paid with batch at all, as a fallback event: it offers
- * no batch accept (`not_offered`). Undefined when it offers one.
+ * no batch accept (`not_offered`), or only client-signed ones
+ * (`client_signed_not_supported`). Undefined when it offers a server-signed one.
  */
 function batchUnavailable(paymentRequired: PaymentRequired): { reason: string; detail?: string } | undefined {
-  return offersBatch(paymentRequired) ? undefined : { reason: "not_offered" };
+  const batch = (paymentRequired.accepts ?? []).filter((accept) => accept.scheme === BATCH_SCHEME);
+  if (batch.length === 0) return { reason: "not_offered" };
+  if (!batch.every(clientSignedBatch)) return undefined;
+  return {
+    reason: "client_signed_not_supported",
+    detail: "the 402 offers only client-signed batch-settlement accepts; this SDK pays batch only into server-signed (operator) channels",
+  };
+}
+
+/**
+ * The 402 as the batch scheme gets it: without client-signed batch accepts,
+ * so neither its selection nor its fallback for an untrusted operator (which
+ * looks for a client-signed twin) can pay one.
+ */
+function withoutClientSignedBatch(paymentRequired: PaymentRequired): PaymentRequired {
+  const accepts = paymentRequired.accepts ?? [];
+  return accepts.some(clientSignedBatch) ? { ...paymentRequired, accepts: accepts.filter((accept) => !clientSignedBatch(accept)) } : paymentRequired;
+}
+
+/** A 402's server-signed batch accept naming an operator the caller trusts. */
+function trustedBatchAccept(paymentRequired: PaymentRequired, operators: string[]): PaymentRequirement | undefined {
+  return (paymentRequired.accepts ?? []).find((candidate) => {
+    const extra = candidate.extra as { voucherSigner?: unknown; operator?: unknown } | undefined;
+    return candidate.scheme === BATCH_SCHEME && extra?.voucherSigner === "server" && operators.includes(extra.operator as string);
+  });
 }
 
 /** Atomic USDC string to USD. */
@@ -1603,6 +1649,82 @@ export function __setBatchSleepForTests(fn: (ms: number) => Promise<void>): void
   sleep = fn;
 }
 
+/** The slice of `@x402/svm`'s scheme that sizes deposits (a private method upstream). */
+type DepositSizer = (
+  requirements: unknown,
+  requestAmount: bigint,
+  needed: bigint,
+  context: unknown,
+  trust: { maxDeposit?: bigint } | undefined,
+  existingDeposit: bigint,
+) => bigint;
+
+let warnedNoSizer = false;
+
+/**
+ * The scheme's storage key for an accept's channel, as `@x402/svm` 2.28
+ * builds it (`channelKey`): network, asset, receiver, fee payer, withdraw
+ * delay, receiver authorizer, voucher signer, operator. Undefined when the
+ * accept lacks the parts. If upstream ever changes the format, the key
+ * simply matches no record and the stricter lifetime cap applies.
+ */
+function channelKeyOf(requirements: unknown): string | undefined {
+  const accept = requirements as { network?: unknown; asset?: unknown; payTo?: unknown; extra?: Record<string, unknown> };
+  const extra = accept?.extra ?? {};
+  if (typeof extra.feePayer !== "string" || typeof extra.withdrawDelay !== "number") return undefined;
+  return [
+    accept.network,
+    accept.asset,
+    accept.payTo,
+    extra.feePayer,
+    extra.withdrawDelay,
+    extra.receiverAuthorizer ?? "",
+    extra.voucherSigner ?? "client",
+    extra.operator ?? "",
+  ].join(":");
+}
+
+/**
+ * Make `maxDeposit` cap the escrow still at stake, not lifetime deposits.
+ *
+ * `@x402/svm` sizes a top-up against `maxDeposit - deposit`, where `deposit`
+ * is every deposit the channel ever took, so once a long-lived channel's
+ * deposits add up to `maxDeposit` it can never top up again and the client
+ * is stuck on `exact` while the channel stays open. What a dishonest operator
+ * could still claim is the deposit not yet settled on-chain. So for a top-up
+ * of the channel the SDK has just read ({@link SolanaBatchPayer.prepareTopUp}),
+ * the scheme's cap is raised by that channel's settled amount:
+ * `room = maxDeposit - (deposit - settled)`. Opens, and top-ups without a
+ * fresh read, keep the scheme's own (stricter) arithmetic.
+ */
+function capOutstandingEscrow(scheme: object, wallet: WalletBatch): void {
+  const target = scheme as { resolveDepositAmount?: DepositSizer };
+  const original = target.resolveDepositAmount;
+  if (typeof original !== "function") {
+    if (!warnedNoSizer) {
+      warnedNoSizer = true;
+      console.error(
+        "[@blockrun/llm] batch-settlement: this @x402/svm does not expose resolveDepositAmount; maxDeposit caps lifetime deposits",
+      );
+    }
+    return;
+  }
+  target.resolveDepositAmount = function (requirements, requestAmount, needed, context, trust, existingDeposit) {
+    const topUp = wallet.topUp;
+    // Only for the very channel whose settled amount was read: same storage
+    // key (network, asset, receiver, fee payer, ..., operator) and deposit.
+    const widened =
+      topUp &&
+      existingDeposit > 0n &&
+      existingDeposit === topUp.deposit &&
+      channelKeyOf(requirements) === topUp.key &&
+      typeof trust?.maxDeposit === "bigint"
+        ? { ...trust, maxDeposit: trust.maxDeposit + topUp.settled }
+        : trust;
+    return original.call(this, requirements, requestAmount, needed, context, widened, existingDeposit);
+  };
+}
+
 export interface SolanaBatchPayerInit {
   options: SolanaBatchOptions;
   secretKey: () => Promise<Uint8Array>;
@@ -1684,6 +1806,13 @@ interface WalletBatch {
   resyncs: Map<string, ResyncTarget>;
   /** Deposits sent and not yet reconciled, written ahead of the send. */
   intents: IntentJournal;
+  /**
+   * For the payment being built: the channel a top-up may land on (its
+   * scheme storage key and stored deposit), and how much of that deposit is
+   * already settled on-chain, which `maxDeposit` does not count. See
+   * {@link SolanaBatchPayer.prepareTopUp}.
+   */
+  topUp?: { key: string; deposit: bigint; settled: bigint };
 }
 
 /**
@@ -1862,6 +1991,7 @@ export class SolanaBatchPayer {
         // chain survives the scheme being rebuilt to pick it up.
         channelStorage: wallet.book as never,
       });
+      capOutstandingEscrow(scheme, wallet);
       // Only the batch scheme is registered: exact stays on this SDK's own
       // signer, so a 402 without a usable batch accept throws here and the
       // caller pays it exactly as before. The per-call ceiling is bounded by
@@ -2696,7 +2826,8 @@ export class SolanaBatchPayer {
   /**
    * Build the payment payload, re-reading any distrusted channel from the
    * chain first. A stored record the book refuses to hand over (a deposit a
-   * dead process never heard back about) is re-read and the payload rebuilt
+   * dead process never heard back about), or one a top-up's read found
+   * unusable ({@link prepareTopUp}), is re-read and the payload rebuilt
    * once.
    */
   private async createPayload(
@@ -2707,11 +2838,106 @@ export class SolanaBatchPayer {
       await this.resync(wallet);
       const http = (await this.build(wallet)).http;
       try {
-        return { http, payload: await http.createPaymentPayload(paymentRequired) };
+        await this.prepareTopUp(wallet, paymentRequired);
+        return { http, payload: await http.createPaymentPayload(withoutClientSignedBatch(paymentRequired)) };
       } catch (err) {
         if (pass > 0 || !isResyncRequired(err) || wallet.resyncs.size === 0) throw err;
+      } finally {
+        wallet.topUp = undefined;
       }
     }
+  }
+
+  /**
+   * When this payment will top up the wallet's channel, read how much of its
+   * deposit is already settled on-chain (at `finalized` commitment, so never
+   * more than will stay settled), so `maxDeposit` caps the escrow still at
+   * stake rather than every deposit the channel ever took.
+   *
+   * Only a top-up costs this read (a channel's balance decides it, from the
+   * stored record). If the read fails, nothing settled is assumed, which is
+   * the stricter, lifetime cap. If the chain shows a larger deposit than the
+   * record, the record is behind (a deposit it never heard about landed):
+   * sizing a top-up from it could exceed `maxDeposit`, so this call pays
+   * exact and the channel is re-read before the next payment. If
+   * `@x402/svm`'s channel layout is not the one this SDK decodes, or the
+   * account at the channel's address cannot be read as a channel, the call
+   * pays exact (`channel_unreadable`), record kept. If
+   * the finalized channel is closing or closed, or is not this wallet's for
+   * the record's operator and mint, no top-up is sized from the record: it
+   * is re-read at once (`channel_unusable`), see {@link createPayload}.
+   */
+  private async prepareTopUp(wallet: WalletBatch, paymentRequired: PaymentRequired): Promise<void> {
+    wallet.topUp = undefined;
+    const accept = trustedBatchAccept(paymentRequired, this.init.options.operators);
+    if (!accept) return;
+    // The exact record the scheme will load for this accept: another channel
+    // to the same receiver (say, through a different fee payer) has its own
+    // settled amount, which must not widen this one's cap. Read through the
+    // book, which drops a pending authorization left by a dead process (and
+    // refuses an orphaned deposit until it is re-read), as the scheme's own
+    // load would.
+    const key = channelKeyOf(accept);
+    const record = key ? await wallet.book.get(key) : undefined;
+    if (!key || !record || record.pending || typeof record.channelId !== "string") return;
+    const deposit = parseAtomic(record.deposit);
+    if (parseAtomic(record.chargedCumulativeAmount) + parseAtomic(accept.amount) <= deposit) return;
+    let channel: OnChainChannel | undefined;
+    try {
+      channel = await readChannelAccount(this.init.rpcUrl, record.channelId, this.init.rpcHeaders);
+    } catch (err) {
+      // A layout this SDK cannot decode, or an account at the channel's
+      // address that is not a readable channel (wrong owner, short data,
+      // unsupported encoding): fail closed, no deposit at all, record kept.
+      if (err instanceof ChannelLayoutError) {
+        throw new ResyncError("channel_unreadable", `channel ${record.channelId}: ${err.message}; no top-up is sized from it`);
+      }
+      if (err instanceof ChannelUnreadableError) {
+        throw new ResyncError("channel_unreadable", `${err.message}; no top-up is signed into it`);
+      }
+      // Only a failed read (transport or RPC error) keeps the lifetime cap:
+      // never assume more was settled than was read.
+      return;
+    }
+    // Not at finalized commitment (yet): keep the lifetime cap.
+    if (channel === undefined) return;
+    if (
+      !channel.open ||
+      channel.payer !== (await this.init.address()) ||
+      channel.authorizedSigner !== record.channelConfig.payerAuthorizer ||
+      channel.mint !== record.channelConfig.token
+    ) {
+      // The record names a channel that is closing or closed, or is not this
+      // wallet's for this operator and mint: never sign a deposit into it.
+      // Re-read it through resync, which createPayload runs right away: a
+      // closed channel's record is dropped and the call goes on as with no
+      // channel (a fresh open if it fits), anything else keeps the record and
+      // pays exact (channel_unreadable).
+      addResyncTarget(wallet, {
+        key,
+        channelId: record.channelId,
+        channelConfig: record.channelConfig,
+        cumulative: parseAtomic(record.chargedCumulativeAmount),
+        knownDeposit: deposit,
+        reason: "channel_unusable",
+      });
+      throw new ChannelResyncRequiredError(record.channelId);
+    }
+    if (channel.deposit > deposit) {
+      addResyncTarget(wallet, {
+        key,
+        channelId: record.channelId,
+        channelConfig: record.channelConfig,
+        cumulative: parseAtomic(record.chargedCumulativeAmount),
+        knownDeposit: channel.deposit,
+        reason: "deposit_unrecorded",
+      });
+      throw new ResyncError(
+        "channel_resync_pending",
+        `channel ${record.channelId} holds ${channel.deposit} on chain, more than the ${deposit} its record knows; it is re-read before any top-up`,
+      );
+    }
+    wallet.topUp = { key, deposit, settled: channel.settled };
   }
 
   /**
