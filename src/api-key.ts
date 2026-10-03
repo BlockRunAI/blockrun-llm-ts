@@ -1,4 +1,4 @@
-import { APIError } from "./types.js";
+import { APIError, type RetryDisposition } from "./types.js";
 import { sanitizeErrorResponse, validateApiUrl } from "./validation.js";
 
 /** Account billing is independent of the wallet payment chain. */
@@ -49,6 +49,19 @@ export function resolveApiKeyAuth(
   const base = options.apiUrl ?? (typeof process !== "undefined"
     ? process.env?.BLOCKRUN_API_BASE_URL : undefined) ?? API_KEY_URL;
   return new ApiKeyAuth(key.trim(), base);
+}
+
+/**
+ * The {@link RetryDisposition} of an error from an account-mode request.
+ *
+ * With an API key the request itself is the billed one (which is why
+ * {@link ApiKeyAuth.fetch} never replays a POST), so a request that was sent
+ * may have been charged. Only the account API's explicit 4xx answer (a 429
+ * rate limit, a 402 for credits, a 400 or 401) is a refusal that charged
+ * nothing; a 5xx, a timeout, an abort or a network error is not.
+ */
+export function accountErrorDisposition(err: unknown): RetryDisposition {
+  return err instanceof APIError && err.statusCode >= 400 && err.statusCode < 500 ? "unpaid" : "paid-or-in-doubt";
 }
 
 /** Throws for wallet-only operations instead of inventing a wallet identity. */

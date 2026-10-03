@@ -1172,6 +1172,66 @@ export interface PollOptions {
   intervalMs?: number;
 }
 
+/**
+ * Whether a failed request may be retried, or sent to another model, without
+ * risking a second charge. The request layer that knows whether a payment was
+ * sent attaches it to the error it throws; read it with
+ * {@link retryDisposition}.
+ *
+ * - `"unpaid"`: nothing that could be charged was sent for this request: the
+ *   unpaid first request of an x402 exchange (and its 402 challenge), the
+ *   signing step, or, with an API key, the account API's explicit 4xx
+ *   refusal. A retry or a fallback model pays at most once.
+ * - `"paid-or-in-doubt"`: a payment was sent (with an API key, the billed
+ *   request itself) and may have been charged: a timeout, an abort or a
+ *   network error after it was sent, any non-2xx answer to it, or a 2xx whose
+ *   body could not be read. A retry or a fallback model could pay twice, so
+ *   the SDK does neither.
+ *
+ * An error that carries no disposition is treated as `"paid-or-in-doubt"`.
+ */
+export type RetryDisposition = "unpaid" | "paid-or-in-doubt";
+
+/**
+ * Where an error's {@link RetryDisposition} is kept: a non-enumerable
+ * property under a `Symbol.for` key, so it survives being thrown through
+ * another copy of the SDK and works on errors this SDK did not create (a
+ * `fetch` `TypeError`, an `AbortError`).
+ */
+const RETRY_DISPOSITION = Symbol.for("@blockrun/llm/retry-disposition/v1");
+
+/**
+ * The {@link RetryDisposition} the SDK attached to an error, or undefined
+ * when it attached none (then treat the error as `"paid-or-in-doubt"`).
+ *
+ * @example
+ * if (retryDisposition(err) === "unpaid") await retryLater();
+ */
+export function retryDisposition(err: unknown): RetryDisposition | undefined {
+  if (!err || (typeof err !== "object" && typeof err !== "function")) return undefined;
+  const value = (err as { [RETRY_DISPOSITION]?: unknown })[RETRY_DISPOSITION];
+  return value === "unpaid" || value === "paid-or-in-doubt" ? value : undefined;
+}
+
+/**
+ * Attach a {@link RetryDisposition} to an error, at the request layer that
+ * knows it. A `"paid-or-in-doubt"` error is never downgraded to `"unpaid"`.
+ * A primitive thrown value cannot carry one, and stays without.
+ *
+ * @internal
+ * @returns the same error, for `throw withDisposition(err, ...)`.
+ */
+export function withDisposition<T>(err: T, disposition: RetryDisposition): T {
+  if (!err || typeof err !== "object") return err;
+  if (retryDisposition(err) === "paid-or-in-doubt") return err;
+  try {
+    Object.defineProperty(err, RETRY_DISPOSITION, { value: disposition, configurable: true, writable: true, enumerable: false });
+  } catch {
+    // A frozen error keeps no disposition, which reads as paid-or-in-doubt.
+  }
+  return err;
+}
+
 export class BlockrunError extends Error {
   constructor(message: string) {
     super(message);

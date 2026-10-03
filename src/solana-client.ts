@@ -1,4 +1,4 @@
-import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth, type ApiKeyOptions } from "./api-key.js";
+import { accountErrorDisposition, resolveApiKeyAuth, requireWallet, type ApiKeyAuth, type ApiKeyOptions } from "./api-key.js";
 /**
  * BlockRun Solana LLM Client.
  *
@@ -30,7 +30,7 @@ import type {
   SearchResult,
   SearchOptions,
 } from "./types";
-import { APIError, PaymentError } from "./types";
+import { APIError, PaymentError, withDisposition } from "./types";
 import {
   SOLANA_MINIMUM_PAYMENT_USD,
   errSummary,
@@ -159,6 +159,16 @@ export async function isSafeStaleBlockhashResponse(response: Response): Promise<
 async function waitForStaleRetry(attempt: number): Promise<void> {
   await new Promise<void>((resolve) =>
     setTimeout(resolve, STALE_BLOCKHASH_RETRY_BACKOFFS_MS[attempt])
+  );
+}
+
+/** A non-2xx, non-402 answer to a request that carried no payment, as an `"unpaid"` APIError. */
+async function unpaidApiError(response: Response): Promise<APIError> {
+  let errorBody: unknown;
+  try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
+  return withDisposition(
+    new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(errorBody)),
+    "unpaid"
   );
 }
 
@@ -926,13 +936,23 @@ export class SolanaLLMClient {
     return this.apiUrl.includes("sol.blockrun.ai");
   }
 
+  /**
+   * Chat request with automatic x402 payment.
+   *
+   * Every error it throws carries a {@link RetryDisposition}, which is what
+   * {@link SolanaLLMClient.chatCompletion}'s fallback walk honours: errors of
+   * the unpaid first request, its 402 challenge and the signing step are
+   * `"unpaid"`; anything after a payment was sent (exact or batch) is
+   * `"paid-or-in-doubt"`, and so is any error with an API key once the billed
+   * request was sent, except the account API's explicit 4xx refusal.
+   */
   private async requestWithPayment(
     endpoint: string,
     body: Record<string, unknown>
   ): Promise<ChatResponse> {
     const url = `${this.apiUrl}${endpoint}`;
     for (let staleRetries = 0; ; ) {
-      const response = await this.fetchWithTimeout(url, {
+      const response = await this.sendUnpaid(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
         body: JSON.stringify(body),
@@ -940,7 +960,12 @@ export class SolanaLLMClient {
 
       if (response.status === 402) {
         try {
-          const paymentRequired = await this.readPaymentRequired(response);
+          let paymentRequired: PaymentRequired;
+          try {
+            paymentRequired = await this.readPaymentRequired(response);
+          } catch (error) {
+            throw withDisposition(error, "unpaid");
+          }
           if (this.batchPayer && staleRetries === 0) {
             const batch = await this.batchPayer.pay(paymentRequired, (paymentHeaders) =>
               this.fetchWithTimeout(url, {
@@ -951,12 +976,15 @@ export class SolanaLLMClient {
             );
             if (batch.kind === "paid") {
               this.recordSettlement(batch.chargedUsd);
-              return batch.response.json() as Promise<ChatResponse>;
+              return await this.readPaidJson<ChatResponse>(batch.response);
             }
             if (batch.kind === "failed") {
               let errorBody: unknown;
               try { errorBody = await batch.response.json(); } catch { errorBody = { error: "Request failed" }; }
-              throw new APIError(`API error after payment: ${batch.response.status}`, batch.response.status, sanitizeErrorResponse(errorBody));
+              throw withDisposition(
+                new APIError(`API error after payment: ${batch.response.status}`, batch.response.status, sanitizeErrorResponse(errorBody)),
+                "paid-or-in-doubt"
+              );
             }
           }
           return await this.handlePaymentAndRetry(url, body, paymentRequired, staleRetries > 0);
@@ -970,13 +998,45 @@ export class SolanaLLMClient {
         }
       }
 
-      if (!response.ok) {
-        let errorBody: unknown;
-        try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
-        throw new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(errorBody));
-      }
+      if (!response.ok) throw await unpaidApiError(response);
 
-      return response.json() as Promise<ChatResponse>;
+      // Served without a payment: the free tier, or account billing, where
+      // this very request was the billed one.
+      return await this.readUnpaidJson<ChatResponse>(response);
+    }
+  }
+
+  /**
+   * Read the JSON body of a 2xx served without a payment: the free tier, or
+   * with an API key, where this very request was the billed one.
+   */
+  private async readUnpaidJson<T>(response: Response): Promise<T> {
+    try {
+      return (await response.json()) as T;
+    } catch (error) {
+      throw withDisposition(error, this.apiAuth ? "paid-or-in-doubt" : "unpaid");
+    }
+  }
+
+  /**
+   * Send a request that carries no payment, marking what it throws with its
+   * {@link RetryDisposition}: `"unpaid"` with a wallet; with an API key, see
+   * {@link accountErrorDisposition} (the request itself is billed).
+   */
+  private async sendUnpaid(url: string, init: RequestInit): Promise<Response> {
+    try {
+      return await this.fetchWithTimeout(url, init);
+    } catch (error) {
+      throw withDisposition(error, this.apiAuth ? accountErrorDisposition(error) : "unpaid");
+    }
+  }
+
+  /** Read a paid 2xx response's JSON body. The call was charged, so a failure here is never retried. */
+  private async readPaidJson<T>(response: Response): Promise<T> {
+    try {
+      return (await response.json()) as T;
+    } catch (error) {
+      throw withDisposition(error, "paid-or-in-doubt");
     }
   }
 
@@ -1186,27 +1246,35 @@ export class SolanaLLMClient {
     paymentRequired: PaymentRequired,
     forceFreshBlockhash = false
   ): Promise<ChatResponse> {
-    const { paymentPayload, costUsd } = await this.signExactPayment(
-      url,
-      paymentRequired,
-      forceFreshBlockhash,
-      `${this.apiUrl}/v1/chat/completions`
-    );
+    let signed: { paymentPayload: string; costUsd: number };
+    try {
+      signed = await this.signExactPayment(url, paymentRequired, forceFreshBlockhash, `${this.apiUrl}/v1/chat/completions`);
+    } catch (error) {
+      // Nothing was sent: building the payment failed.
+      throw withDisposition(error, "unpaid");
+    }
+    const { paymentPayload, costUsd } = signed;
 
-    const retryResponse = await this.fetchWithTimeout(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": USER_AGENT,
-        "PAYMENT-SIGNATURE": paymentPayload,
-      },
-      body: JSON.stringify(body),
-    });
+    let retryResponse: Response;
+    try {
+      retryResponse = await this.fetchWithTimeout(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": USER_AGENT,
+          "PAYMENT-SIGNATURE": paymentPayload,
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (error) {
+      // The signed transfer may have reached the gateway and settled.
+      throw withDisposition(error, "paid-or-in-doubt");
+    }
 
     await this.assertPaid(retryResponse);
     this.recordSettlement(costUsd);
 
-    return retryResponse.json() as Promise<ChatResponse>;
+    return this.readPaidJson<ChatResponse>(retryResponse);
   }
 
   private async requestWithPaymentRaw(
@@ -1354,20 +1422,25 @@ export class SolanaLLMClient {
    * lives.
    * @param response - the reply to the paid request.
    * @throws SafeStaleBlockhashError when the caller should re-sign, PaymentError
-   *   when it should not, APIError for any other failure.
+   *   when it should not, APIError for any other failure. Every one but the
+   *   first is marked `"paid-or-in-doubt"`: the payment may have settled.
    */
   private async assertPaid(response: Response): Promise<void> {
     if (response.status === 402) {
       if (await isSafeStaleBlockhashResponse(response)) {
-        throw new SafeStaleBlockhashError();
+        // Rejected at verification: nothing settled.
+        throw withDisposition(new SafeStaleBlockhashError(), "unpaid");
       }
-      throw new PaymentError("Payment was rejected. Check your Solana USDC balance.");
+      throw withDisposition(new PaymentError("Payment was rejected. Check your Solana USDC balance."), "paid-or-in-doubt");
     }
 
     if (!response.ok) {
       let errorBody: unknown;
       try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
-      throw new APIError(`API error after payment: ${response.status}`, response.status, sanitizeErrorResponse(errorBody));
+      throw withDisposition(
+        new APIError(`API error after payment: ${response.status}`, response.status, sanitizeErrorResponse(errorBody)),
+        "paid-or-in-doubt"
+      );
     }
   }
 

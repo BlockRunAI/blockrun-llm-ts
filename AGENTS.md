@@ -88,7 +88,9 @@ pnpm typecheck          # TypeScript check
   proxy namespace is mapped to catalog-listed `nvidia/*` ids (dropped when
   proxy-only). The SDK builds `routing.fallbacks` from that ranking and
   `chat()` walks it automatically on transient errors (timeout / network /
-  429 / 5xx). Caller-supplied `fallbackModels` wins over the routed chain.
+  429 / 5xx) raised before any payment was sent (`retryDisposition(err) ===
+  "unpaid"`); a failure after a payment never buys another model.
+  Caller-supplied `fallbackModels` wins over the routed chain.
 - Routing types (`RoutingDecision`, `RoutingTier`, `RoutingTaskType`,
   `RoutingTierConfig`) are derived from `@blockrun/router-core` — a
   devDependency pinned to the reviewed Router Core commit —

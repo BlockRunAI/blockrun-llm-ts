@@ -13,7 +13,7 @@ import type {
   RoutingDecision,
   RoutingProfile,
 } from "./types";
-import { APIError, PaymentError } from "./types";
+import { APIError, PaymentError, retryDisposition } from "./types";
 
 const AUTO_ROUTING_PROFILES: Readonly<Record<string, RoutingProfile>> = {
   "blockrun/auto": "auto",
@@ -31,15 +31,22 @@ export type { ModelPricing };
 
 /**
  * Whether an error is the kind of transient failure that warrants trying the
- * next model in a fallback chain. True for: AbortError (timeout), generic
- * network/fetch errors, 429 (this upstream is saturated — the next model in
- * the chain is a different upstream), and 5xx availability errors.
+ * next model in a fallback chain.
  *
- * False for: other 4xx client errors (bad request, auth) and PaymentError —
- * those aren't "swap upstream and retry" situations. Shared by both chain
- * clients so the transient set cannot drift between them.
+ * Only an error whose request layer marked it `"unpaid"` qualifies (see
+ * {@link RetryDisposition}): the next model is a new paid request, so moving
+ * on after a payment that may have been charged could pay twice. An error
+ * with no disposition is never transient.
+ *
+ * Among unpaid errors, true for: AbortError (timeout), generic network/fetch
+ * errors, 429 (this upstream is saturated — the next model in the chain is a
+ * different upstream), and 5xx availability errors. False for: other 4xx
+ * client errors (bad request, auth) and PaymentError — those aren't "swap
+ * upstream and retry" situations. Shared by both chain clients so the
+ * transient set cannot drift between them.
  */
 export function isTransientError(err: unknown): boolean {
+  if (retryDisposition(err) !== "unpaid") return false;
   if (err instanceof PaymentError) return false;
   if (err instanceof APIError) {
     return [429, 502, 503, 504, 522, 524].includes(err.statusCode);
