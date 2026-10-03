@@ -235,8 +235,16 @@ export interface SolanaBatchStats {
  *   proves nothing was charged: a 5xx without a recognised refusal code, an
  *   unrecognised 4xx, or a non-2xx whose receipt names a transaction, says
  *   `settlement_pending`, or says it succeeded.
+ * - `duplicate_settlement`: the first answer was a 402 naming
+ *   `duplicate_settlement`: the gateway had already reserved this request id,
+ *   so another copy of the payment reached it and may have been charged.
  */
-export type BatchUnresolvedReason = "replay_unresolved" | "ambiguous_rate_limit" | "no_response" | "outcome_unknown";
+export type BatchUnresolvedReason =
+  | "replay_unresolved"
+  | "ambiguous_rate_limit"
+  | "no_response"
+  | "outcome_unknown"
+  | "duplicate_settlement";
 
 /** What a batch payment carried: a channel open, a top-up of the channel, or an authorization alone. */
 export type BatchPayloadKind = "open" | "top-up" | "authorization";
@@ -1404,11 +1412,15 @@ function withoutClientSignedBatch(paymentRequired: PaymentRequired): PaymentRequ
 }
 
 /** A 402's server-signed batch accept naming an operator the caller trusts. */
-function trustedBatchAccept(paymentRequired: PaymentRequired, operators: string[]): PaymentRequirement | undefined {
-  return (paymentRequired.accepts ?? []).find((candidate) => {
+function trustedBatchAccepts(paymentRequired: PaymentRequired, operators: string[]): PaymentRequirement[] {
+  return (paymentRequired.accepts ?? []).filter((candidate) => {
     const extra = candidate.extra as { voucherSigner?: unknown; operator?: unknown } | undefined;
     return candidate.scheme === BATCH_SCHEME && extra?.voucherSigner === "server" && operators.includes(extra.operator as string);
   });
+}
+
+function trustedBatchAccept(paymentRequired: PaymentRequired, operators: string[]): PaymentRequirement | undefined {
+  return trustedBatchAccepts(paymentRequired, operators)[0];
 }
 
 /** Atomic USDC string to USD. */
@@ -1482,6 +1494,36 @@ async function batchRefusal(response: Response): Promise<string | undefined> {
   const { error, code } = (body ?? {}) as { error?: unknown; code?: unknown };
   for (const value of [code, error]) {
     if (typeof value === "string" && BATCH_REFUSALS.has(value)) return value;
+  }
+  return undefined;
+}
+
+/**
+ * The duplicate code a 402 answer names, if any (`error`, `code`, `reason` or
+ * `invalidReason` in its JSON body or its `PAYMENT-REQUIRED` challenge).
+ * Upstream answers a request id it has already reserved with
+ * `duplicate_settlement`: another copy of this payment reached the gateway,
+ * so the 402 is not proof that nothing was charged.
+ */
+async function duplicateAnswer(response: Response): Promise<string | undefined> {
+  const codes: unknown[] = [];
+  try {
+    const body = (await response.clone().json()) as Record<string, unknown> | null;
+    if (body && typeof body === "object") codes.push(body.error, body.code, body.reason, body.invalidReason);
+  } catch {
+    // Not JSON: nothing named in the body.
+  }
+  const header = response.headers.get("PAYMENT-REQUIRED");
+  if (header) {
+    try {
+      const challenge = parsePaymentRequired(header) as unknown as Record<string, unknown>;
+      codes.push(challenge.error, challenge.invalidReason);
+    } catch {
+      // An unreadable challenge names nothing.
+    }
+  }
+  for (const code of codes) {
+    if (typeof code === "string" && /duplicate/i.test(code)) return code;
   }
   return undefined;
 }
@@ -2915,7 +2957,22 @@ export class SolanaBatchPayer {
     }
 
     if (cleanRefusalReceipt(receipt)) {
-      if (status === 402) return { kind: "not_charged", reason: "payment_required", status };
+      if (status === 402) {
+        const duplicate = await duplicateAnswer(response);
+        if (duplicate) {
+          return {
+            kind: "in_doubt",
+            reason: "duplicate_settlement",
+            replayable: false,
+            settled: true,
+            status,
+            errorReason: duplicate,
+            detail: `the payment was answered 402 ${duplicate}: another copy of this request reached the gateway`,
+            cause: await afterPaymentError(response),
+          };
+        }
+        return { kind: "not_charged", reason: "payment_required", status };
+      }
       const refusal = await batchRefusal(response);
       // A refusal charges nothing, so a refused top-up leaves a healthy
       // channel exactly as it was confirmed. Keep it.
@@ -3171,17 +3228,22 @@ export class SolanaBatchPayer {
     const header = probe.status === 402 ? probe.headers.get("PAYMENT-REQUIRED") : null;
     if (!header) throw new Error(`refund probe expected a 402 with PAYMENT-REQUIRED from ${url}, got HTTP ${probe.status}`);
     const paymentRequired = parsePaymentRequired(header);
-    const trusted = trustedBatchAccept(paymentRequired, this.init.options.operators);
-    const trustedKey = trusted ? channelKeyOf(trusted) : undefined;
-    if (!trusted || !trustedKey || !(await wallet.book.base.get(trustedKey))) {
-      for (const accept of (paymentRequired.accepts ?? []).filter(clientSignedBatch)) {
-        const key = channelKeyOf(accept);
-        const record = key ? await wallet.book.base.get(key) : undefined;
-        if (key && record && (record.channelConfig?.voucherSigner ?? "client") === "client") return { accept, key };
-      }
+    // During an operator rotation the challenge can list several trusted
+    // keys: the one with a stored channel is the target, whatever its order.
+    const trustedAccepts = trustedBatchAccepts(paymentRequired, this.init.options.operators)
+      .map((accept) => ({ accept, key: channelKeyOf(accept) }))
+      .filter((candidate): candidate is { accept: PaymentRequirement; key: string } => !!candidate.key);
+    for (const candidate of trustedAccepts) {
+      if (await wallet.book.base.get(candidate.key)) return candidate;
     }
-    if (!trusted || !trustedKey) throw new Error(`${url} offers no batch-settlement accept with a trusted operator to close against`);
-    return { accept: trusted, key: trustedKey };
+    for (const accept of (paymentRequired.accepts ?? []).filter(clientSignedBatch)) {
+      const key = channelKeyOf(accept);
+      const record = key ? await wallet.book.base.get(key) : undefined;
+      if (key && record && (record.channelConfig?.voucherSigner ?? "client") === "client") return { accept, key };
+    }
+    const first = trustedAccepts[0];
+    if (!first) throw new Error(`${url} offers no batch-settlement accept with a trusted operator to close against`);
+    return first;
   }
 
   /**

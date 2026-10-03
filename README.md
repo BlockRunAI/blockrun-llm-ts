@@ -611,6 +611,9 @@ gateway's answer proves, in one place:
   - `'ambiguous_rate_limit'`: a 429 whose receipt does not prove nothing was
     broadcast;
   - `'no_response'`: sending it threw (timeout, abort, network error);
+  - `'duplicate_settlement'`: the first answer was a 402 naming
+    `duplicate_settlement`, meaning another copy of this payment had already
+    reached the gateway;
   - `'outcome_unknown'`: any other answer that neither serves the call nor
     proves nothing was charged.
 

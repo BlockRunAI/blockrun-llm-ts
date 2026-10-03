@@ -71,7 +71,7 @@ never paid a second time.
   `payloadKind` (`'open' | 'top-up' | 'authorization'`), `depositInDoubt`,
   `status`, `cause` (the gateway's answer as an `APIError`, or the transport
   error) and `reason`: `'replay_unresolved'`, `'ambiguous_rate_limit'`,
-  `'no_response'` or `'outcome_unknown'`. Each raise is an `unresolved`
+  `'no_response'`, `'duplicate_settlement'` or `'outcome_unknown'`. Each raise is an `unresolved`
   event, one stderr line, and counts in `getBatchStats().unresolved` /
   `unresolvedByReason`.
 - Resolving a payment in doubt automatically needs gateway support (a

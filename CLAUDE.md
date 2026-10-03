@@ -132,7 +132,7 @@ src/
   in_doubt ends only in `resolveInDoubt()` — a receipt-less 429 gets ONE byte-identical replay after
   its backoff (owner policy) — or `raiseUnresolved()` →
   `BatchPaymentUnresolvedError` (`PaymentError`, disposition `paid-or-in-doubt`; reason
-  `replay_unresolved | ambiguous_rate_limit | no_response | outcome_unknown`; wallet, requestId,
+  `replay_unresolved | ambiguous_rate_limit | no_response | duplicate_settlement | outcome_unknown`; wallet, requestId,
   channelId, payloadKind, depositInDoubt, status, cause) + `unresolved` event/log/counter. NEVER a new
   authorization, new deposit, exact or fallback model for a call in doubt; NEVER chain state or the
   402's `lastValidBlockHeight` to clear charge doubt (the old `neverCompletes` open-replacement proof is

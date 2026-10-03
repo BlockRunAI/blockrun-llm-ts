@@ -2440,6 +2440,40 @@ describe("SolanaLLMClient batch-settlement", () => {
     expect(rpcMethods).not.toContain("getProgramAccounts");
   });
 
+  it("closes the stored channel even when the rotation challenge lists a recordless trusted key first", async () => {
+    // Both keys trusted; only the rotated key ever opened a channel.
+    const rotated = await generateKeyPairSigner();
+    const c = client({ operators: [operator.address, rotated.address] });
+    stubExact(c);
+    let channelId = "";
+    gateway.push(
+      () => quote402([exactAccept(), batchAccept(rotated.address)]),
+      async (_url, init) => {
+        channelId = channelIdOf(decodePayment(init));
+        return servedWithVoucher(rotated, channelId, 1000n, 1000n);
+      }
+    );
+    await c.chat("openai/gpt-4o-mini", "gm");
+
+    gateway.push(
+      // The old key comes first in the challenge and has no stored channel.
+      () => quote402([exactAccept(), batchAccept(operator.address), batchAccept(rotated.address)]),
+      (_url: string, init?: RequestInit) => {
+        const payment = decodePayment(init);
+        expect(payment.payload.type).toBe("refund");
+        expect(payment.payload.authorization.channelId).toBe(channelId);
+        expect(payment.accepted.extra.operator).toBe(rotated.address);
+        const receipt = { success: true, transaction: "close-tx", network: NETWORK };
+        return new Response("{}", {
+          status: 200,
+          headers: { "PAYMENT-RESPONSE": Buffer.from(JSON.stringify(receipt)).toString("base64") },
+        });
+      }
+    );
+    await expect(c.closeBatchChannel()).resolves.toMatchObject({ success: true });
+    expect(fs.existsSync(path.join(tmp, "channels.json"))).toBe(false);
+  });
+
   describe("legacy client-signed channels", () => {
     /** The route offered client-signed, as an earlier SDK version could have paid it: no operator. */
     function legacyAccept() {
@@ -3397,6 +3431,32 @@ describe("SolanaLLMClient batch-settlement", () => {
         expect(exact).not.toHaveBeenCalled();
         expect(c.getSpending()).toMatchObject({ calls: 0 });
         expect(c.getBatchStats()).toMatchObject({ unresolved: 1, recoveries: 0 });
+      });
+
+      it.each([
+        ["in its JSON body", () => new Response(JSON.stringify({ x402Version: 2, error: "duplicate_settlement" }), { status: 402 })],
+        [
+          "in its PAYMENT-REQUIRED challenge",
+          () =>
+            new Response("{}", {
+              status: 402,
+              headers: {
+                "PAYMENT-REQUIRED": Buffer.from(JSON.stringify({ x402Version: 2, error: "duplicate_settlement", accepts: [] })).toString("base64"),
+              },
+            }),
+        ],
+      ])("keeps a first send answered 402 duplicate_settlement %s in doubt, never paying exact", async (_label, answer) => {
+        const c = observed();
+        const exact = stubExact(c);
+        gateway.push(() => quote402([exactAccept(), batchAccept(operator.address)]), answer);
+
+        await expect(c.chat("openai/gpt-4o-mini", "gm")).rejects.toMatchObject({
+          name: "BatchPaymentUnresolvedError",
+          reason: "duplicate_settlement",
+          status: 402,
+        });
+        expect(exact).not.toHaveBeenCalled();
+        expect(c.getBatchStats()).toMatchObject({ unresolved: 1, unresolvedByReason: { duplicate_settlement: 1 }, fallbacks: 0 });
       });
 
       it("raises replay_unresolved after its one replay, signing nothing new and never paying exact", async () => {
