@@ -21,11 +21,307 @@
   already never re-sends a POST after a 5xx.
 - New export `retryDisposition(err)` returns `'unpaid'`,
   `'paid-or-in-doubt'` or `undefined`, for your own retry wrappers
-  (type `RetryDisposition`).
+  (type `RetryDisposition`). `BatchPaymentUnresolvedError` is always
+  `'paid-or-in-doubt'`.
 - Unchanged: a 429 or 5xx before any payment still falls back, the Base
   client's one retry of a 502/503 still re-sends the same signed payment
   (it can settle at most once), and the Solana stale-blockhash re-sign
   still happens inside the payment step.
+
+### Changed — a Solana batch payment in doubt is raised, never paid again
+
+Batch now separates what the gateway's answer to a sent payment proves into
+charged, not charged, and in doubt, in one place, and a call in doubt is
+never paid a second time.
+
+- **Trust model.** The gateway's explicit answer to a payment's first send is
+  proof that nothing was charged: a 402 or a recognised refusal
+  (`batch_payer_not_allowed`, `batch_payer_not_admitted`,
+  `batch_admission_paused`, `batch_server_signed_only`,
+  `PAYMENT_VERIFICATION_UNAVAILABLE`), with no receipt or a failed one with
+  no transaction, or a 429 whose failed receipt proves nothing was broadcast
+  (`batch_account_channel_capacity_exhausted`,
+  `batch_channel_capacity_exhausted`, `batch_deposit_rate_limited`). The
+  call then pays `exact`, or after such a 429 backs off and pays again with
+  a new batch payment built from a fresh 402 (`exact` once `rateLimit` runs
+  out). The refusal list is closed: an unknown `batch_*` code is no longer
+  taken as "nothing charged".
+- **Everything else is in doubt** and throws `BatchPaymentUnresolvedError`:
+  an exception after the payment was sent (timeout, abort, network error,
+  whatever its `cause.code`); a 5xx or other error status without a
+  recognised refusal; a receipt naming a transaction, saying
+  `settlement_pending`, or saying it succeeded on an error status; a 429 with
+  any receipt that does not prove nothing was broadcast. Before, a timeout or
+  a bare 5xx after a batch payment surfaced as a raw error or an `APIError`.
+- **A 429 without a receipt** gets ONE byte-identical replay after its
+  backoff (same request id, signed authorization and signed deposit
+  transaction). Only a 2xx with a success receipt ends the doubt; any other
+  answer to the replay (a 402 or `duplicate_settlement`, which mean the
+  original reached the gateway, another 429, a 5xx, a timeout, a 2xx without
+  a success receipt) raises. Before, it was replayed up to `maxAttempts - 1`
+  times.
+- **Nothing replaces a payment in doubt**: no new authorization, no new
+  deposit, no `exact`, and no `fallbackModels` / `smartChat()` fallback
+  model. The chain-proof rule that let an expired, absent channel open be
+  rebuilt from a fresh 402 is gone, with every use of the 402's
+  `lastValidBlockHeight`: a hostile 402 could name 0 and get a second open
+  signed, and chain state never proves the gateway did not charge.
+- `BatchPaymentUnresolvedError` (a `PaymentError`, retry disposition
+  `'paid-or-in-doubt'`) carries `wallet`, `requestId`, `channelId`,
+  `payloadKind` (`'open' | 'top-up' | 'authorization'`), `depositInDoubt`,
+  `status`, `cause` (the gateway's answer as an `APIError`, or the transport
+  error) and `reason`: `'replay_unresolved'`, `'ambiguous_rate_limit'`,
+  `'no_response'` or `'outcome_unknown'`. Each raise is an `unresolved`
+  event, one stderr line, and counts in `getBatchStats().unresolved` /
+  `unresolvedByReason`.
+- Resolving a payment in doubt automatically needs gateway support (a
+  receipt on every response to a paid request, and a request-status lookup
+  that fences an unknown request id). Until then the SDK raises.
+
+### Fixed — a 429 on a Solana batch payment backs off and retries
+
+- A 429 from the gateway on a batch payment (channel open, top-up or
+  authorization) raised `APIError`, so the call failed. Every later call then
+  built and sent a fresh channel open, spending the account's deposit-attempt
+  budget at the facilitator again. Now the call waits for `Retry-After`
+  (seconds or an HTTP date; without one, about 1s, 2s, 4s with jitter) and
+  tries again as above (a new payment when the 429 proves nothing was
+  broadcast, the one replay when it has no receipt). While the wallet cools
+  down, its other calls wait too instead of sending opens of their own.
+- New `batch.rateLimit: { maxAttempts, maxWaitMs }` bounds it per call
+  (defaults `3` batch payments sent, the first included, and `60000` ms of
+  waiting; exported as `DEFAULT_BATCH_RATE_LIMIT`).
+- A retried payment is rebuilt from a fresh 402 challenge (the original's
+  blockhash and slot hints may be stale by then). That challenge is the
+  request itself, sent unpaid: a 2xx answer is the call's result, with
+  nothing paid (`recovered`, `served_unpaid_on_rechallenge`); any other
+  answer, or none, is thrown with retry disposition `'unpaid'`. An earlier
+  revision of this branch paid `exact` against the stale challenge instead
+  (`challenge_refresh_failed`), which could discard a served 2xx and run and
+  charge the request twice.
+- A `Retry-After` that is not finite (a long run of digits made the delay
+  `Infinity`) or longer than a day is ignored, and the default backoff
+  applies. Before, `Infinity` went into the wallet's shared cooldown and
+  kept every later call on `exact` until the process restarted. The shared
+  cooldown is also capped at `maxWaitMs`; a call that cannot wait out the
+  header within its own budget still pays `exact` at once.
+
+### Fixed — a deposit in doubt is settled from finalized chain state only
+
+- Every channel read (the re-read of a record in doubt, and the settled
+  amount that sizes a top-up under `maxDeposit`) is now at `finalized`
+  commitment. A confirmed read could come from a fork that loses.
+- While an open or top-up is in doubt, the wallet signs no batch payment at
+  all, so no second deposit can land next to it; its calls pay `exact`
+  (`channel_resync_pending`). The deposit has landed once the finalized
+  channel holds it, and has provably never landed once the finalized chain
+  is 300 blocks past a block height the SDK read itself after building the
+  payment and a read at least that recent still does not show it. The old
+  two-minute wall-clock window is gone: block height does not advance on a
+  halted cluster. A finalized read that lags a confirmed top-up no longer
+  shrinks the record.
+- A deposit is expected exactly once. When an open or top-up got an error
+  status with a valid success receipt, the scheme committed the deposit and
+  the re-read then added it to the record a second time, so the finalized
+  channel always looked short and batch and close stayed blocked until the
+  300-block expiry. The re-read now uses the deposit computed before the
+  payment was sent (the journaled value).
+- If the chain shows a larger deposit than the record before a top-up, the
+  call pays `exact` and the channel is re-read first (`deposit_unrecorded`),
+  instead of sizing the top-up from the stale record.
+- If that read shows the stored channel closing or closed, or not this
+  wallet's for its operator and mint, no top-up is signed into it. Before,
+  the check only skipped the settled-amount read, and the scheme signed a
+  top-up against the stale record. The record is re-read at once
+  (`channel_unusable`): a closed channel's record is dropped and the call
+  goes on as with no channel (a fresh open when it fits), anything else
+  keeps the record and pays `exact` (`channel_unreadable`).
+
+### Fixed — crash safety for batch deposits
+
+- With the file store, every open or top-up is journaled to
+  `<wallet>.json.deposit-intents`, the store's full path plus a suffix, so
+  two stores never share one (`/x/channels` and `/x/channels.json` did when
+  the name was derived by stripping `.json`; intents an earlier build wrote
+  under the old name are moved on start, only the wallet's own, and an old
+  journal that cannot be read keeps batch off) (mode `0600`; the file and its directory
+  fsynced where the platform allows) before it is sent, and removed once
+  reconciled. After a crash, each intent left there is treated as a deposit
+  in doubt: no deposit is signed for the wallet until the chain settles it,
+  and the old payment is never re-sent nor its request paid again. A
+  deposit that cannot be journaled is not sent (`deposit_journal_failed`,
+  paid `exact`). Only a missing journal counts as empty: one that cannot be
+  read or is not a well-formed version-1 journal (no `intents`, an unknown
+  `version`, a malformed intent) keeps batch off for the wallet
+  (`deposit_journal_unreadable`, paid `exact`), so an in-flight deposit is
+  never dropped by reading a damaged file as empty.
+- With `channelStore: false` crash recovery of a deposit in doubt is not
+  available; the README says so.
+- A charge is counted once when the scheme cannot save a reconciled
+  receipt (say, the disk is full): the SDK's view of the channel kept the
+  new cumulative even though the save failed, and the re-read then added
+  that call's charge on top, persisting an inflated cumulative. The view is
+  now updated only after the save succeeds.
+- Recovering an intent never moves the saved cumulative charge backwards. If
+  the process died, or the journal could not be cleared, after a deposit's
+  receipt was reconciled and saved, the leftover intent still held the
+  cumulative from before the deposit; the chain's settled amount can lag
+  too, because vouchers are redeemed later. The re-read rewrote the record
+  with that stale value, and every later voucher failed to reconcile. It now
+  keeps the highest of the intent's, the saved record's and the settled
+  amount.
+
+### Fixed — two copies of the SDK in one process no longer steal each other's channel lock
+
+- The CJS and ESM builds (or two installs of the package) loaded in one
+  process had separate batch state but the same pid, so the second copy took
+  the first copy's live channel-file lock for a stale one, removed it, and
+  ran its own scheme over the same channel: both could open a channel or top
+  it up from the same balance, past `maxDeposit` together. Batch wallet
+  state and held locks now live in one process-wide registry shared by
+  every copy; a random ownership token in a sidecar beside the lock
+  (`<lock>.owner`) makes sure a release only removes the lock its own owner
+  took; and a lock naming the current process that this SDK version did not
+  take is never treated as stale.
+- The lock file itself still holds only the bare pid, the format released
+  versions write and read (`Number(raw.trim())`). A lock in any other format
+  reads as `NaN` to them, so a process still on 3.19.x sharing the channel
+  store (a rolling upgrade) would take a live lock for a stale one, remove
+  it, and both could top up past `maxDeposit`.
+
+### Changed — `closeBatchChannel()` waits for doubt to clear
+
+- It now throws `BatchCloseDeferredError` and closes nothing while a batch
+  call for the wallet is in flight (`reason: 'call_in_flight'`) or while any
+  of its deposits is in doubt (`reason: 'deposit_in_doubt'`, with
+  `channelIds`). Before, a close after a failed re-read refunded anyway, so
+  a deposit that landed later could be stranded.
+- A chat that was still waiting for its first, unpaid answer when a close
+  completed pays `exact` (`closed_during_call`) instead of opening a new
+  channel once its 402 arrives. The close could not see it: a call counted
+  as in flight only once it had its 402.
+
+### Fixed — Solana batch never opens a client-signed channel
+
+- A gateway could offer a client-signed batch accept (`extra.voucherSigner`
+  omitted or `"client"`), and `@x402/svm` would open that channel: when it was
+  the only batch accept, or as its fallback when the server-signed accept
+  named an untrusted operator. `closeBatchChannel()` closes only against a
+  trusted server-signed accept, so that channel's escrow could not be
+  refunded through the SDK. Client-signed batch accepts are now removed
+  before the scheme sees the 402; a 402 whose only batch accepts are
+  client-signed pays `exact` (`client_signed_not_supported`).
+- A client-signed channel an earlier SDK version opened stays refundable:
+  when the trusted server-signed accept has no stored record (or there is
+  none), `closeBatchChannel()` closes the stored client-signed channel the
+  challenge's client-signed accept names, through `@x402/svm`'s client-signed
+  refund (a payer-signed voucher at its confirmed cumulative).
+
+### Fixed — `maxDeposit` caps the escrow at stake, not lifetime deposits
+
+- `@x402/svm` checks a top-up against `maxDeposit - deposit`, where `deposit`
+  is everything the channel ever took. Once a long-lived channel's deposits
+  added up to `maxDeposit`, every top-up failed and the client paid `exact`
+  forever while its channel stayed open. A top-up is now allowed while
+  `(deposit - settled) + topUp <= maxDeposit`, with `settled` read from the
+  channel account on-chain (at `finalized` commitment) just before the
+  top-up. If that read fails, nothing is assumed settled (the old, stricter
+  cap).
+- That read now runs the same `@x402/svm` channel-layout check as the
+  re-read of a record in doubt. Before, a peer `@x402/svm` with a moved
+  layout would have been decoded with stale offsets, so a wrong `deposit` or
+  `settled` could size the top-up and widen `maxDeposit`. When the layout
+  does not match, nothing is decoded: the call signs no deposit and pays
+  `exact` (`channel_unreadable`), and the record is kept. The same goes for
+  an account at the channel's address that cannot be read as a channel
+  (another owner, short data, an unsupported encoding): before, that was
+  taken for a failed read, and the top-up was signed anyway. Only an RPC that
+  cannot answer still keeps the stricter lifetime cap and goes on. A re-read that
+  fails the check now reports `channel_unreadable` too (was
+  `channel_resync_failed`).
+- The trust bound is unchanged in kind: `maxDeposit` is the most the operator
+  could claim beyond what has already been settled on-chain without a new
+  payer-signed authorization.
+
+### Docs — the batch deposit rule
+
+- The README said the default deposit is 5x the call's ceiling. The scheme
+  first uses the 402's `extra.minDeposit` when it covers the ceiling (the
+  `@x402/svm` server defaults it to 3x the ceiling), else 5x the ceiling,
+  never less than the call needs and never more than the room `maxDeposit`
+  leaves.
+
+### Fixed — Solana batch sends your RPC headers
+
+- The batch scheme was built with `rpcUrl` only, so `rpcHeaders`,
+  `SOLANA_RPC_HEADERS` and `SOLANA_RPC_API_KEY` never reached its RPC calls.
+  An endpoint that needs header auth refused them, and every call silently
+  paid `exact`. The scheme's RPC requests (mint, blockhash, slot, channel
+  scan) and the SDK's own channel re-reads now carry the same headers as the
+  `exact` path. `@x402/svm` takes no headers, so they are added by a wrapper
+  around the global `fetch` that only touches requests to exactly that RPC URL
+  made during a batch payment, and is installed only when headers are set.
+- Clients of one wallet with different RPC headers count as different batch
+  options, like a different `rpcUrl`.
+
+### Fixed — Solana batch keeps a funded channel instead of forgetting it
+
+- Any deposit or top-up without a clean receipt made the SDK delete its
+  channel record, including a top-up the gateway refused on a healthy
+  channel. The scheme then had to find the channel again with an on-chain
+  program scan, which many RPCs refuse; when the scan came back empty it
+  opened a second channel. A refused or rate-limited deposit charges nothing,
+  so the record is now kept as it was confirmed.
+- When the record really is in doubt (a deposit that got no answer or failed
+  after it may have been funded, a receipt that is missing or was rebuilt
+  without a voucher, or a pending deposit left by a process that died), the
+  SDK re-reads that channel by its address before the next payment and
+  rewrites the record from the chain: the on-chain deposit, and the higher of
+  the confirmed cumulative charge and the on-chain settled amount. Crash
+  recovery no longer deletes the record.
+- Only an absent account (`value: null`) counts as "no channel". An account
+  at the channel's address that cannot be read as this wallet's channel keeps
+  the record and pays `exact` (`channel_unreadable`); it never leads to a new
+  deposit.
+- Until the re-read succeeds the call pays `exact` (`channel_resync_failed`),
+  and a channel the chain does not show yet is pending until finality proves
+  its deposit can no longer land (`channel_resync_pending`, see above), so
+  nothing opens a second channel over a deposit that may still land. Each
+  re-read emits a `resync` event and counts in `getBatchStats().resyncs`.
+  `SolanaBatchEvent.type` gains `'resync'`.
+- `channelStore: false` now keeps records in an in-memory store, so a
+  repaired record survives the scheme being rebuilt.
+- `closeBatchChannel()` throws while a chat call for the wallet is in flight,
+  including one sleeping out a 429 before its retry or replay. Before, a
+  close could refund the channel during that sleep, and the waking call then
+  opened a new channel the caller believed was closed.
+- `closeBatchChannel()` re-reads a record left in doubt (such as a pending
+  deposit from a process that died) and loads the stored channel into the
+  scheme before refunding. `@x402/svm`'s refund otherwise finds a channel it
+  does not hold in memory only by an on-chain scan, so the escrow could not be
+  recovered on an RPC that refuses scans until another paid call ran.
+- `closeBatchChannel()` closes only the channel the gateway's refund
+  challenge names (its trusted operator, receiver authorizer, fee payer,
+  asset and receiver), and afterwards forgets only that channel's record.
+  Before, it loaded every stored channel, and `@x402/svm`'s refund falls back
+  to the first one in memory for the same receiver and asset, so during an
+  operator-key rotation a close could target the other operator's channel or
+  fail. A successful close also deleted every record, stranding the other
+  channel's escrow on an RPC that refuses program scans.
+
+### Added — batch-settlement fallbacks are never silent
+
+- Every fallback, 429 backoff and recovery now logs one structured line to
+  stderr each time (`[@blockrun/llm] batch-settlement event=... reason=...
+  status=... errorReason=... retryAfterMs=... attempt=... wallet=... next=...`).
+  Before, each fallback reason was logged once per process and some were not
+  logged at all.
+- `batch.onEvent` receives the same events as `SolanaBatchEvent` objects:
+  `{ type: 'fallback' | 'backoff' | 'recovered' | 'resync' | 'unresolved',
+  reason, status?, errorReason?, retryAfterMs?, attempt?, detail?, wallet, at }`.
+- `SolanaLLMClient.getBatchStats()` returns the client's counters:
+  `{ fallbacks, fallbacksByReason, backoffs, retries, recoveries, resyncs,
+  unresolved, unresolvedByReason }`.
 
 ### Fixed — batch-settlement spend is the metered charge, not the ceiling
 
