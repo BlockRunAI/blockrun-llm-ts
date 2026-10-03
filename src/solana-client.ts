@@ -308,9 +308,19 @@ export class SolanaLLMClient {
   /**
    * Close this wallet's batch-settlement channel and return its unused escrow.
    *
-   * The gateway closes it cooperatively when it can; otherwise this starts a
-   * payer-forced close and the escrow comes back after the channel's grace
-   * period. Only meaningful with the `batch` option.
+   * Closes the channel for the operator the gateway's current 402 names; a
+   * channel opened with another trusted operator key (during a key rotation)
+   * keeps its record. The gateway closes it cooperatively when it can;
+   * otherwise this starts a payer-forced close and the escrow comes back
+   * after the channel's grace period. Only meaningful with the `batch`
+   * option.
+   *
+   * @throws BatchCloseDeferredError, closing nothing, while a chat call for
+   *   this wallet is still in flight (including one waiting out a 429, so a
+   *   retry can never reopen a channel you just closed), or while one of its
+   *   deposits is in doubt (until a `finalized` chain read shows it landed or
+   *   that it no longer can, usually a few minutes after it was sent). Call
+   *   it again later.
    */
   async closeBatchChannel(): Promise<unknown> {
     if (!this.batchPayer) throw new Error("closeBatchChannel() requires the `batch` option in wallet mode");
@@ -963,6 +973,9 @@ export class SolanaLLMClient {
     body: Record<string, unknown>
   ): Promise<ChatResponse> {
     const url = `${this.apiUrl}${endpoint}`;
+    // Taken before the first request: a channel close that completes while
+    // this call waits for its 402 keeps it from opening a new channel.
+    const closesAtStart = await this.batchPayer?.closeFence();
     for (let staleRetries = 0; ; ) {
       const response = await this.sendUnpaid(url, {
         method: "POST",
@@ -1005,7 +1018,8 @@ export class SolanaLLMClient {
                 }
                 if (challenge.ok) return { kind: "served", response: challenge };
                 throw await unpaidApiError(challenge);
-              }
+              },
+              closesAtStart
             );
             // Paid; served by the fresh unpaid challenge; failed before any
             // payment (an "unpaid" error); or proven not charged (fallback).

@@ -16,6 +16,7 @@ import { SolanaLLMClient } from "../../src/solana-client";
 import {
   __resetBatchWalletsForTests,
   __setBatchSleepForTests,
+  BatchCloseDeferredError,
   BatchPaymentUnresolvedError,
   FileIntentJournal,
   ChannelResyncRequiredError,
@@ -1332,6 +1333,81 @@ describe("SolanaLLMClient batch-settlement", () => {
       expect(storedRecord()).toMatchObject({ channelId, deposit: "55000", chargedCumulativeAmount: "2000" });
     });
 
+    it("closes a channel whose open got no answer, once the re-read restores it", async () => {
+      const c = kept();
+      stubExact(c);
+      let channelId = "";
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        (_url, init) => {
+          channelId = channelIdOf(decodePayment(init));
+          throw new TypeError("fetch failed");
+        }
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).rejects.toBeInstanceOf(BatchPaymentUnresolvedError);
+      // The scheme rolled the open back (no record stored), but it landed.
+      // This RPC cannot scan, so only the re-read can bring the channel back.
+      expect(fs.existsSync(path.join(tmp, "channels.json")) ? Object.keys(JSON.parse(fs.readFileSync(path.join(tmp, "channels.json"), "utf8"))) : []).toEqual([]);
+      chain.set(channelId, channelAccount({ payer: await c.getWalletAddress(), operator: operator.address, deposit: 25000n }));
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]), // the refund's probe
+        (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("refund");
+          expect(payment.payload.authorization.channelId).toBe(channelId);
+          const receipt = { success: true, transaction: "close-tx", network: NETWORK };
+          return new Response("{}", {
+            status: 200,
+            headers: { "PAYMENT-RESPONSE": Buffer.from(JSON.stringify(receipt)).toString("base64") },
+          });
+        }
+      );
+
+      await expect(c.closeBatchChannel()).resolves.toMatchObject({ success: true });
+      expect(events).toEqual([
+        expect.objectContaining({ type: "unresolved", reason: "no_response" }),
+        expect.objectContaining({ type: "resync", reason: "deposit_unanswered" }),
+      ]);
+    });
+
+    it("closes a channel left with a pending deposit by a process that died", async () => {
+      const first = kept();
+      stubExact(first);
+      const channelId = await openChannel(first);
+      const record = storedRecord();
+      const file = path.join(tmp, "channels.json");
+      const [key] = Object.keys(JSON.parse(fs.readFileSync(file, "utf8")));
+      fs.writeFileSync(file, JSON.stringify({
+        [key]: {
+          ...record,
+          hasConfirmedState: true,
+          pending: [{ amount: "30000", chargedCumulativeAmount: "31000", deposit: "55000", operationKey: key, payment: { x402Version: 2, payload: { type: "deposit" } } }],
+        },
+      }));
+      // The top-up landed. This RPC cannot scan, so the refund cannot find the channel on its own.
+      chain.set(channelId, channelAccount({ payer: await first.getWalletAddress(), operator: operator.address, deposit: 55000n, settled: 1000n }));
+      __resetBatchWalletsForTests();
+
+      const second = kept();
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]), // the refund's probe
+        (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("refund");
+          expect(payment.payload.authorization.channelId).toBe(channelId);
+          const receipt = { success: true, transaction: "close-tx", network: NETWORK };
+          return new Response("{}", {
+            status: 200,
+            headers: { "PAYMENT-RESPONSE": Buffer.from(JSON.stringify(receipt)).toString("base64") },
+          });
+        }
+      );
+
+      await expect(second.closeBatchChannel()).resolves.toMatchObject({ success: true });
+      expect(events).toEqual([expect.objectContaining({ type: "resync", reason: "orphaned_deposit" })]);
+      expect(fs.existsSync(file)).toBe(false);
+    });
+
     it("drops an orphaned open that never landed, once finality is past it", async () => {
       const first = kept();
       stubExact(first);
@@ -1409,7 +1485,7 @@ describe("SolanaLLMClient batch-settlement", () => {
         expect(fs.existsSync(intentsFile())).toBe(false);
       });
 
-      it("after a crash with a top-up in flight, signs no deposit and re-sends nothing until the chain settles it", async () => {
+      it("after a crash with a top-up in flight, signs no deposit, re-sends nothing and defers close until the chain settles it", async () => {
         const first = kept({ maxDeposit: "$1" });
         stubExact(first);
         const channelId = await openChannel(first);
@@ -1444,6 +1520,8 @@ describe("SolanaLLMClient batch-settlement", () => {
         await second.chat("openai/gpt-4o-mini", "gm");
         expect(exact).toHaveBeenCalledTimes(1);
         expect(events.at(-1)).toMatchObject({ type: "fallback", reason: "channel_resync_pending" });
+        const deferred = await second.closeBatchChannel().catch((err: unknown) => err);
+        expect(deferred).toMatchObject({ name: "BatchCloseDeferredError", reason: "deposit_in_doubt", channelIds: [channelId] });
 
         // The top-up landed: adopted from the finalized chain, and batch resumes.
         chain.set(channelId, channelAccount({ payer, operator: operator.address, deposit: 25000n + topUp }));
@@ -1669,6 +1747,40 @@ describe("SolanaLLMClient batch-settlement", () => {
         await c.chat("openai/gpt-4o-mini", "gm");
 
         expect(files).toEqual([]);
+      });
+
+      it("defers closeBatchChannel while a deposit is in doubt, then closes once the chain settles it", async () => {
+        const c = kept();
+        stubExact(c);
+        let channelId = "";
+        gateway.push(
+          () => quote402([exactAccept(), batchAccept(operator.address)]),
+          (_url, init) => {
+            channelId = channelIdOf(decodePayment(init));
+            throw new DOMException("The operation was aborted.", "AbortError");
+          }
+        );
+        await expect(c.chat("openai/gpt-4o-mini", "gm")).rejects.toBeInstanceOf(BatchPaymentUnresolvedError);
+        const sent = gatewayCalls.length;
+
+        const deferred = await c.closeBatchChannel().catch((err: unknown) => err);
+        expect(deferred).toBeInstanceOf(BatchCloseDeferredError);
+        expect(deferred).toMatchObject({ reason: "deposit_in_doubt", wallet: await c.getWalletAddress(), channelIds: [channelId] });
+        // Not even the refund probe went out.
+        expect(gatewayCalls).toHaveLength(sent);
+
+        chain.set(channelId, channelAccount({ payer: await c.getWalletAddress(), operator: operator.address, deposit: 25000n }));
+        gateway.push(
+          () => quote402([exactAccept(), batchAccept(operator.address)]),
+          (_url, init) => {
+            const payment = decodePayment(init);
+            expect(payment.payload.type).toBe("refund");
+            expect(payment.payload.authorization.channelId).toBe(channelId);
+            const receipt = { success: true, transaction: "close-tx", network: NETWORK };
+            return new Response("{}", { status: 200, headers: { "PAYMENT-RESPONSE": Buffer.from(JSON.stringify(receipt)).toString("base64") } });
+          }
+        );
+        await expect(c.closeBatchChannel()).resolves.toMatchObject({ success: true });
       });
     });
 
@@ -2231,6 +2343,206 @@ describe("SolanaLLMClient batch-settlement", () => {
     await c.chat("openai/gpt-4o-mini", "gm");
   });
 
+  it("opens nothing for a call that was waiting for its 402 while the channel was closed", async () => {
+    const events: SolanaBatchEvent[] = [];
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const c = client({ onEvent: (event) => events.push(event) });
+    const exact = stubExact(c);
+    gateway.push(
+      () => quote402([exactAccept(), batchAccept(operator.address)]),
+      async (_url, init) => servedWithVoucher(operator, channelIdOf(decodePayment(init)), 1000n, 1000n)
+    );
+    await c.chat("openai/gpt-4o-mini", "gm");
+
+    // A chat whose first, unpaid request is still in flight...
+    let answerChallenge!: () => void;
+    const challengeHeld = new Promise<void>((resolve) => { answerChallenge = resolve; });
+    gateway.push(async () => {
+      await challengeHeld;
+      return quote402([exactAccept(), batchAccept(operator.address)]);
+    });
+    const pending = c.chat("openai/gpt-4o-mini", "gm");
+    await vi.waitFor(() => expect(gatewayCalls).toHaveLength(3));
+
+    // ...while the channel is closed: nothing is inside pay() yet, so the close goes through.
+    gateway.push(
+      () => quote402([exactAccept(), batchAccept(operator.address)]), // the refund probe
+      (_url, init) => {
+        expect(decodePayment(init).payload.type).toBe("refund");
+        const receipt = { success: true, transaction: "close-tx", network: NETWORK };
+        return new Response("{}", { status: 200, headers: { "PAYMENT-RESPONSE": Buffer.from(JSON.stringify(receipt)).toString("base64") } });
+      }
+    );
+    await expect(c.closeBatchChannel()).resolves.toMatchObject({ success: true });
+
+    // Its 402 arrives after the close: it pays exact, it does not open a new channel.
+    gateway.push(() => new Response(JSON.stringify(CHAT_OK), { status: 200 }));
+    answerChallenge();
+    await expect(pending).resolves.toBe("gm");
+
+    expect(exact).toHaveBeenCalledTimes(1);
+    expect((gatewayCalls.at(-1)?.init?.headers as Record<string, string>)["PAYMENT-SIGNATURE"]).toBe("exact-payload");
+    expect(events.at(-1)).toMatchObject({ type: "fallback", reason: "closed_during_call" });
+    expect(fs.existsSync(path.join(tmp, "channels.json"))).toBe(false);
+  });
+
+  it("closes only the channel the refund challenge names, keeping the other operator's record", async () => {
+    // An operator-key rotation: both keys trusted, one channel opened with each.
+    const rotated = await generateKeyPairSigner();
+    const c = client({ operators: [operator.address, rotated.address] });
+    stubExact(c);
+    const file = path.join(tmp, "channels.json");
+    const opened: Record<string, string> = {};
+    for (const signer of [operator, rotated]) {
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(signer.address)]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("deposit");
+          opened[signer.address] = channelIdOf(payment);
+          return servedWithVoucher(signer, opened[signer.address], 1000n, 1000n);
+        }
+      );
+      await c.chat("openai/gpt-4o-mini", "gm");
+    }
+    expect(opened[rotated.address]).not.toBe(opened[operator.address]);
+    const stored = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, Record<string, any>>;
+    expect(Object.keys(stored)).toHaveLength(2);
+    const [oldKey, oldRecord] = Object.entries(stored).find(([, record]) => record.channelId === opened[operator.address])!;
+
+    /** A refund challenge naming one operator, and the refund the close must send under it. */
+    const refundFor = (signer: KeyPairSigner) => [
+      () => quote402([exactAccept(), batchAccept(signer.address)]),
+      (_url: string, init?: RequestInit) => {
+        const payment = decodePayment(init);
+        expect(payment.payload.type).toBe("refund");
+        expect(payment.payload.authorization.channelId).toBe(opened[signer.address]);
+        expect(payment.payload.channelConfig.payerAuthorizer).toBe(signer.address);
+        expect(payment.accepted.extra.operator).toBe(signer.address);
+        const receipt = { success: true, transaction: "close-tx", network: NETWORK };
+        return new Response("{}", {
+          status: 200,
+          headers: { "PAYMENT-RESPONSE": Buffer.from(JSON.stringify(receipt)).toString("base64") },
+        });
+      },
+    ];
+
+    rpcMethods.length = 0;
+    gateway.push(...refundFor(rotated));
+    await expect(c.closeBatchChannel()).resolves.toMatchObject({ success: true });
+    // The other channel's record is untouched.
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({ [oldKey]: oldRecord });
+
+    // And it can still be closed without a program scan, which this RPC refuses.
+    gateway.push(...refundFor(operator));
+    await expect(c.closeBatchChannel()).resolves.toMatchObject({ success: true });
+    expect(fs.existsSync(file)).toBe(false);
+    expect(rpcMethods).not.toContain("getProgramAccounts");
+  });
+
+  describe("legacy client-signed channels", () => {
+    /** The route offered client-signed, as an earlier SDK version could have paid it: no operator. */
+    function legacyAccept() {
+      const { voucherSigner: _server, operator: _operator, ...extra } = batchAccept(operator.address).extra;
+      return { ...batchAccept(operator.address), extra };
+    }
+
+    /** A client-signed channel record an earlier SDK version stored for legacyAccept()'s route. */
+    async function storeLegacyChannel(c: SolanaLLMClient, existing: Record<string, unknown> = {}) {
+      const payer = await c.getWalletAddress();
+      const channelId = (await generateKeyPairSigner()).address;
+      const key = [NETWORK, USDC, RECEIVER, FEE_PAYER, 86_400, RECEIVER_AUTHORIZER, "client", ""].join(":");
+      const record = {
+        channelConfig: {
+          openSlot: Number(OPEN_SLOT),
+          payer,
+          payerAuthorizer: payer,
+          receiver: RECEIVER,
+          receiverAuthorizer: RECEIVER_AUTHORIZER,
+          salt: "0",
+          token: USDC,
+          withdrawDelay: 86_400,
+        },
+        channelId,
+        chargedCumulativeAmount: "3000",
+        deposit: "25000",
+      };
+      fs.writeFileSync(path.join(tmp, "channels.json"), JSON.stringify({ ...existing, [key]: record }));
+      return { channelId, key };
+    }
+
+    /** The refund of a legacy channel: a payer-signed voucher at its confirmed cumulative, under the client-signed accept. */
+    function legacyRefund(channelId: string) {
+      return (_url: string, init?: RequestInit) => {
+        const payment = decodePayment(init);
+        expect(payment.payload.type).toBe("refund");
+        expect(payment.payload.authorization).toBeUndefined();
+        expect(payment.payload.voucher).toMatchObject({ channelId, maxClaimableAmount: "3000" });
+        expect(payment.accepted.extra.voucherSigner ?? "client").toBe("client");
+        expect(payment.accepted.extra.operator).toBeUndefined();
+        const receipt = { success: true, transaction: "close-tx", network: NETWORK };
+        return new Response("{}", { status: 200, headers: { "PAYMENT-RESPONSE": Buffer.from(JSON.stringify(receipt)).toString("base64") } });
+      };
+    }
+
+    it("refunds a stored client-signed channel, and still never pays a client-signed accept", async () => {
+      const events: SolanaBatchEvent[] = [];
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const c = client({ onEvent: (event) => events.push(event) });
+      const exact = stubExact(c);
+      const { channelId } = await storeLegacyChannel(c);
+      gateway.push(
+        () => quote402([exactAccept(), legacyAccept()]), // the refund probe
+        legacyRefund(channelId)
+      );
+
+      await expect(c.closeBatchChannel()).resolves.toMatchObject({ success: true });
+      expect(fs.existsSync(path.join(tmp, "channels.json"))).toBe(false);
+
+      // New payments: the same client-signed accept is still never paid.
+      gateway.push(
+        () => quote402([exactAccept(), legacyAccept()]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(events).toEqual([expect.objectContaining({ type: "fallback", reason: "client_signed_not_supported" })]);
+    });
+
+    it("closes the trusted server-signed channel first, then the legacy one", async () => {
+      const c = client({});
+      stubExact(c);
+      let serverChannel = "";
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => {
+          serverChannel = channelIdOf(decodePayment(init));
+          return servedWithVoucher(operator, serverChannel, 1000n, 1000n);
+        }
+      );
+      await c.chat("openai/gpt-4o-mini", "gm");
+      const file = path.join(tmp, "channels.json");
+      const { channelId: legacyChannel, key: legacyKey } = await storeLegacyChannel(c, JSON.parse(fs.readFileSync(file, "utf8")));
+      __resetBatchWalletsForTests();
+      const d = client({});
+      const both = () => quote402([exactAccept(), legacyAccept(), batchAccept(operator.address)]);
+      gateway.push(both, (_url, init) => {
+        const payment = decodePayment(init);
+        expect(payment.payload.type).toBe("refund");
+        expect(payment.payload.authorization.channelId).toBe(serverChannel);
+        const receipt = { success: true, transaction: "close-tx", network: NETWORK };
+        return new Response("{}", { status: 200, headers: { "PAYMENT-RESPONSE": Buffer.from(JSON.stringify(receipt)).toString("base64") } });
+      });
+
+      await expect(d.closeBatchChannel()).resolves.toMatchObject({ success: true });
+      expect(Object.keys(JSON.parse(fs.readFileSync(file, "utf8")))).toEqual([legacyKey]);
+
+      gateway.push(both, legacyRefund(legacyChannel));
+      await expect(d.closeBatchChannel()).resolves.toMatchObject({ success: true });
+      expect(fs.existsSync(file)).toBe(false);
+    });
+  });
+
   describe("429 backoff and fallback visibility", () => {
     let sleeps: number[];
     let events: SolanaBatchEvent[];
@@ -2711,6 +3023,49 @@ describe("SolanaLLMClient batch-settlement", () => {
       serveSecond();
       await expect(second).resolves.toBe("gm");
       expect(c.getBatchStats()).toMatchObject({ retries: 0, backoffs: 2, recoveries: 1 });
+    });
+
+    it("refuses to close the channel while a call sleeps out a 429 before retrying", async () => {
+      const releases: Array<() => void> = [];
+      __setBatchSleepForTests((ms) => {
+        sleeps.push(ms);
+        return new Promise<void>((resolve) => releases.push(resolve));
+      });
+      const c = observed();
+      const exact = stubExact(c);
+      let channelId = "";
+      let authorizations = 0;
+      const route = async (_url: string, init?: RequestInit): Promise<Response> => {
+        const header = (init?.headers as Record<string, string> | undefined)?.["PAYMENT-SIGNATURE"];
+        if (!header) return quote402([exactAccept(), batchAccept(operator.address)]);
+        const payment = decodePayment(init);
+        if (payment.payload.type === "deposit") {
+          channelId = channelIdOf(payment);
+          return servedWithVoucher(operator, channelId, 1000n, 1000n);
+        }
+        if (payment.payload.type === "refund") {
+          const receipt = { success: true, transaction: "close-tx", network: NETWORK };
+          return new Response("{}", { status: 200, headers: { "PAYMENT-RESPONSE": Buffer.from(JSON.stringify(receipt)).toString("base64") } });
+        }
+        authorizations += 1;
+        // A clean pre-broadcast refusal first: the call releases the channel and sleeps.
+        if (authorizations === 1) return tooMany({ "Retry-After": "2", ...preBroadcast() });
+        return servedWithVoucher(operator, channelId, 2000n, 1000n);
+      };
+      for (let i = 0; i < 10; i += 1) gateway.push(route);
+      await c.chat("openai/gpt-4o-mini", "gm");
+
+      const pending = c.chat("openai/gpt-4o-mini", "gm");
+      await vi.waitFor(() => expect(sleeps).toHaveLength(1));
+      const deferred = await c.closeBatchChannel().catch((err: unknown) => err);
+      expect(deferred).toBeInstanceOf(BatchCloseDeferredError);
+      expect(deferred).toMatchObject({ reason: "call_in_flight", message: expect.stringContaining("in flight") });
+
+      releases[0]();
+      await expect(pending).resolves.toBe("gm");
+      expect(exact).not.toHaveBeenCalled();
+      // Once nothing is in flight, the close goes through.
+      await expect(c.closeBatchChannel()).resolves.toMatchObject({ success: true });
     });
 
     it("falls back immediately on a non-429 refusal, and reports it", async () => {

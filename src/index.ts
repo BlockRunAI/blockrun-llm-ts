@@ -214,6 +214,7 @@ export {
   BLOCKRUN_SOL_OPERATOR,
   DEFAULT_BATCH_RATE_LIMIT,
   BatchPaymentUnresolvedError,
+  BatchCloseDeferredError,
   type BatchUnresolvedReason,
   type BatchPayloadKind,
   type SolanaBatchOptions,

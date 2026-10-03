@@ -61,8 +61,9 @@ import * as fs from "fs";
 import * as path from "path";
 import bs58 from "bs58";
 import { paths as corePaths } from "@blockrun/core";
-import { APIError, PaymentError, withDisposition, type PaymentRequired, type PaymentRequirement } from "./types";
+import { APIError, BlockrunError, PaymentError, withDisposition, type PaymentRequired, type PaymentRequirement } from "./types";
 import { sanitizeErrorResponse } from "./validation";
+import { parsePaymentRequired } from "./x402";
 
 export const BATCH_SCHEME = "batch-settlement";
 
@@ -163,7 +164,7 @@ export interface SolanaBatchEvent {
   /**
    * A short, stable code: `rate_limited`, `cooldown`, `not_offered`,
    * `client_signed_not_supported`, `channel_busy`, `untrusted_operator`, `deposit_over_cap`,
-   * `channel_pending`, `peer_dependency_missing`, `payment_creation_failed`,
+   * `channel_pending`, `closed_during_call`, `peer_dependency_missing`, `payment_creation_failed`,
    * `wallet_config_conflict`, `channel_store_locked`, `payment_required`,
    * `channel_resync_pending`, `channel_resync_failed`, `channel_unreadable`,
    * `served_unpaid_on_rechallenge` (a `recovered` event), or one of the gateway's refusal codes the
@@ -299,6 +300,34 @@ export class BatchPaymentUnresolvedError extends PaymentError {
 }
 
 /**
+ * `closeBatchChannel()` did not close anything, and should be called again
+ * later:
+ * - `call_in_flight`: a batch call for the wallet is still running (it may
+ *   be waiting out a 429 before its retry or replay);
+ * - `deposit_in_doubt`: a deposit the wallet sent (an open or top-up) has
+ *   not been settled yet. It settles once a `finalized` chain read shows it
+ *   landed, or once the finalized chain is past its last valid block,
+ *   usually a few minutes after it was sent.
+ *
+ * Not a payment error: nothing was sent.
+ */
+export class BatchCloseDeferredError extends BlockrunError {
+  readonly reason: "call_in_flight" | "deposit_in_doubt";
+  /** The paying wallet's address. */
+  readonly wallet: string;
+  /** The channels whose deposit is in doubt (`deposit_in_doubt`). */
+  readonly channelIds: string[];
+
+  constructor(init: { reason: "call_in_flight" | "deposit_in_doubt"; wallet: string; channelIds?: string[]; detail: string }) {
+    super(`batch-settlement channel close deferred for wallet ${init.wallet}: ${init.detail}`);
+    this.name = "BatchCloseDeferredError";
+    this.reason = init.reason;
+    this.wallet = init.wallet;
+    this.channelIds = init.channelIds ?? [];
+  }
+}
+
+/**
  * The outcome of one batch attempt.
  *
  * - `paid`: served, and paid with batch.
@@ -380,10 +409,14 @@ interface ChannelStorage {
 /** A wallet's own channel store: the file, or memory with `channelStore: false`. */
 interface OwnedChannelStorage extends ChannelStorage {
   clear(): void;
+  keys(): Promise<string[]>;
 }
 interface BuiltClient {
   http: HttpPaymentClient;
-  refund: (url: string) => Promise<unknown>;
+  /** Refund the channel loaded for `requirements` (the accept the close probed), skipping upstream's own probe. */
+  refund: (url: string, requirements: PaymentRequirement) => Promise<unknown>;
+  /** Load a stored channel into the scheme's memory, where its refund looks for it. */
+  load: (key: string) => Promise<void>;
 }
 
 const INSTALL_HINT = "npm install @x402/core@~2.28.0 @x402/svm@~2.28.0 @solana/kit";
@@ -446,6 +479,12 @@ export class FileChannelStorage implements ChannelStorage {
     this.write(all);
   }
 
+  /** The keys of every stored channel. */
+  async keys(): Promise<string[]> {
+    return Object.keys(this.read());
+  }
+
+
   /** Forget every channel in this file. */
   clear(): void {
     try {
@@ -477,6 +516,10 @@ export class MemoryChannelStorage implements OwnedChannelStorage {
 
   async delete(key: string): Promise<void> {
     this.records.delete(key);
+  }
+
+  async keys(): Promise<string[]> {
+    return [...this.records.keys()];
   }
 
   clear(): void {
@@ -1011,7 +1054,7 @@ export class ChannelBook implements ChannelStorage {
   private readonly seen = new Map<string, StoredRecord>();
 
   constructor(
-    readonly base: ChannelStorage & Partial<Pick<OwnedChannelStorage, "clear">>,
+    readonly base: ChannelStorage & Partial<Pick<OwnedChannelStorage, "clear" | "keys">>,
     private readonly onUnverified: (target: ResyncTarget) => void = () => {},
   ) {}
 
@@ -1059,6 +1102,11 @@ export class ChannelBook implements ChannelStorage {
     await this.base.delete(key);
   }
 
+  /** The keys of every stored channel. */
+  async keys(): Promise<string[]> {
+    return (await this.base.keys?.()) ?? [];
+  }
+
   /** The last record seen for a channel, even one the scheme has deleted since. */
   find(channelId: string): { key: string; record: StoredRecord } | undefined {
     for (const [key, record] of this.seen) {
@@ -1070,6 +1118,13 @@ export class ChannelBook implements ChannelStorage {
   clear(): void {
     this.seen.clear();
     this.base.clear?.();
+  }
+
+  /** Forget one channel: its stored record and the last record seen for it. An emptied store is removed. */
+  async forget(key: string): Promise<void> {
+    this.seen.delete(key);
+    await this.base.delete(key);
+    if ((await this.keys()).length === 0) this.clear();
   }
 }
 
@@ -1800,6 +1855,13 @@ interface WalletBatch {
   busy: boolean;
   /** Until when (ms since the epoch) the gateway asked this wallet to back off. */
   cooldownUntil: number;
+  /**
+   * Calls inside `pay()` for this wallet, including ones sleeping out a 429
+   * and about to retry. Unlike `busy` (one batch request in flight), this
+   * does not turn parallel calls away; it keeps a close from refunding the
+   * channel under a call that would then open a new one.
+   */
+  active: number;
   /** The scheme's channel store, kept across scheme rebuilds. */
   book: ChannelBook;
   /** Channel records to re-read from the chain before the next payment, by storage key. */
@@ -1813,6 +1875,13 @@ interface WalletBatch {
    * {@link SolanaBatchPayer.prepareTopUp}.
    */
   topUp?: { key: string; deposit: bigint; settled: bigint };
+  /**
+   * How many times `closeBatchChannel()` has closed a channel of this wallet.
+   * A call that captured a lower count before its first request
+   * ({@link SolanaBatchPayer.closeFence}) started before a close, and opens
+   * or tops up nothing after it.
+   */
+  closes: number;
 }
 
 /**
@@ -1963,7 +2032,7 @@ export class SolanaBatchPayer {
           detail: `cannot read ${(intents as FileIntentJournal).file}: ${err instanceof Error ? err.message : String(err)}`,
         };
       }
-      const created: WalletBatch = { config, busy: false, cooldownUntil: 0, book, resyncs, intents };
+      const created: WalletBatch = { config, busy: false, cooldownUntil: 0, active: 0, book, resyncs, intents, closes: 0 };
       // A deposit journaled by a process that died is in doubt: settle it
       // from the chain before anything pays into the wallet's channels.
       for (const intent of journaled) addResyncTarget(created, intentTarget(intent));
@@ -2010,9 +2079,16 @@ export class SolanaBatchPayer {
         processPaymentResult: (payload, getHeader, status) =>
           this.withRpcHeaders(() => raw.processPaymentResult(payload, getHeader, status)),
       };
+      // `loadChannel` is private upstream; without it, a refund falls back to
+      // the scheme's on-chain scan.
+      const loader = (scheme as unknown as { loadChannel?: (key: string) => Promise<unknown> }).loadChannel;
       return {
         http,
-        refund: (url: string) => this.withRpcHeaders(() => scheme.refund(url)),
+        refund: (url: string, requirements: PaymentRequirement) =>
+          this.withRpcHeaders(() => scheme.refund(url, { requirements: requirements as never })),
+        load: async (key: string) => {
+          if (typeof loader === "function") await loader.call(scheme, key);
+        },
       };
     })();
     wallet.client.catch(() => { wallet.client = undefined; });
@@ -2028,14 +2104,14 @@ export class SolanaBatchPayer {
   }
 
   /**
-   * Drop everything this wallet knows about its channel, on disk and in
-   * memory. The next call rebuilds the scheme, which reads the channel's real
-   * state (deposit, open or closed) from the chain.
+   * Drop everything this wallet knows about one channel, on disk and in
+   * memory, leaving its other channels' records alone. The scheme is rebuilt
+   * on the next call, without the closed channel in its memory.
    */
-  private forget(wallet: WalletBatch): void {
+  private async forget(wallet: WalletBatch, key: string): Promise<void> {
     wallet.client = undefined;
-    wallet.resyncs.clear();
-    wallet.book.clear();
+    wallet.resyncs.delete(key);
+    await wallet.book.forget(key);
   }
 
   /**
@@ -2301,11 +2377,17 @@ export class SolanaBatchPayer {
    *
    * The wallet stays in cooldown after a 429, so its other calls wait
    * instead of sending opens of their own.
+   *
+   * @param closesAtStart - {@link closeFence}, taken before the call's first
+   *   (unpaid) request. If a close completed since, the call pays exact
+   *   (`closed_during_call`): it started before the close, so it must not
+   *   open a channel the caller believes is closed.
    */
   async pay(
     paymentRequired: PaymentRequired,
     send: (headers: Record<string, string>) => Promise<Response>,
     rechallenge: () => Promise<Rechallenge>,
+    closesAtStart?: number,
   ): Promise<BatchAttempt> {
     const unavailable = batchUnavailable(paymentRequired);
     if (unavailable) return this.fallback(unavailable);
@@ -2317,7 +2399,34 @@ export class SolanaBatchPayer {
       return this.fallback(creationFailure(err));
     }
     if ("reason" in wallet) return this.fallback({ reason: wallet.reason, detail: wallet.detail });
-    return this.payWith(wallet, paymentRequired, send, rechallenge);
+    if (closesAtStart !== undefined && wallet.closes !== closesAtStart) {
+      return this.fallback({
+        reason: "closed_during_call",
+        detail: "closeBatchChannel() closed this wallet's channel after this call started; it opens no channel",
+      });
+    }
+    wallet.active += 1;
+    try {
+      return await this.payWith(wallet, paymentRequired, send, rechallenge);
+    } finally {
+      wallet.active -= 1;
+    }
+  }
+
+  /**
+   * The close fence for a call about to send its first request: how many
+   * closes this wallet has completed so far, to hand to {@link pay}.
+   * `close()` refuses while a call is inside `pay()`, but a call still
+   * waiting for its 402 is not there yet; the fence covers that window.
+   * Undefined when the wallet cannot be named (no fence then; `pay()`
+   * reports why batch is unavailable).
+   */
+  async closeFence(): Promise<number | undefined> {
+    try {
+      return registry.wallets.get(await this.init.address())?.closes ?? 0;
+    } catch {
+      return undefined;
+    }
   }
 
   /** {@link pay}, for a wallet this client may use. */
@@ -2970,25 +3079,137 @@ export class SolanaBatchPayer {
   }
 
   /**
-   * Close the channel and return its unused escrow to the wallet.
+   * Close the channel the gateway's current challenge names and return its
+   * unused escrow to the wallet.
    *
    * The scheme keeps a closed channel in its records, and would go on paying
-   * into it, so a successful close forgets the channel. The next batch call
-   * finds no open channel on-chain and opens a new one.
+   * into it, so a successful close forgets that channel. The next batch call
+   * finds no open channel on-chain and opens a new one. Any other channel
+   * (say, one opened with an operator key that is being rotated out) keeps
+   * its record, so it can still be closed without an on-chain scan. A
+   * client-signed channel an earlier SDK version opened is closed too, once
+   * the trusted server-signed one has no record (see {@link refundTarget}).
    *
    * @param url - any batch-enabled route on the gateway the channel was opened with.
+   * @throws BatchCloseDeferredError while a batch call for the wallet is in
+   *   flight, or while any of its deposits is in doubt (until a finalized
+   *   chain read settles it). Nothing is refunded or forgotten then.
    */
   async close(url: string): Promise<unknown> {
     const wallet = await this.wallet();
     if ("reason" in wallet) throw new Error(`batch-settlement unavailable: ${wallet.detail}`);
-    if (wallet.busy) throw new Error("batch-settlement channel has a request in flight; close it when the call returns");
+    // Refuse while any call is inside pay(), even one sleeping out a 429
+    // between attempts: it would wake up and open a new channel the caller
+    // believes is closed.
+    if (wallet.busy || wallet.active > 0) {
+      throw new BatchCloseDeferredError({
+        reason: "call_in_flight",
+        wallet: await this.init.address(),
+        detail: "a batch call is in flight (it may be waiting out a 429); close the channel when it returns",
+      });
+    }
     wallet.busy = true;
     try {
-      const result = await (await this.build(wallet)).refund(url);
-      this.forget(wallet);
+      // Settle what the SDK already knows is in doubt before probing anything.
+      await this.settleDoubtsForClose(wallet);
+      const { accept, key } = await this.refundTarget(wallet, url);
+      const result = await (await this.prepareClose(wallet, key)).refund(url, accept);
+      // Closed: a call that started before now opens nothing (closeFence).
+      wallet.closes += 1;
+      await this.forget(wallet, key);
       return result;
     } finally {
       wallet.busy = false;
+    }
+  }
+
+  /**
+   * Re-read every distrusted channel before a close. A deposit still in
+   * doubt defers the close: refunding (or forgetting) a channel a deposit
+   * may yet land on could strand that deposit, and after a restart nothing
+   * would remember it. A record re-read that only failed for another reason
+   * (an RPC error on a channel with no deposit in doubt) does not.
+   */
+  private async settleDoubtsForClose(wallet: WalletBatch): Promise<void> {
+    try {
+      await this.resync(wallet);
+    } catch (err) {
+      if (!(err instanceof ResyncError)) throw err;
+      const inDoubt = [...wallet.resyncs.values()].filter((target) => target.expectDeposit !== undefined);
+      if (inDoubt.length > 0) {
+        throw new BatchCloseDeferredError({
+          reason: "deposit_in_doubt",
+          wallet: await this.init.address(),
+          channelIds: inDoubt.map((target) => target.channelId),
+          detail: `a deposit on channel ${inDoubt.map((target) => target.channelId).join(", ")} is in doubt (${err.message}); close once a finalized chain read settles it`,
+        });
+      }
+    }
+  }
+
+  /**
+   * The channel a close targets: the one the gateway's refund challenge
+   * names, by the scheme's storage key for its trusted server-signed accept
+   * (network, asset, receiver, fee payer, withdraw delay, receiver
+   * authorizer, operator). Probed with an unpaid GET, as `@x402/svm`'s own
+   * refund probes; that accept is then handed to the refund, so upstream
+   * does not probe again and pick another accept.
+   *
+   * A legacy client-signed channel (opened by an earlier SDK version, which
+   * could pay a client-signed accept; this one never opens one) must stay
+   * refundable. When the trusted server-signed accept has no stored record,
+   * or there is none, a client-signed accept in the challenge whose storage
+   * key names a stored client-signed record is the target instead, and the
+   * refund runs through `@x402/svm`'s client-signed path (a refund voucher
+   * signed by the payer at its confirmed cumulative). The signer modes match:
+   * a server-signed record is never refunded under a client-signed accept.
+   */
+  private async refundTarget(wallet: WalletBatch, url: string): Promise<{ accept: PaymentRequirement; key: string }> {
+    const probe = await fetch(url, { method: "GET" });
+    const header = probe.status === 402 ? probe.headers.get("PAYMENT-REQUIRED") : null;
+    if (!header) throw new Error(`refund probe expected a 402 with PAYMENT-REQUIRED from ${url}, got HTTP ${probe.status}`);
+    const paymentRequired = parsePaymentRequired(header);
+    const trusted = trustedBatchAccept(paymentRequired, this.init.options.operators);
+    const trustedKey = trusted ? channelKeyOf(trusted) : undefined;
+    if (!trusted || !trustedKey || !(await wallet.book.base.get(trustedKey))) {
+      for (const accept of (paymentRequired.accepts ?? []).filter(clientSignedBatch)) {
+        const key = channelKeyOf(accept);
+        const record = key ? await wallet.book.base.get(key) : undefined;
+        if (key && record && (record.channelConfig?.voucherSigner ?? "client") === "client") return { accept, key };
+      }
+    }
+    if (!trusted || !trustedKey) throw new Error(`${url} offers no batch-settlement accept with a trusted operator to close against`);
+    return { accept: trusted, key: trustedKey };
+  }
+
+  /**
+   * Get the stored channel `key` ready to refund.
+   *
+   * `@x402/svm` refunds a server-signed channel only from the scheme's memory,
+   * or after an on-chain scan that many RPCs refuse; it never reads the
+   * stored record. So the target channel is loaded into a freshly built
+   * scheme, and only that one: upstream's refund falls back to the first
+   * channel in memory for the same receiver and asset, whatever its operator.
+   * A record in doubt (a deposit this process never confirmed, or a pending
+   * deposit left by a process that died) is re-read from the chain before it
+   * is loaded. If a re-read cannot settle a record, the refund is still
+   * attempted and may find the channel by its scan.
+   */
+  private async prepareClose(wallet: WalletBatch, key: string): Promise<BuiltClient> {
+    for (let pass = 0; ; pass += 1) {
+      await this.settleDoubtsForClose(wallet);
+      // After the re-read, which can restore a record the scheme had dropped
+      // (an open it rolled back): a fresh scheme holds the target alone.
+      wallet.client = undefined;
+      const built = await this.build(wallet);
+      try {
+        await built.load(key);
+        return built;
+      } catch (err) {
+        // A pending deposit from a dead process: the book has queued its
+        // re-read; run it, then load again.
+        if (pass > 0 || !isResyncRequired(err)) return built;
+      }
     }
   }
 }
