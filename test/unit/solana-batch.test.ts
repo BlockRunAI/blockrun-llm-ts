@@ -3377,6 +3377,28 @@ describe("SolanaLLMClient batch-settlement", () => {
         expect(record).toMatchObject({ chargedCumulativeAmount: "1000", deposit: "25000" });
       });
 
+      it("does not resolve a replay whose success receipt fails voucher verification", async () => {
+        const c = observed();
+        const exact = stubExact(c);
+        const stranger = await generateKeyPairSigner();
+        gateway.push(
+          () => quote402([exactAccept(), batchAccept(operator.address)]),
+          () => tooMany({ "Retry-After": "1" }),
+          // 2xx with a parseable success receipt, but the voucher is signed by
+          // a key that is not the channel's operator, so it cannot be verified.
+          async (_url, init) => servedWithVoucher(stranger, channelIdOf(decodePayment(init)), 1000n, 1000n)
+        );
+
+        await expect(c.chat("openai/gpt-4o-mini", "gm")).rejects.toMatchObject({
+          name: "BatchPaymentUnresolvedError",
+          reason: "replay_unresolved",
+        });
+
+        expect(exact).not.toHaveBeenCalled();
+        expect(c.getSpending()).toMatchObject({ calls: 0 });
+        expect(c.getBatchStats()).toMatchObject({ unresolved: 1, recoveries: 0 });
+      });
+
       it("raises replay_unresolved after its one replay, signing nothing new and never paying exact", async () => {
         const c = observed();
         const exact = stubExact(c);

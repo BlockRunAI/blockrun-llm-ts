@@ -2864,7 +2864,9 @@ export class SolanaBatchPayer {
     const receipt = reconciled.settleResponse;
     const definitive = receipt?.success === true && reconciled.ok;
 
-    if (response.ok && (!replay || receipt?.success === true)) {
+    // A replay resolves only on a receipt the scheme verified (success and a
+    // valid voucher); anything less leaves the original in doubt.
+    if (response.ok && (!replay || definitive)) {
       if (!definitive) {
         // Served, but without a receipt the scheme could reconcile (none at
         // all, a rebuilt one without a voucher, or settlement_pending). Its
