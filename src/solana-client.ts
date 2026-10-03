@@ -300,6 +300,7 @@ export class SolanaLLMClient {
         secretKey: () => solanaKeyToBytes(this.privateKey),
         address: () => this.getWalletAddress(),
         rpcUrl: this.rpcUrl,
+        rpcHeaders: this.rpcHeaders,
       });
     }
   }

@@ -30,6 +30,8 @@
  * receipt for the client to reconcile against, and media jobs are charged on a
  * later poll. Both keep paying with `exact`.
  */
+import { AsyncLocalStorage } from "async_hooks";
+import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { paths as corePaths } from "@blockrun/core";
@@ -198,45 +200,173 @@ function processAlive(pid: number): boolean {
   }
 }
 
-const heldLocks = new Set<string>();
-let exitHookInstalled = false;
+/**
+ * Batch state for the whole process, shared by every loaded copy of this
+ * module (the CJS and ESM builds side by side, or two installs of the
+ * package) through `globalThis` under a versioned `Symbol.for` key.
+ *
+ * Per-copy maps were a real bug: two copies in one process share a pid but
+ * not their state, so the second copy took the first copy's live channel-file
+ * lock for a stale one, unlinked it, and built a second scheme over the same
+ * channel. Both could then open a channel, or top one up from the same
+ * balance, and each passed the `maxDeposit` check on its own. With one
+ * registry every copy sees the same wallets (one scheme and one in-flight
+ * flag per wallet) and the same held locks.
+ *
+ * Bump the version when the shape of {@link WalletBatch} or of this registry
+ * changes: copies with different versions then keep separate registries, and
+ * a copy never mistakes another version's lock for a stale one (see
+ * {@link lockChannelFile}), so they cannot share a channel file at all.
+ */
+const BATCH_REGISTRY = Symbol.for("@blockrun/llm/batch-registry/v1");
+interface BatchRegistry {
+  /** Batch state per wallet address. */
+  wallets: Map<string, WalletBatch>;
+  /** Channel files whose lock this process holds, with the lock's ownership token. */
+  locks: Map<string, string>;
+  /** Whether the exit hook that removes held locks is installed. */
+  exitHook: boolean;
+}
+const registryHost = globalThis as typeof globalThis & { [BATCH_REGISTRY]?: BatchRegistry };
+const registry: BatchRegistry = (registryHost[BATCH_REGISTRY] ??= {
+  wallets: new Map(),
+  locks: new Map(),
+  exitHook: false,
+});
+
+/**
+ * The sidecar beside a lock file that holds its owner's random ownership
+ * token. The lock file itself holds only the owner's bare pid, exactly what
+ * released versions (3.19.x) write and read with `Number(raw.trim())`: a lock
+ * in any other format reads as `NaN` to them, so they would take a live lock
+ * for a stale one, remove it, and two processes could each top up past
+ * `maxDeposit`. They never look at this file.
+ */
+function lockTokenFile(lock: string): string {
+  return `${lock}.owner`;
+}
+
+/** A lock file's owner pid (0 when it names none), and its raw content. */
+function readLockOwner(lock: string): { pid: number; raw: string } | undefined {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(lock, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw err;
+  }
+  let pid = Number(raw.trim());
+  if (!Number.isInteger(pid)) {
+    // A pre-release build of this branch wrote `{pid, token}` into the lock itself.
+    try {
+      const parsed = JSON.parse(raw) as { pid?: unknown };
+      pid = parsed && typeof parsed === "object" && Number.isInteger(parsed.pid) ? (parsed.pid as number) : 0;
+    } catch {
+      pid = 0;
+    }
+  }
+  return { pid, raw };
+}
+
+/** The ownership token in a lock's sidecar, if it has a readable one. */
+function readLockToken(lock: string): string | undefined {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(lockTokenFile(lock), "utf8")) as { token?: unknown };
+    return parsed && typeof parsed === "object" && typeof parsed.token === "string" ? parsed.token : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether a lock file is still this process's, taken with `token`. */
+function ownsLock(lock: string, token: string): boolean {
+  return readLockOwner(lock)?.pid === process.pid && readLockToken(lock) === token;
+}
+
+/** Remove the lock files this process holds (and their sidecars), if they are still ours. */
+function releaseHeldLocks(): void {
+  for (const [file, token] of registry.locks) {
+    const lock = `${file}.lock`;
+    try {
+      if (!ownsLock(lock, token)) continue;
+      fs.unlinkSync(lock);
+      fs.unlinkSync(lockTokenFile(lock));
+    } catch { /* already gone */ }
+  }
+}
 
 /**
  * Take exclusive ownership of a channel file for this process.
  *
  * Two owners of one channel file each keep their own view of the deposit, so
  * each tops up from a stale balance and together they can lock more than
- * `maxDeposit`, or open two channels. One process owns the file; the lock
- * holds its pid, and a lock whose process is gone is taken over.
+ * `maxDeposit`, or open two channels. One process owns the file. The lock
+ * file holds the owner's bare pid, the format released versions read, and is
+ * created whole (written to a temporary file, then hard-linked into place,
+ * which fails if a lock exists), so a reader never sees a half-written one.
+ * The owner's random ownership token goes in a sidecar ({@link
+ * lockTokenFile}), written once the lock is taken, so a release only ever
+ * removes a lock this very owner took.
  *
- * @returns undefined when the lock is ours, or the live owner's pid.
+ * Only a lock whose process is gone is taken over. A lock that names this
+ * process but is not in the process-wide registry was taken by another copy
+ * of the SDK in this process (one with a different registry version), so it
+ * is in use, never stale.
+ *
+ * @returns undefined when the lock is ours, or the live owner's pid (this
+ *   process's own pid when another SDK copy in it holds the file).
  */
 export function lockChannelFile(file: string): number | undefined {
-  if (heldLocks.has(file)) return undefined;
+  if (registry.locks.has(file)) return undefined;
   const lock = `${file}.lock`;
   fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+  const token = randomUUID();
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    const tmp = `${lock}.${process.pid}.${token}.tmp`;
     try {
-      fs.writeFileSync(lock, String(process.pid), { flag: "wx", mode: 0o600 });
-      heldLocks.add(file);
-      if (!exitHookInstalled) {
-        exitHookInstalled = true;
-        process.once("exit", () => {
-          for (const held of heldLocks) {
-            try { fs.unlinkSync(`${held}.lock`); } catch { /* already gone */ }
-          }
-        });
+      fs.writeFileSync(tmp, String(process.pid), { mode: 0o600 });
+      fs.linkSync(tmp, lock);
+      try {
+        writeLockToken(lock, token);
+      } catch (err) {
+        // Without its token the lock could never be released safely: give it up.
+        try { fs.unlinkSync(lock); } catch { /* already gone */ }
+        throw err;
+      }
+      registry.locks.set(file, token);
+      if (!registry.exitHook) {
+        registry.exitHook = true;
+        process.once("exit", releaseHeldLocks);
       }
       return undefined;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    } finally {
+      try { fs.unlinkSync(tmp); } catch { /* not created */ }
     }
-    const owner = Number(fs.readFileSync(lock, "utf8").trim());
-    if (Number.isInteger(owner) && owner > 0 && owner !== process.pid && processAlive(owner)) return owner;
-    // Stale (its process is gone) or left by an earlier run of this pid.
-    try { fs.unlinkSync(lock); } catch { /* raced with another taker */ }
+    const owner = readLockOwner(lock);
+    if (!owner) continue; // released meanwhile: try again
+    // Never stale while this process is alive: another SDK copy in it holds it.
+    if (owner.pid === process.pid) return process.pid;
+    if (owner.pid > 0 && processAlive(owner.pid)) return owner.pid;
+    // Its process is gone. Remove it only if it is still the lock judged stale.
+    try {
+      if (readLockOwner(lock)?.raw === owner.raw) fs.unlinkSync(lock);
+    } catch { /* raced with another taker */ }
   }
   return -1;
+}
+
+/** Write a lock's ownership-token sidecar whole (temporary file, then rename), mode 0600. */
+function writeLockToken(lock: string, token: string): void {
+  const sidecar = lockTokenFile(lock);
+  const tmp = `${sidecar}.${process.pid}.${token}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify({ pid: process.pid, token }), { mode: 0o600 });
+    fs.renameSync(tmp, sidecar);
+  } finally {
+    try { fs.unlinkSync(tmp); } catch { /* renamed */ }
+  }
 }
 
 /** True when a stored pending entry was a channel open or top-up. */
@@ -341,7 +471,59 @@ export interface SolanaBatchPayerInit {
   secretKey: () => Promise<Uint8Array>;
   address: () => Promise<string>;
   rpcUrl: string;
+  /** Headers the exact path sends to `rpcUrl` (`rpcHeaders`, `SOLANA_RPC_HEADERS`, `SOLANA_RPC_API_KEY`). */
+  rpcHeaders?: Record<string, string>;
 }
+
+/** The RPC endpoint, and the headers it needs, for the batch scheme call in progress. */
+interface RpcScope {
+  url: string;
+  headers: Record<string, string>;
+}
+/**
+ * The scope store and the `fetch` hook marker are shared through
+ * `globalThis` under `Symbol.for` keys, so that with two copies of this
+ * module loaded (the CJS and ESM builds, or two installs of the package)
+ * whichever copy installed the hook sees every copy's scope. A per-copy
+ * store would let the second copy find the hook installed and skip it, and
+ * its RPC requests would silently go out without `rpcHeaders`.
+ */
+const RPC_SCOPE_STORE = Symbol.for("@blockrun/llm/batch-rpc-scope/v1");
+const RPC_HEADER_HOOK = Symbol.for("@blockrun/llm/batch-rpc-headers/v1");
+const sharedGlobal = globalThis as typeof globalThis & { [RPC_SCOPE_STORE]?: AsyncLocalStorage<RpcScope> };
+const rpcScope: AsyncLocalStorage<RpcScope> = (sharedGlobal[RPC_SCOPE_STORE] ??= new AsyncLocalStorage<RpcScope>());
+type HookedFetch = typeof fetch & { [RPC_HEADER_HOOK]?: true };
+
+function requestUrl(input: Parameters<typeof fetch>[0]): string {
+  return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+}
+
+/**
+ * Let the batch scheme's RPC calls carry `rpcHeaders`.
+ *
+ * `@x402/svm`'s batch client builds its RPC client from `rpcUrl` alone (its
+ * config has no headers), and `@solana/kit`'s HTTP transport calls the global
+ * `fetch`. So the headers go in through a thin wrapper around the global
+ * `fetch`: inside a batch scheme call (an AsyncLocalStorage scope), a request
+ * to exactly that scope's RPC URL gets its headers; every other request
+ * passes through untouched. The wrapper is installed only once a batch
+ * client with `rpcHeaders` makes a call, and re-installed if something
+ * replaces the global `fetch` later.
+ */
+function installRpcHeaderHook(): void {
+  const current = globalThis.fetch as HookedFetch;
+  if (current[RPC_HEADER_HOOK]) return;
+  const hooked: HookedFetch = (input, init) => {
+    const scope = rpcScope.getStore();
+    if (!scope || requestUrl(input) !== scope.url) return current(input, init);
+    const headers = new Headers(scope.headers);
+    new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
+    return current(input, { ...init, headers });
+  };
+  hooked[RPC_HEADER_HOOK] = true;
+  globalThis.fetch = hooked;
+}
+
 
 /**
  * Batch state shared by every client of one wallet in this process.
@@ -350,7 +532,9 @@ export interface SolanaBatchPayerInit {
  * common pattern. If each kept its own scheme, two of them could open two
  * channels for one wallet, or top up one channel from two stale balances and
  * lock more than `maxDeposit` between them. So the scheme, the in-flight flag
- * and the channel file belong to the wallet, not to the client.
+ * and the channel file belong to the wallet, not to the client, and they live
+ * in the process-wide registry ({@link BATCH_REGISTRY}), so every copy of the
+ * SDK loaded in the process uses the same ones.
  */
 interface WalletBatch {
   config: string;
@@ -358,7 +542,6 @@ interface WalletBatch {
   busy: boolean;
   warned: Set<string>;
 }
-const wallets = new Map<string, WalletBatch>();
 
 /**
  * One wallet's batch-settlement payer. Owned by a SolanaLLMClient.
@@ -394,8 +577,9 @@ export class SolanaBatchPayer {
       const address = await this.init.address();
       const file = await this.storeFile();
       const { operators, maxDeposit } = this.init.options;
-      const config = JSON.stringify([[...operators].sort(), String(maxDeposit ?? ""), file ?? null, this.init.rpcUrl]);
-      const existing = wallets.get(address);
+      const headers = Object.entries(this.init.rpcHeaders ?? {}).sort(([a], [b]) => a.localeCompare(b));
+      const config = JSON.stringify([[...operators].sort(), String(maxDeposit ?? ""), file ?? null, this.init.rpcUrl, headers]);
+      const existing = registry.wallets.get(address);
       if (existing) {
         return existing.config === config
           ? existing
@@ -403,10 +587,15 @@ export class SolanaBatchPayer {
       }
       if (file) {
         const owner = lockChannelFile(file);
-        if (owner !== undefined) return `channel store ${file} is in use by process ${owner}`;
+        if (owner !== undefined) {
+          return owner === process.pid
+            ? `channel store ${file} is in use by another copy of @blockrun/llm in this process ` +
+                `(or by a process that had this pid and died: remove ${file}.lock if nothing uses it)`
+            : `channel store ${file} is in use by process ${owner}`;
+        }
       }
       const created: WalletBatch = { config, busy: false, warned: new Set() };
-      wallets.set(address, created);
+      registry.wallets.set(address, created);
       return created;
     })();
     return this.state;
@@ -439,13 +628,30 @@ export class SolanaBatchPayer {
         .register("solana:*", scheme)
         .registerPolicy(scheme.paymentPolicy);
       client.setSpendControls({ maxAmountPerPayment: false });
+      // Every call that can reach the RPC runs with this client's RPC headers.
+      const raw = new core.x402HTTPClient(client) as unknown as HttpPaymentClient;
+      const http: HttpPaymentClient = {
+        getPaymentSettleResponse: (getHeader) => raw.getPaymentSettleResponse(getHeader),
+        createPaymentPayload: (paymentRequired) => this.withRpcHeaders(() => raw.createPaymentPayload(paymentRequired)),
+        encodePaymentSignatureHeader: (payload) => raw.encodePaymentSignatureHeader(payload),
+        processPaymentResult: (payload, getHeader, status) =>
+          this.withRpcHeaders(() => raw.processPaymentResult(payload, getHeader, status)),
+      };
       return {
-        http: new core.x402HTTPClient(client) as unknown as HttpPaymentClient,
-        refund: (url: string) => scheme.refund(url),
+        http,
+        refund: (url: string) => this.withRpcHeaders(() => scheme.refund(url)),
       };
     })();
     wallet.client.catch(() => { wallet.client = undefined; });
     return wallet.client;
+  }
+
+  /** Run a scheme call so its RPC requests carry this client's `rpcHeaders`. */
+  private withRpcHeaders<T>(call: () => Promise<T>): Promise<T> {
+    const headers = this.init.rpcHeaders;
+    if (!headers || Object.keys(headers).length === 0) return call();
+    installRpcHeaderHook();
+    return rpcScope.run({ url: this.init.rpcUrl, headers }, call);
   }
 
   /**
@@ -577,11 +783,9 @@ export class SolanaBatchPayer {
   }
 }
 
-/** Tests only: forget the per-process wallet registry and held locks. */
+/** Tests only: forget the process-wide wallet registry and held locks. */
 export function __resetBatchWalletsForTests(): void {
-  wallets.clear();
-  for (const file of heldLocks) {
-    try { fs.unlinkSync(`${file}.lock`); } catch { /* already gone */ }
-  }
-  heldLocks.clear();
+  registry.wallets.clear();
+  releaseHeldLocks();
+  registry.locks.clear();
 }

@@ -164,19 +164,22 @@ describe("SolanaLLMClient batch-settlement", () => {
   let gatewayCalls: Array<{ url: string; init?: RequestInit }>;
   let tmp: string;
   let rpcMethods: string[];
+  let rpcCalls: Array<{ method: string; params: unknown[]; init?: RequestInit }>;
 
   beforeEach(async () => {
     __resetBatchWalletsForTests();
     operator = await generateKeyPairSigner();
     rpcMethods = [];
+    rpcCalls = [];
     gateway = [];
     gatewayCalls = [];
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "br-batch-"));
     vi.spyOn(global, "fetch").mockImplementation(async (input, init) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (url.startsWith(RPC_URL)) {
-        const { id, method } = JSON.parse(String(init?.body));
+        const { id, method, params } = JSON.parse(String(init?.body));
         rpcMethods.push(method);
+        rpcCalls.push({ method, params, init });
         return new Response(JSON.stringify({ jsonrpc: "2.0", id, result: rpcResult(method) }), {
           headers: { "content-type": "application/json" },
         });
@@ -564,6 +567,218 @@ describe("SolanaLLMClient batch-settlement", () => {
     expect(rpcMethods.filter((m) => m === "getProgramAccounts").length).toBeGreaterThan(scans);
   });
 
+  describe("rpcHeaders", () => {
+    function withHeaders(rpcHeaders: Record<string, string> | undefined, batch: Parameters<typeof client>[0] = {}) {
+      return new SolanaLLMClient({
+        privateKey: TEST_BS58_KEY,
+        rpcUrl: RPC_URL,
+        ...(rpcHeaders ? { rpcHeaders } : {}),
+        batch: { operators: [operator.address], channelStore: path.join(tmp, "channels.json"), ...batch },
+      });
+    }
+
+    const headerOf = (init: RequestInit | undefined, name: string) => new Headers(init?.headers).get(name);
+
+    it("sends rpcHeaders on every RPC request the batch scheme makes, and nowhere else", async () => {
+      const c = withHeaders({ "x-api-key": "rpc-secret" });
+      stubExact(c);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => servedWithVoucher(operator, channelIdOf(decodePayment(init)), 1000n, 1000n)
+      );
+
+      await c.chat("openai/gpt-4o-mini", "gm");
+
+      // The open reads the mint, a blockhash, the slot, and scans for an existing channel.
+      expect(rpcCalls.map((r) => r.method)).toEqual(expect.arrayContaining(["getAccountInfo", "getLatestBlockhash", "getSlot", "getProgramAccounts"]));
+      for (const call of rpcCalls) {
+        expect(headerOf(call.init, "x-api-key")).toBe("rpc-secret");
+        // @solana/kit's own headers still win.
+        expect(headerOf(call.init, "content-type")).toContain("application/json");
+      }
+      for (const call of gatewayCalls) expect(headerOf(call.init, "x-api-key")).toBeNull();
+
+      // Outside a batch scheme call, the same URL is left alone.
+      await fetch(RPC_URL, { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: 9, method: "getSlot" }) });
+      expect(headerOf(rpcCalls.at(-1)!.init, "x-api-key")).toBeNull();
+    });
+
+    it("honours SOLANA_RPC_API_KEY like the exact path does", async () => {
+      vi.stubEnv("SOLANA_RPC_API_KEY", "env-key");
+      try {
+        const c = withHeaders(undefined);
+        stubExact(c);
+        gateway.push(
+          () => quote402([exactAccept(), batchAccept(operator.address)]),
+          async (_url, init) => servedWithVoucher(operator, channelIdOf(decodePayment(init)), 1000n, 1000n)
+        );
+
+        await c.chat("openai/gpt-4o-mini", "gm");
+
+        expect(rpcCalls.length).toBeGreaterThan(0);
+        for (const call of rpcCalls) expect(headerOf(call.init, "x-api-key")).toBe("env-key");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it("still sends each client's headers when two copies of the SDK are loaded", async () => {
+      // Two module instances, as with the CJS and ESM builds side by side, or
+      // two installs of the package: each has its own module state.
+      vi.resetModules();
+      const copyA = await import("../../src/solana-client");
+      vi.resetModules();
+      const copyB = await import("../../src/solana-client");
+      expect(copyA.SolanaLLMClient).not.toBe(copyB.SolanaLLMClient);
+      const make = (Client: typeof SolanaLLMClient, key: string) =>
+        new Client({
+          privateKey: walletKey(),
+          rpcUrl: RPC_URL,
+          rpcHeaders: { "x-api-key": key },
+          batch: { operators: [operator.address], channelStore: false },
+        });
+      const a = make(copyA.SolanaLLMClient, "copy-a");
+      const b = make(copyB.SolanaLLMClient, "copy-b");
+      stubExact(a);
+      stubExact(b);
+      for (let i = 0; i < 2; i += 1) {
+        gateway.push(
+          () => quote402([exactAccept(), batchAccept(operator.address)]),
+          async (_url, init) => servedWithVoucher(operator, channelIdOf(decodePayment(init)), 1000n, 1000n)
+        );
+      }
+
+      await a.chat("openai/gpt-4o-mini", "gm");
+      const split = rpcCalls.length;
+      await b.chat("openai/gpt-4o-mini", "gm");
+
+      expect(split).toBeGreaterThan(0);
+      expect(rpcCalls.length).toBeGreaterThan(split);
+      for (const call of rpcCalls.slice(0, split)) expect(headerOf(call.init, "x-api-key")).toBe("copy-a");
+      for (const call of rpcCalls.slice(split)) expect(headerOf(call.init, "x-api-key")).toBe("copy-b");
+    });
+
+    it("treats different rpcHeaders for one wallet as different batch options", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const a = withHeaders({ "x-api-key": "one" });
+      const b = withHeaders({ "x-api-key": "two" });
+      stubExact(a);
+      const exactB = stubExact(b);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => servedWithVoucher(operator, channelIdOf(decodePayment(init)), 1000n, 1000n),
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+
+      await a.chat("openai/gpt-4o-mini", "gm");
+      await b.chat("openai/gpt-4o-mini", "gm");
+
+      expect(exactB).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("two copies of the SDK in one process", () => {
+    // Two module instances, as with the CJS and ESM builds side by side, or
+    // two installs of the package. They share a pid, so per-copy state let
+    // the second copy take the first copy's live lock for a stale one.
+    async function twoCopies(batch: Parameters<typeof client>[0] = {}) {
+      vi.resetModules();
+      const copyA = await import("../../src/solana-client");
+      vi.resetModules();
+      const copyB = await import("../../src/solana-client");
+      expect(copyA.SolanaLLMClient).not.toBe(copyB.SolanaLLMClient);
+      const make = (Client: typeof SolanaLLMClient) =>
+        new Client({
+          privateKey: TEST_BS58_KEY,
+          rpcUrl: RPC_URL,
+          batch: { operators: [operator.address], channelStore: path.join(tmp, "channels.json"), ...batch },
+        });
+      return { a: make(copyA.SolanaLLMClient), b: make(copyB.SolanaLLMClient) };
+    }
+
+    it("sends one deposit when both copies pay concurrently, and keeps the lock", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { a, b } = await twoCopies();
+      const exactA = stubExact(a);
+      const exactB = stubExact(b);
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      const deposits: string[] = [];
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("deposit");
+          deposits.push(channelIdOf(payment));
+          await held;
+          return servedWithVoucher(operator, channelIdOf(payment), 1000n, 1000n);
+        },
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        () => {
+          release();
+          return new Response(JSON.stringify(CHAT_OK), { status: 200 });
+        }
+      );
+
+      const first = a.chat("openai/gpt-4o-mini", "one");
+      await vi.waitFor(() => expect(gatewayCalls).toHaveLength(2));
+      const lock = fs.readFileSync(path.join(tmp, "channels.json.lock"), "utf8");
+      const second = b.chat("openai/gpt-4o-mini", "two");
+      await expect(Promise.all([first, second])).resolves.toEqual(["gm", "gm"]);
+
+      expect(deposits).toHaveLength(1);
+      expect(exactA).not.toHaveBeenCalled();
+      expect(exactB).toHaveBeenCalledTimes(1);
+      // The second copy saw the first copy's call in flight; it did not steal the lock.
+      expect(fs.readFileSync(path.join(tmp, "channels.json.lock"), "utf8")).toBe(lock);
+    });
+
+    it("holds both copies to one combined maxDeposit", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      // maxDeposit 50000: open 25000, then the room left is 25000 in total.
+      const { a, b } = await twoCopies({ maxDeposit: "$0.05" });
+      const exactA = stubExact(a);
+      const exactB = stubExact(b);
+      const deposits: bigint[] = [];
+      let channelId = "";
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          channelId = channelIdOf(payment);
+          deposits.push(BigInt(payment.payload.deposit.amount));
+          return servedWithVoucher(operator, channelId, 1000n, 1000n);
+        },
+        () => quote402([exactAccept("25000"), batchAccept(operator.address, "25000")]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("deposit");
+          expect(channelIdOf(payment)).toBe(channelId);
+          deposits.push(BigInt(payment.payload.deposit.amount));
+          return servedWithVoucher(operator, channelId, 26000n, 25000n);
+        },
+        // Copy A now needs another top-up: copy B's top-up used the whole room.
+        () => quote402([exactAccept("25000"), batchAccept(operator.address, "25000")]),
+        (_url, init) => {
+          const header = (init?.headers as Record<string, string>)["PAYMENT-SIGNATURE"];
+          // A copy with its own stale view of the channel would sign another top-up here.
+          if (header !== "exact-payload") deposits.push(BigInt(decodePayment(init).payload.deposit?.amount ?? 0));
+          return new Response(JSON.stringify(CHAT_OK), { status: 200 });
+        }
+      );
+
+      await a.chat("openai/gpt-4o-mini", "open");
+      await b.chat("openai/gpt-4o-mini", "top up");
+      await a.chat("openai/gpt-4o-mini", "over the cap");
+
+      expect(deposits).toEqual([25000n, 25000n]);
+      expect(deposits.reduce((sum, d) => sum + d, 0n)).toBeLessThanOrEqual(50000n);
+      expect(exactB).not.toHaveBeenCalled();
+      expect(exactA).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("forgets the channel after closing it", async () => {
     const c = client({});
     stubExact(c);
@@ -672,8 +887,71 @@ describe("batch channel storage", () => {
     // A lock left by a process that is gone is taken over.
     fs.writeFileSync(`${file}.lock`, "999999999");
     expect(lockChannelFile(file)).toBeUndefined();
+    // The lock holds the bare pid; the ownership token is in its sidecar.
     expect(fs.readFileSync(`${file}.lock`, "utf8")).toBe(String(process.pid));
+    const owner = JSON.parse(fs.readFileSync(`${file}.lock.owner`, "utf8"));
+    expect(owner.pid).toBe(process.pid);
+    expect(owner.token).toMatch(/^[0-9a-f-]{36}$/);
+    if (process.platform !== "win32") expect(fs.statSync(`${file}.lock.owner`).mode & 0o777).toBe(0o600);
+    // Held: asking again is a no-op.
+    expect(lockChannelFile(file)).toBeUndefined();
     __resetBatchWalletsForTests();
+    expect(fs.existsSync(`${file}.lock`)).toBe(false);
+    expect(fs.existsSync(`${file}.lock.owner`)).toBe(false);
+  });
+
+  it("writes a lock that released versions (3.19.x) read as live", () => {
+    /** 3.19.x's check, verbatim: a lock is live when it names a live process other than the reader's own. */
+    const releasedSeesLive = (raw: string, readerPid: number) => {
+      const owner = Number(raw.trim());
+      let alive = false;
+      try { process.kill(owner, 0); alive = true; } catch (err) { alive = (err as NodeJS.ErrnoException).code === "EPERM"; }
+      return Number.isInteger(owner) && owner > 0 && owner !== readerPid && alive;
+    };
+    const file = path.join(tmp, "rolling-upgrade.json");
+    expect(lockChannelFile(file)).toBeUndefined();
+
+    // A 3.19.x process (another pid) sharing the channel store leaves it alone.
+    expect(releasedSeesLive(fs.readFileSync(`${file}.lock`, "utf8"), process.ppid)).toBe(true);
+    __resetBatchWalletsForTests();
+  });
+
+  it("never releases a lock naming this pid whose sidecar holds another owner's token", () => {
+    const file = path.join(tmp, "retaken.json");
+    expect(lockChannelFile(file)).toBeUndefined();
+    // Another SDK copy in this process took the file over since (same pid, its own token).
+    const sidecar = JSON.stringify({ pid: process.pid, token: "another-sdk-copy" });
+    fs.writeFileSync(`${file}.lock.owner`, sidecar);
+
+    __resetBatchWalletsForTests();
+
+    expect(fs.readFileSync(`${file}.lock`, "utf8")).toBe(String(process.pid));
+    expect(fs.readFileSync(`${file}.lock.owner`, "utf8")).toBe(sidecar);
+  });
+
+  it.each([
+    ["a token this process's registry does not hold", () => JSON.stringify({ pid: process.pid, token: "another-sdk-copy" })],
+    ["the bare pid an older SDK wrote", () => String(process.pid)],
+  ])("never takes a lock naming this process with %s for a stale one", (_label, content) => {
+    const file = path.join(tmp, "same-pid.json");
+    const lock = content();
+    fs.writeFileSync(`${file}.lock`, lock);
+
+    expect(lockChannelFile(file)).toBe(process.pid);
+    expect(lockChannelFile(file)).toBe(process.pid);
+    // Left exactly as it was: another copy of the SDK in this process owns it.
+    expect(fs.readFileSync(`${file}.lock`, "utf8")).toBe(lock);
+    __resetBatchWalletsForTests();
+    expect(fs.readFileSync(`${file}.lock`, "utf8")).toBe(lock);
+  });
+
+  it("removes only its own lock on reset or exit, never one another owner wrote since", () => {
+    const file = path.join(tmp, "replaced.json");
+    expect(lockChannelFile(file)).toBeUndefined();
+    const foreign = JSON.stringify({ pid: process.ppid, token: "someone-else" });
+    fs.writeFileSync(`${file}.lock`, foreign);
+    __resetBatchWalletsForTests();
+    expect(fs.readFileSync(`${file}.lock`, "utf8")).toBe(foreign);
   });
 
   it("leaves client-signed channels alone", async () => {
