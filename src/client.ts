@@ -1,3 +1,5 @@
+import { toWireSearchParameters, toWireTools } from "./search-wire";
+import { withCost } from "./receipt";
 import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js";
 /**
  * BlockRun LLM Client - Main SDK entry point.
@@ -467,12 +469,13 @@ export class LLMClient {
       };
       if (options?.temperature !== undefined) body.temperature = options.temperature;
       if (options?.topP !== undefined) body.top_p = options.topP;
+      // Gateway wire format is snake_case; the camelCase object was stripped (see search-wire.ts).
       if (options?.searchParameters !== undefined) {
-        body.search_parameters = options.searchParameters;
+        body.search_parameters = toWireSearchParameters(options.searchParameters);
       } else if (options?.search === true) {
         body.search_parameters = { mode: "on" };
       }
-      if (options?.tools !== undefined) body.tools = options.tools;
+      if (options?.tools !== undefined) body.tools = toWireTools(options.tools);
       if (options?.toolChoice !== undefined) body.tool_choice = options.toolChoice;
       if (options?.responseFormat !== undefined) body.response_format = options.responseFormat;
       if (options?.stop !== undefined) body.stop = options.stop;
@@ -695,7 +698,7 @@ export class LLMClient {
         this.sessionCalls += 1;
         this.sessionTotalUsd += costUsd;
         this.recordCost(url, costUsd, { body, network: details.network });
-        return this.parseChatResponse(retryResp2);
+        return withCost(await this.parseChatResponse(retryResp2), retryResp2, costUsd, "exact");
       }
     }
 
@@ -724,7 +727,7 @@ export class LLMClient {
     this.sessionTotalUsd += costUsd;
     this.recordCost(url, costUsd, { body, network: details.network });
 
-    return this.parseChatResponse(retryResponse);
+    return withCost(await this.parseChatResponse(retryResponse), retryResponse, costUsd, "exact");
   }
 
   /**
@@ -802,7 +805,7 @@ export class LLMClient {
     };
     if (options?.temperature !== undefined) body.temperature = options.temperature;
     if (options?.topP !== undefined) body.top_p = options.topP;
-    if (options?.tools !== undefined) body.tools = options.tools;
+    if (options?.tools !== undefined) body.tools = toWireTools(options.tools);
     if (options?.toolChoice !== undefined) body.tool_choice = options.toolChoice;
     if (options?.responseFormat !== undefined) body.response_format = options.responseFormat;
     if (options?.stop !== undefined) body.stop = options.stop;
