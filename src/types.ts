@@ -23,6 +23,58 @@ export interface Tool {
   function: FunctionDefinition;
 }
 
+/**
+ * xAI's server-side X search, for xai/* models. The gateway runs it on xAI's
+ * Responses API; billed per X post fetched. https://docs.x.ai/developers/tools/x-search
+ */
+export interface XSearchTool {
+  type: "x_search";
+  /** Only these handles (≤20, without "@"). Not together with excludedXHandles. */
+  allowedXHandles?: string[];
+  /** Never these handles (≤20). Not together with allowedXHandles. */
+  excludedXHandles?: string[];
+  /** YYYY-MM-DD, inclusive. */
+  fromDate?: string;
+  /** YYYY-MM-DD, inclusive. */
+  toDate?: string;
+  enableImageUnderstanding?: boolean;
+  enableVideoUnderstanding?: boolean;
+}
+
+/** xAI's server-side web search, for xai/* models. */
+export interface WebSearchTool {
+  type: "web_search";
+  /** ≤5 domains. */
+  allowedDomains?: string[];
+  excludedDomains?: string[];
+  enableImageUnderstanding?: boolean;
+}
+
+/** Anything `tools` accepts: function tools, plus xAI's search tools on xai/* models. */
+export type AnyTool = Tool | XSearchTool | WebSearchTool;
+
+/** A URL citation with its position in the answer text (xAI search). */
+export interface UrlCitation {
+  type: "url_citation";
+  url: string;
+  title?: string;
+  start_index?: number;
+  end_index?: number;
+}
+
+/** How a paid call settled — see `ChatResponse.settlement`. */
+export interface Settlement {
+  /** `exact`: one transfer at the quote. `batch`: metered from a payment channel. */
+  scheme: "exact" | "batch" | "free" | "api-key";
+  /** What was signed or authorised for this call, in USD. */
+  quotedUsd: number;
+  /** On-chain transaction (signature / hash), when the gateway reported one. */
+  transaction?: string;
+  network?: string;
+  /** Present and false only when the gateway reported a failed settlement. */
+  success?: false;
+}
+
 export interface FunctionCall {
   name: string;
   arguments: string;
@@ -52,6 +104,8 @@ export interface ChatMessage {
   // response side, so they are accepted as optional here.
   reasoning_content?: string;
   thinking?: string;
+  /** URL citations with positions (xAI search answers). */
+  annotations?: UrlCitation[];
 }
 
 export interface ChatChoice {
@@ -69,6 +123,11 @@ export interface ChatUsage {
   // headers are sent. Reads are cheaper; writes incur a one-time surcharge.
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
+  /**
+   * xAI search usage counts: x_search_calls, x_posts_fetched, x_users_fetched,
+   * web_search_calls … (what xAI bills the search by).
+   */
+  server_side_tool_usage?: Record<string, number | undefined>;
 }
 
 export interface ChatResponse {
@@ -79,6 +138,16 @@ export interface ChatResponse {
   choices: ChatChoice[];
   usage?: ChatUsage;
   citations?: string[]; // Live Search citation URLs
+  /** xAI search: the searches the model ran (`{type, query, status}`). */
+  search_calls?: Array<{ type: string; query?: string; status?: string }>;
+  /**
+   * What this call cost you, in USD: the metered charge under batch
+   * settlement, the signed price under exact, 0 for a free call. Undefined in
+   * API-key mode (billed to the account, see the dashboard).
+   */
+  costUsd?: number;
+  /** How the call was paid, with the on-chain transaction when reported. */
+  settlement?: Settlement;
 
   /**
    * Populated when the gateway transparently substituted a different
@@ -180,14 +249,20 @@ export interface WebSearchSource {
   excludedWebsites?: string[];
   allowedWebsites?: string[];
   safeSearch?: boolean;
+  enableImageUnderstanding?: boolean;
 }
 
 export interface XSearchSource {
   type: "x";
+  /** ≤20 handles. Not together with excludedXHandles. */
   includedXHandles?: string[];
   excludedXHandles?: string[];
+  /** Accepted for compatibility; xAI's x_search has no such filter. */
   postFavoriteCount?: number;
+  /** Accepted for compatibility; xAI's x_search has no such filter. */
   postViewCount?: number;
+  enableImageUnderstanding?: boolean;
+  enableVideoUnderstanding?: boolean;
 }
 
 export interface NewsSearchSource {
@@ -196,6 +271,7 @@ export interface NewsSearchSource {
   excludedWebsites?: string[];
   allowedWebsites?: string[];
   safeSearch?: boolean;
+  enableImageUnderstanding?: boolean;
 }
 
 export interface RssSearchSource {
@@ -216,6 +292,8 @@ export interface SearchParameters {
   fromDate?: string; // YYYY-MM-DD format
   toDate?: string; // YYYY-MM-DD format
   maxSearchResults?: number;
+  /** Agentic search rounds xAI may run (1–10; gateway default 4). Bounds the per-post bill. */
+  maxTurns?: number;
 }
 
 /** Usage info for Live Search sources */
@@ -348,8 +426,8 @@ export interface ChatCompletionOptions {
   search?: boolean;
   /** Full Live Search configuration (for search-enabled models) */
   searchParameters?: SearchParameters;
-  /** Tool definitions for function calling */
-  tools?: Tool[];
+  /** Tool definitions: function tools, plus x_search / web_search on xai/* models */
+  tools?: AnyTool[];
   /** Tool selection strategy */
   toolChoice?: ToolChoice;
   /** Response format, e.g. { type: "json_object" } for JSON mode */
@@ -362,6 +440,11 @@ export interface ChatCompletionOptions {
    * immediately.
    */
   fallbackModels?: string[];
+  /**
+   * Per-call timeout in ms, overriding the client's `timeout` (Solana client).
+   * Search and long reasoning calls can need more than the 60 s default.
+   */
+  timeout?: number;
 }
 
 // Smart routing types (shared product-neutral Router Core integration).

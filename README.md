@@ -446,6 +446,19 @@ console.log(response);
 
 // Live Search with Grok (Solana payment)
 const tweet = await client.chat('xai/grok-4.5', 'What is trending on X?', { search: true });
+
+// xAI x_search on chosen accounts, structured output, real cost per call
+const res = await client.chatCompletion('xai/grok-4.3', [
+  { role: 'user', content: 'Which new models did these labs announce today? Return JSON.' },
+], {
+  tools: [{ type: 'x_search', allowedXHandles: ['OpenAI', 'AnthropicAI', 'xai'], fromDate: '2026-10-04' }],
+  searchParameters: { maxTurns: 2 },          // bounds xAI's per-post search bill
+  responseFormat: { type: 'json_object' },
+  timeout: 180_000,
+});
+console.log(res.choices[0].message.annotations); // url_citation with positions
+console.log(res.usage?.server_side_tool_usage);  // { x_posts_fetched, ... }
+console.log(res.costUsd, res.settlement);        // what you paid, and the tx
 ```
 
 **Setup:**

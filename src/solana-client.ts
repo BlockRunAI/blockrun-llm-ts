@@ -1,3 +1,5 @@
+import { toWireSearchParameters, toWireTools } from "./search-wire";
+import { withCost } from "./receipt";
 import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth, type ApiKeyOptions } from "./api-key.js";
 /**
  * BlockRun Solana LLM Client.
@@ -357,9 +359,10 @@ export class SolanaLLMClient {
       };
       if (options?.temperature !== undefined) body.temperature = options.temperature;
       if (options?.topP !== undefined) body.top_p = options.topP;
-      if (options?.searchParameters !== undefined) body.search_parameters = options.searchParameters;
+      // Gateway wire format is snake_case; the camelCase object was stripped (see search-wire.ts).
+      if (options?.searchParameters !== undefined) body.search_parameters = toWireSearchParameters(options.searchParameters);
       else if (options?.search === true) body.search_parameters = { mode: "on" };
-      if (options?.tools !== undefined) body.tools = options.tools;
+      if (options?.tools !== undefined) body.tools = toWireTools(options.tools);
       if (options?.toolChoice !== undefined) body.tool_choice = options.toolChoice;
       if (options?.responseFormat !== undefined) body.response_format = options.responseFormat;
       if (options?.stop !== undefined) body.stop = options.stop;
@@ -370,7 +373,7 @@ export class SolanaLLMClient {
     for (let index = 0; index < chain.length; index += 1) {
       const candidate = chain[index];
       try {
-        return await this.requestWithPayment("/v1/chat/completions", buildBody(candidate));
+        return await this.requestWithPayment("/v1/chat/completions", buildBody(candidate), options?.timeout);
       } catch (error) {
         lastError = error;
         if (!isTransientError(error) || index === chain.length - 1) throw error;
@@ -633,7 +636,7 @@ export class SolanaLLMClient {
    *
    * @returns USDC balance as a float
    */
-  async getBalance(): Promise<number> {
+  async getBalance(options?: { strict?: boolean }): Promise<number> {
     const usdc_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     const address = await this.getWalletAddress();
 
@@ -648,7 +651,10 @@ export class SolanaLLMClient {
           params: [address, { mint: usdc_mint }, { encoding: "jsonParsed" }],
         }),
       });
-      const data = (await response.json()) as { result?: { value?: Array<{ account?: { data?: { parsed?: { info?: { tokenAmount?: { uiAmount?: number } } } } } }> } };
+      const data = (await response.json()) as { error?: { message?: string }; result?: { value?: Array<{ account?: { data?: { parsed?: { info?: { tokenAmount?: { uiAmount?: number } } } } } }> } };
+      if (options?.strict && (!response.ok || data.error)) {
+        throw new Error(`Solana RPC balance lookup failed: ${data.error?.message ?? `HTTP ${response.status}`}`);
+      }
       const accounts = data.result?.value || [];
       if (!accounts.length) return 0;
       let total = 0;
@@ -656,7 +662,10 @@ export class SolanaLLMClient {
         total += acct.account?.data?.parsed?.info?.tokenAmount?.uiAmount || 0;
       }
       return total;
-    } catch {
+    } catch (error) {
+      // Legacy behaviour reports an RPC failure as 0, indistinguishable from an
+      // empty wallet. `strict: true` throws instead, so a caller can tell them apart.
+      if (options?.strict) throw error;
       return 0;
     }
   }
@@ -928,7 +937,8 @@ export class SolanaLLMClient {
 
   private async requestWithPayment(
     endpoint: string,
-    body: Record<string, unknown>
+    body: Record<string, unknown>,
+    timeoutMs?: number
   ): Promise<ChatResponse> {
     const url = `${this.apiUrl}${endpoint}`;
     for (let staleRetries = 0; ; ) {
@@ -936,7 +946,7 @@ export class SolanaLLMClient {
         method: "POST",
         headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
         body: JSON.stringify(body),
-      });
+      }, timeoutMs);
 
       if (response.status === 402) {
         try {
@@ -947,11 +957,12 @@ export class SolanaLLMClient {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT, ...paymentHeaders },
                 body: JSON.stringify(body),
-              })
+              }, timeoutMs)
             );
             if (batch.kind === "paid") {
               this.recordSettlement(batch.chargedUsd);
-              return batch.response.json() as Promise<ChatResponse>;
+              const paid = (await batch.response.json()) as ChatResponse;
+              return withCost(paid, batch.response, batch.chargedUsd, "batch");
             }
             if (batch.kind === "failed") {
               let errorBody: unknown;
@@ -959,7 +970,7 @@ export class SolanaLLMClient {
               throw new APIError(`API error after payment: ${batch.response.status}`, batch.response.status, sanitizeErrorResponse(errorBody));
             }
           }
-          return await this.handlePaymentAndRetry(url, body, paymentRequired, staleRetries > 0);
+          return await this.handlePaymentAndRetry(url, body, paymentRequired, staleRetries > 0, timeoutMs);
         } catch (error) {
           if (
             !(error instanceof SafeStaleBlockhashError) ||
@@ -976,7 +987,13 @@ export class SolanaLLMClient {
         throw new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(errorBody));
       }
 
-      return response.json() as Promise<ChatResponse>;
+      // No 402: a free model (cost 0) or account billing (cost on the dashboard).
+      const served = (await response.json()) as ChatResponse;
+      if (!this.apiAuth) {
+        served.costUsd = 0;
+        served.settlement = { scheme: "free", quotedUsd: 0 };
+      }
+      return served;
     }
   }
 
@@ -1184,7 +1201,8 @@ export class SolanaLLMClient {
     url: string,
     body: Record<string, unknown>,
     paymentRequired: PaymentRequired,
-    forceFreshBlockhash = false
+    forceFreshBlockhash = false,
+    timeoutMs?: number
   ): Promise<ChatResponse> {
     const { paymentPayload, costUsd } = await this.signExactPayment(
       url,
@@ -1201,12 +1219,13 @@ export class SolanaLLMClient {
         "PAYMENT-SIGNATURE": paymentPayload,
       },
       body: JSON.stringify(body),
-    });
+    }, timeoutMs);
 
     await this.assertPaid(retryResponse);
     this.recordSettlement(costUsd);
 
-    return retryResponse.json() as Promise<ChatResponse>;
+    const paid = (await retryResponse.json()) as ChatResponse;
+    return withCost(paid, retryResponse, costUsd, "exact");
   }
 
   private async requestWithPaymentRaw(
@@ -1377,9 +1396,9 @@ export class SolanaLLMClient {
     this.sessionTotalUsd += costUsd;
   }
 
-  private async fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {
+  private async fetchWithTimeout(url: string, options: RequestInit, timeoutMs?: number): Promise<Response> {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs ?? this.timeout);
     try {
       return await (this.apiAuth ? this.apiAuth.fetch.bind(this.apiAuth) : fetch)(url, { ...options, signal: controller.signal });
     } finally {

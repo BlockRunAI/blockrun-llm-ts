@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### Fixed — xAI search filters reached the gateway as camelCase and were dropped
+
+- `searchParameters` was sent verbatim (`includedXHandles`, `fromDate`, …).
+  The gateways validate the snake_case body with a non-strict schema, so every
+  filter was stripped and a "these X handles since yesterday" search ran over
+  all of X. Both clients now send `toWireSearchParameters(...)` (snake_case,
+  `@` stripped from handles). Raw snake_case dicts cast to the type still work.
+
+### Added — native xAI search tools, per-call cost and settlement receipt
+
+- `tools` accepts `{ type: "x_search", allowedXHandles, excludedXHandles,
+  fromDate, toDate, enableImageUnderstanding, enableVideoUnderstanding }` and
+  `{ type: "web_search", allowedDomains, excludedDomains }` on xai/* models
+  (`AnyTool`). `SearchParameters.maxTurns` bounds xAI's agentic search rounds.
+- `ChatResponse.costUsd` — what the call cost: the metered charge under batch,
+  the signed price under exact, 0 for a free model (undefined in API-key mode).
+  `ChatResponse.settlement` — `{ scheme, quotedUsd, transaction?, network? }`
+  from the PAYMENT-RESPONSE receipt. Both clients (Solana and EVM).
+- Response types: `message.annotations` (URL citations with positions),
+  `search_calls`, `usage.server_side_tool_usage` (x_posts_fetched, …).
+- `ChatCompletionOptions.timeout` — per-call timeout on `SolanaLLMClient`
+  (the client default stays 60 s).
+- `SolanaLLMClient.getBalance({ strict: true })` throws on an RPC failure
+  instead of reporting it as a 0 balance.
+
 ### Fixed — batch-settlement spend is the metered charge, not the ceiling
 
 - `getSpending()` booked each batch call at its ceiling (the `max_tokens`

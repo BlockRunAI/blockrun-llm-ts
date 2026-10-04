@@ -12,6 +12,7 @@ import type {
   ChatMessage,
   RoutingDecision,
   RoutingProfile,
+  Tool,
 } from "./types";
 import { APIError, PaymentError } from "./types";
 
@@ -122,7 +123,8 @@ export function routeWithCatalog(
     hasVision?: boolean;
   } = {},
 ): RoutingDecision {
-  const tools = options.tools ?? [];
+  // Only function tools shape routing; x_search / web_search run server-side on xai/*.
+  const tools = (options.tools ?? []).filter((tool): tool is Tool => tool.type === "function");
   const requiresTools =
     options.toolChoice === "none"
       ? false

@@ -116,6 +116,11 @@ export {
   // Live Search types
   type WebSearchSource,
   type XSearchSource,
+  type XSearchTool,
+  type WebSearchTool,
+  type AnyTool,
+  type UrlCitation,
+  type Settlement,
   type NewsSearchSource,
   type RssSearchSource,
   type SearchSource,
@@ -259,3 +264,7 @@ export {
   validateTemperature,
   validateTopP,
 } from "./validation";
+
+// xAI search wire format (snake_case for the gateway) — exported for raw callers.
+export { toWireSearchParameters, toWireTools } from "./search-wire";
+export { readSettlement } from "./receipt";
