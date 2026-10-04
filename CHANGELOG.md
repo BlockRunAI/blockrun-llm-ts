@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### Changed — a failure after a payment never buys another model
+
+- `fallbackModels`, and the fallback chain `smartChat()` /
+  `smartChatCompletion()` route through, used to move on to the next model
+  on any timeout, network error, 429 or 5xx, whether or not a payment had
+  already been sent for the failed call. After an `exact` payment (Base or
+  Solana) or a batch payment, that bought a second model while the first
+  payment may already have been charged. Now every error from a chat call
+  carries a retry disposition, and the chain is walked only for `'unpaid'`
+  ones: the unpaid first request and its 402 challenge, or signing. Anything
+  after the signed payment was sent (a timeout, abort or network error, any
+  error status, a 2xx whose body cannot be read) is `'paid-or-in-doubt'` and
+  propagates. An error without a disposition counts as `'paid-or-in-doubt'`.
+- With an API key the request itself is billed, so only the account API's
+  explicit 4xx answer (such as a 429) moves on; a 5xx, a timeout or a
+  network error no longer does. This matches the account transport, which
+  already never re-sends a POST after a 5xx.
+- New export `retryDisposition(err)` returns `'unpaid'`,
+  `'paid-or-in-doubt'` or `undefined`, for your own retry wrappers
+  (type `RetryDisposition`).
+- Unchanged: a 429 or 5xx before any payment still falls back, the Base
+  client's one retry of a 502/503 still re-sends the same signed payment
+  (it can settle at most once), and the Solana stale-blockhash re-sign
+  still happens inside the payment step.
+
 ### Fixed — batch-settlement spend is the metered charge, not the ceiling
 
 - `getSpending()` booked each batch call at its ceiling (the `max_tokens`

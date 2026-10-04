@@ -167,6 +167,9 @@ export {
   PaymentError,
   RetiredEndpointError,
   APIError,
+  // Whether a failed request may be retried without paying twice
+  retryDisposition,
+  type RetryDisposition,
 } from "./types";
 export {
   BASE_CHAIN_ID,

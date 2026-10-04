@@ -19,7 +19,7 @@ import {
   FileChannelStorage,
   lockChannelFile,
 } from "../../src/solana-batch";
-import { APIError } from "../../src/types";
+import { APIError, retryDisposition } from "../../src/types";
 
 /** A real ed25519 keypair (seed || public key), the way Solana wallets store it. */
 function walletKey(): string {
@@ -428,6 +428,30 @@ describe("SolanaLLMClient batch-settlement", () => {
 
     await expect(c.chat("openai/gpt-4o-mini", "gm")).rejects.toThrow("fetch failed");
     await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+  });
+
+  it.each([
+    ["a bare 503", () => new Response(JSON.stringify({ error: "upstream_unavailable" }), { status: 503 })],
+    ["a timeout", () => { throw new DOMException("The operation was aborted.", "AbortError"); }],
+  ])("chatCompletion() never moves on to fallbackModels after %s on a batch payment", async (_label, answer) => {
+    const c = client({});
+    const exact = stubExact(c);
+    gateway.push(
+      () => quote402([exactAccept(), batchAccept(operator.address)]),
+      answer,
+      () => quote402([exactAccept()]),
+      () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+    );
+
+    const raised = await c
+      .chatCompletion("openai/gpt-4o-mini", [{ role: "user", content: "gm" }], { fallbackModels: ["anthropic/claude-sonnet-4.6"] })
+      .catch((err: unknown) => err);
+
+    // Sent, so it may have been charged: the fallback model is never bought.
+    expect(retryDisposition(raised)).toBe("paid-or-in-doubt");
+    expect(gatewayCalls.map((call) => JSON.parse(String(call.init?.body)).model)).toEqual(["openai/gpt-4o-mini", "openai/gpt-4o-mini"]);
+    expect(gateway).toHaveLength(2);
+    expect(exact).not.toHaveBeenCalled();
   });
 
   it("keeps streaming on exact", async () => {

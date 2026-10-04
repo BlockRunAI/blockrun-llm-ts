@@ -47,7 +47,7 @@ console.log(r.response);         // the proof
 - 🆓 **<!-- br:models.free -->6<!-- /br:models.free --> genuinely free models** — $0 in and out, incl. two 1M-context Nemotrons, a multimodal one, and free coding models from Cohere and Poolside. No rate-limit gimmicks.
 - 🔐 **Two ways to connect** — a **BlockRun API key** billed against account credit ([sign up at user.blockrun.ai](https://user.blockrun.ai), [create a key](https://user.blockrun.ai/dashboard/keys), [add credit](https://user.blockrun.ai/dashboard/credits)), or a wallet signature with x402 micropayments and no account at all. Same code either way.
 - 💸 **Pay per request in USDC** — x402 micropayments on Solana or Base. $5 covers thousands of requests; agents can pay their own way.
-- 🛡️ **Automatic failover** — transient errors (timeouts, 429, 5xx) walk the router's ranked fallback chain instead of failing your request.
+- 🛡️ **Automatic failover** — transient errors (timeouts, 429, 5xx) before payment walk the router's ranked fallback chain instead of failing your request; a failure after a payment was sent never buys a second model.
 - ⚡ **Streaming, OpenAI & Anthropic compat** — drop-in `chat.completions` / `messages` layers, SSE streaming, strict TypeScript.
 - 🎨 **Beyond chat** — image, video, music, speech, live search, prediction markets, crypto data, and 40-chain RPC through the same API key or wallet.
 
@@ -307,10 +307,38 @@ console.log(complex.routing.fallbacks);  // ['anthropic/claude-opus-4.7', ...]
 `smartChat()` populates a fallback chain from the portfolio ranking and
 `chat()` / `chatCompletion()` walk it automatically when the primary model
 returns a transient error — timeouts, network failures, 429 rate limits, or
-5xx responses (502/503/504/522/524). Other 4xx errors and `PaymentError`
-propagate immediately so wallet / auth issues surface fast. (Solana's internal
-stale-blockhash re-sign is a separate, lower-level retry inside the payment
-step — see [How Payment Works](#phase-2--every-request-pays-itself-automatic-x402).)
+5xx responses (502/503/504/522/524) — **before any payment was sent**. Other
+4xx errors and `PaymentError` propagate immediately so wallet / auth issues
+surface fast. (Solana's internal stale-blockhash re-sign is a separate,
+lower-level retry inside the payment step — see [How Payment Works](#phase-2--every-request-pays-itself-automatic-x402).)
+
+The next model is a new paid request, so the chain is only walked when the
+failed request cannot have been charged. Every error from these calls carries
+a retry disposition, which `retryDisposition(err)` returns:
+
+- `'unpaid'`: nothing chargeable was sent — the unpaid first request and its
+  402 challenge, or signing the payment. A 429, 5xx, timeout or network error
+  here moves on to the next model.
+- `'paid-or-in-doubt'`: the signed payment (exact or batch) was sent and may
+  have been charged — a timeout, abort or network error after sending it, any
+  error status in answer to it, or a 2xx whose body could not be read. The
+  error propagates; no other model is bought for the call. With an API key
+  the request itself is billed, so only the account API's explicit 4xx
+  answer (such as a 429) is `'unpaid'`; a 5xx or a timeout is not.
+
+An error without a disposition counts as `'paid-or-in-doubt'`. Use the same
+check in your own retry wrapper:
+
+```typescript
+import { retryDisposition } from '@blockrun/llm';
+
+try {
+  await client.chat('openai/gpt-5.2', 'hello');
+} catch (err) {
+  if (retryDisposition(err) !== 'unpaid') throw err; // may have been charged: never resend
+  // safe to retry: nothing was paid
+}
+```
 
 ```typescript
 // Manually pass a fallback chain to chat() / chatCompletion()
@@ -398,7 +426,7 @@ picked:
 | `taskType` | Portfolio task classification: `'chat'`, `'extraction'`, `'code_edit'`, `'code_agent'`, `'tool_agent'`, `'debug'`, `'reasoning'`, `'reasoning_math'`, `'long_context'`, `'vision'`, … |
 | `candidates` | Ordered, capability-eligible models ranked by the portfolio router; the first entry is `model` |
 | `candidateScores` | Per-candidate score breakdown (`quality` / `cost` / `speed` / `reliability`), ordered with `candidates` |
-| `fallbacks` | The chain `chat()` walks on transient errors (timeout / network / 429 / 5xx) — `candidates` minus the primary, with ClawRouter's proxy-namespace `free/*` ids mapped to their `nvidia/*` gateway ids (SDK-computed) |
+| `fallbacks` | The chain `chat()` walks on transient errors before payment (timeout / network / 429 / 5xx) — `candidates` minus the primary, with ClawRouter's proxy-namespace `free/*` ids mapped to their `nvidia/*` gateway ids (SDK-computed) |
 | `savings` | 0–1 fraction saved vs the premium baseline |
 | `costEstimate` / `baselineCost` | Estimated cost of the pick vs that baseline, in USD |
 | `confidence` | Sigmoid-calibrated classifier confidence, 0–1 |
@@ -1634,6 +1662,10 @@ try {
   }
 }
 ```
+
+Before retrying a failed call yourself, check `retryDisposition(error)`
+(see [Automatic Fallback on Transient Errors](#automatic-fallback-on-transient-errors)):
+anything but `'unpaid'` may already have been charged.
 
 ## Testing
 

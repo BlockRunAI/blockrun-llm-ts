@@ -33,7 +33,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { paths as corePaths } from "@blockrun/core";
-import type { PaymentRequired } from "./types";
+import { withDisposition, type PaymentRequired } from "./types";
 
 export const BATCH_SCHEME = "batch-settlement";
 
@@ -507,7 +507,8 @@ export class SolanaBatchPayer {
         // pending slot; if the gateway did charge, its next voucher carries it.
         if (deposit) await this.forget(wallet);
         else await this.settle(http, payload, () => null, 0);
-        throw err;
+        // Sent, so it may have been charged: never retried, never a fallback model.
+        throw withDisposition(err, "paid-or-in-doubt");
       }
 
       const getHeader = (name: string) => response.headers.get(name);
