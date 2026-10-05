@@ -886,8 +886,10 @@ export class LLMClient {
     // Once the signed payment is SENT, only a 402 (the payment was refused at
     // verification, e.g. the price changed) may fall through to the normal flow,
     // which signs and sends a second payment. Any other answer, or no answer
-    // (timeout, network error), may follow a settled charge: the gateway settles
-    // a stream when it starts. Paying again there would charge the call twice.
+    // (timeout, network error), cannot be told apart from a call that settled:
+    // the gateway verified the payment and may have served and settled it (a
+    // proxy's 502/504 or our own timeout says nothing about the handler behind
+    // it). Paying again there could charge the call twice.
     if (cached && now - cached.cachedAt < LLMClient.PRE_AUTH_TTL_MS) {
       let signed: { paymentPayload: string; costUsd: number } | undefined;
       try {
