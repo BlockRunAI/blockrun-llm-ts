@@ -1483,9 +1483,15 @@ export class SolanaLLMClient {
     if (!response.ok) {
       let errorBody: unknown;
       try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
+      // sol.blockrun.ai answers 503 PAYMENT_VERIFICATION_UNAVAILABLE only from a
+      // failed VERIFICATION (its verifier is down): settlement never ran and the
+      // signed transaction was never broadcast. The batch path already trusts this
+      // code as "nothing charged" (BATCH_REFUSALS); exact now does the same.
+      const unverified = response.status === 503
+        && (errorBody as { code?: unknown } | null)?.code === "PAYMENT_VERIFICATION_UNAVAILABLE";
       throw withDisposition(
         new APIError(`API error after payment: ${response.status}`, response.status, sanitizeErrorResponse(errorBody)),
-        "paid-or-in-doubt"
+        unverified ? "unpaid" : "paid-or-in-doubt"
       );
     }
   }
