@@ -318,7 +318,10 @@ a retry disposition, which `retryDisposition(err)` returns:
 
 - `'unpaid'`: nothing chargeable was sent — the unpaid first request and its
   402 challenge, or signing the payment. A 429, 5xx, timeout or network error
-  here moves on to the next model.
+  here moves on to the next model. On Solana, a `503
+  PAYMENT_VERIFICATION_UNAVAILABLE` in answer to the payment is `'unpaid'`
+  too: the gateway sends it only when verification could not run, so nothing
+  was settled or broadcast (the batch path already treats it as a refusal).
 - `'paid-or-in-doubt'`: the signed payment (exact or batch) was sent and may
   have been charged — a timeout, abort or network error after sending it, any
   error status in answer to it, or a 2xx whose body could not be read. The

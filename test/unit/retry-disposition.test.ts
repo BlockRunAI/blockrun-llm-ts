@@ -174,6 +174,44 @@ describe.each([
   });
 });
 
+describe("SolanaLLMClient (exact): 503 PAYMENT_VERIFICATION_UNAVAILABLE after the payment", () => {
+  // sol.blockrun.ai sends this code only when verification itself could not run:
+  // nothing settled, nothing broadcast. Same rule as the batch path's refusal list.
+  const pvu: Answer = () => Response.json(
+    { error: "Payment verification temporarily unavailable", message: "Retry the request; the signed payment was not rejected.", code: "PAYMENT_VERIFICATION_UNAVAILABLE", reason: "verification_unavailable" },
+    { status: 503, headers: { "Retry-After": "7" } },
+  );
+
+  it("is unpaid: moves on to the fallback model, which pays once with its own payment", async () => {
+    const client = solanaClient();
+    answers.push(solana402, pvu, solana402, ok());
+
+    const response = await chat(client);
+
+    expect(response.model).toBe(FALLBACK);
+    expect(calls.map((c) => [c.model, c.paid])).toEqual([[PRIMARY, false], [PRIMARY, true], [FALLBACK, false], [FALLBACK, true]]);
+  });
+
+  it("control: a 503 with any other body after the payment stays in doubt", async () => {
+    const client = solanaClient();
+    answers.push(solana402, () => Response.json({ error: "Service Unavailable", code: "MODEL_UNAVAILABLE" }, { status: 503 }), ok());
+
+    const raised = await chat(client).catch((err: unknown) => err);
+
+    expect(retryDisposition(raised)).toBe("paid-or-in-doubt");
+    expect(answers).toHaveLength(1);
+  });
+
+  it("control: the code on a non-503 status proves nothing", async () => {
+    const client = solanaClient();
+    answers.push(solana402, () => Response.json({ code: "PAYMENT_VERIFICATION_UNAVAILABLE" }, { status: 502 }), ok());
+
+    const raised = await chat(client).catch((err: unknown) => err);
+
+    expect(retryDisposition(raised)).toBe("paid-or-in-doubt");
+  });
+});
+
 describe("account mode (API key): the request itself is billed", () => {
   const KEY = "brk_test_disposition";
 

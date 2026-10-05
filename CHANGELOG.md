@@ -63,7 +63,10 @@
   ones: the unpaid first request and its 402 challenge, or signing. Anything
   after the signed payment was sent (a timeout, abort or network error, any
   error status, a 2xx whose body cannot be read) is `'paid-or-in-doubt'` and
-  propagates. An error without a disposition counts as `'paid-or-in-doubt'`.
+  propagates, except a Solana `503 PAYMENT_VERIFICATION_UNAVAILABLE`: the
+  gateway sends that only when verification could not run (nothing settled or
+  broadcast), so it is `'unpaid'` on the exact path as on the batch path. An
+  error without a disposition counts as `'paid-or-in-doubt'`.
 - With an API key the request itself is billed, so only the account API's
   explicit answers move on: a 4xx (such as a 429), or a 5xx that carries its
   JSON error envelope. api.blockrun.ai debits a chat request only on an
