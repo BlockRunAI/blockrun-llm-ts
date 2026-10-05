@@ -2807,6 +2807,59 @@ describe("SolanaLLMClient batch-settlement", () => {
       return receipt({ success: false, errorReason, transaction: "" });
     }
 
+    it("sol.blockrun.ai's 402 + failed capacity receipt pays exact AT ONCE: no wait, no batch retry", async () => {
+      // The gateway's answer (blockrun-sol #426): a capacity cap does not free up
+      // in 30s, and a deposit request costs its quote under exact too, so the
+      // caller is told "nothing charged" with a 402 rather than PayAI's 429.
+      const c = observed();
+      const exact = stubExact(c);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        (_url, init) => {
+          expect(decodePayment(init).payload.type).toBe("deposit");
+          return new Response(
+            JSON.stringify({ error: "batch_account_channel_capacity_exhausted", message: "Batch settlement is at capacity; nothing was charged. Pay this request with the exact scheme." }),
+            { status: 402, headers: { "content-type": "application/json", ...preBroadcast("batch_account_channel_capacity_exhausted") } }
+          );
+        },
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(sleeps).toEqual([]);
+      expect(c.getBatchStats()).toMatchObject({ backoffs: 0, retries: 0, unresolved: 0, resyncs: 0 });
+      expect(events.some((e) => e.type === "fallback")).toBe(true);
+
+      // The receipt proved nothing was broadcast: the deposit is forgotten at
+      // once, so the next call opens batch again instead of resyncing on exact.
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("deposit");
+          return servedWithVoucher(operator, channelIdOf(payment), 1000n, 1000n);
+        }
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(events.some((e) => e.type === "resync")).toBe(false);
+    });
+
+    it("control: a bare 402 to a deposit (no receipt) still keeps it in doubt and resyncs", async () => {
+      const c = observed();
+      stubExact(c);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        () => new Response(JSON.stringify({ error: "PAYMENT_INVALID", message: "batch_deposit_failed" }), { status: 402 }),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+      await c.chat("openai/gpt-4o-mini", "gm");
+      const intents = JSON.parse(fs.readFileSync(path.join(tmp, "channels.json.deposit-intents"), "utf8"));
+      expect(Object.keys(intents.intents)).toHaveLength(1);
+    });
+
     it("waits out Retry-After (seconds), then retries the open and is paid with batch", async () => {
       const c = observed();
       const exact = stubExact(c);

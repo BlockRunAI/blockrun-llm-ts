@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed — a capacity-refused batch deposit no longer parks the wallet on exact
+
+- sol.blockrun.ai answers a deposit that PayAI refused for capacity or rate
+  (`batch_account_channel_capacity_exhausted`, `batch_channel_capacity_exhausted`,
+  `batch_deposit_rate_limited`, empty `transaction`) with a 402 carrying
+  PayAI's failed receipt. The call pays `exact` at once, as before. The SDK
+  now also reads that receipt as proof that nothing was broadcast, so it
+  forgets the deposit immediately. Before, it re-read the channel from the
+  chain for about 300 blocks, paying `exact` in the meantime. A bare 402 with
+  no receipt still keeps the deposit in doubt.
+
 ### Fixed — `AnthropicClient` in wallet mode charged up to three times for one call
 
 - The Anthropic SDK retries 408, 409, 429, 5xx and connection errors on its
