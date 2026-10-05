@@ -585,7 +585,7 @@ gateway's answer proves, in one place:
 | The gateway's answer to the payment | What the SDK does |
 | --- | --- |
 | a 2xx | the call is served and booked (a missing or unreconciled receipt only makes the SDK re-read the channel before the next payment) |
-| first send: a 402, or a recognised refusal (`batch_payer_not_allowed`, `batch_payer_not_admitted`, `batch_admission_paused`, `batch_server_signed_only`, `PAYMENT_VERIFICATION_UNAVAILABLE`), with no receipt or a failed one with no transaction | nothing was charged: pays `exact` |
+| first send: a 402, or a recognised refusal (`batch_payer_not_allowed`, `batch_payer_not_admitted`, `batch_admission_paused`, `batch_server_signed_only`, `batch_unavailable`, `PAYMENT_VERIFICATION_UNAVAILABLE`), with no receipt or a failed one with no transaction | nothing was charged: pays `exact`. A deposit refused with a 402 or `PAYMENT_VERIFICATION_UNAVAILABLE` may still have been broadcast, so its channel is re-read from the chain before anything pays into it again |
 | first send: a 429 whose failed receipt proves nothing was broadcast (`batch_account_channel_capacity_exhausted`, `batch_channel_capacity_exhausted`, `batch_deposit_rate_limited`) | nothing was charged: backs off, then pays again with a new batch payment from a fresh 402; `exact` once `rateLimit` runs out |
 | first send: a 429 with no receipt | **in doubt**: after the backoff, replays the identical payment **once**; a 2xx with a success receipt ends it, anything else raises |
 | anything else: a timeout, an abort or a network error after sending; a 5xx or other error status without a recognised refusal; a receipt naming a transaction, saying `settlement_pending` or saying it succeeded on an error status; a 429 with any other receipt | **in doubt**: raises `BatchPaymentUnresolvedError` |
@@ -620,13 +620,16 @@ gateway's answer proves, in one place:
   A retry is up to you, and it is a new payment:
 
   ```typescript
-  import { BatchPaymentUnresolvedError } from '@blockrun/llm';
+  import type { BatchPaymentUnresolvedError } from '@blockrun/llm';
 
   try {
     await client.smartChat('Summarize x402 in one line');
   } catch (err) {
-    if (err instanceof BatchPaymentUnresolvedError) {
-      console.warn(`payment ${err.requestId} from ${err.wallet} may have been charged`);
+    // Match by name: `instanceof` fails when the error comes from another
+    // loaded copy of the SDK (the CJS and ESM builds side by side).
+    if (err instanceof Error && err.name === 'BatchPaymentUnresolvedError') {
+      const unresolved = err as BatchPaymentUnresolvedError;
+      console.warn(`payment ${unresolved.requestId} from ${unresolved.wallet} may have been charged`);
     }
     throw err;
   }

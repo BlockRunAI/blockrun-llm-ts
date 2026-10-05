@@ -167,14 +167,15 @@ export interface SolanaBatchEvent {
    * `channel_pending`, `closed_during_call`, `peer_dependency_missing`, `payment_creation_failed`,
    * `wallet_config_conflict`, `channel_store_locked`, `payment_required`,
    * `channel_resync_pending`, `channel_resync_failed`, `channel_unreadable`,
+   * `deposit_journal_unreadable`, `deposit_journal_failed`,
    * `served_unpaid_on_rechallenge` (a `recovered` event), or one of the gateway's refusal codes the
    * SDK recognises (`batch_payer_not_allowed`, `batch_payer_not_admitted`,
-   * `batch_admission_paused`, `batch_server_signed_only`,
+   * `batch_admission_paused`, `batch_server_signed_only`, `batch_unavailable`,
    * `PAYMENT_VERIFICATION_UNAVAILABLE`). An `unresolved` event's reason is a
    * {@link BatchUnresolvedReason}. A `resync` event's reason is
    * `deposit_unanswered`, `deposit_failed`, `deposit_rate_limited`,
-   * `receipt_missing`, `receipt_unreconciled`, `orphaned_deposit`,
-   * `deposit_unrecorded` or `channel_unusable`.
+   * `deposit_refused`, `receipt_missing`, `receipt_unreconciled`,
+   * `orphaned_deposit`, `deposit_unrecorded` or `channel_unusable`.
    */
   reason: string;
   /** HTTP status of the gateway answer behind the event, when there was one. */
@@ -809,6 +810,15 @@ interface BatchRegistry {
   locks: Map<string, string>;
   /** Whether the exit hook that removes held locks is installed. */
   exitHook: boolean;
+  /**
+   * Channel files whose lock this process holds, with the lock file's
+   * identity (`dev:ino:mtime`) when it was taken. A lock re-created under the same
+   * pid (say, by a 3.19.x copy in this process, which takes its own pid's
+   * lock for a stale one) has another identity: ownership is lost.
+   * Optional: added without a registry version bump, so a copy that built
+   * the registry before this field existed leaves it to be created here.
+   */
+  lockIds?: Map<string, string>;
 }
 const registryHost = globalThis as typeof globalThis & { [BATCH_REGISTRY]?: BatchRegistry };
 const registry: BatchRegistry = (registryHost[BATCH_REGISTRY] ??= {
@@ -816,6 +826,51 @@ const registry: BatchRegistry = (registryHost[BATCH_REGISTRY] ??= {
   locks: new Map(),
   exitHook: false,
 });
+const lockIds: Map<string, string> = (registry.lockIds ??= new Map());
+
+/**
+ * A lock file's identity: its inode and modification time. The lock is never
+ * rewritten once taken, so a lock re-created by another owner differs in
+ * one or the other even where the filesystem reuses the freed inode number.
+ */
+function fileIdentity(file: string): string | undefined {
+  try {
+    const stat = fs.statSync(file);
+    return `${stat.dev}:${stat.ino}:${stat.mtimeMs}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether a lock naming this process was written before this process
+ * started: then it is a dead process's that had the same pid (a container
+ * restarted as PID 1 after a SIGKILL or an OOM kill never ran its exit hook),
+ * not another SDK copy's in this one.
+ */
+function lockPredatesProcess(lock: string): boolean {
+  try {
+    return fs.statSync(lock).mtimeMs < performance.timeOrigin;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether this process still holds the lock it took on a channel file: the
+ * lock still names this pid with this owner's token, and is the very file
+ * that was created then. Checked before every batch payment, so an owner
+ * that lost its lock (a racing takeover, an older SDK copy that re-created
+ * it) never pays into a channel another owner may also be paying into.
+ */
+export function holdsChannelFile(file: string): boolean {
+  const token = registry.locks.get(file);
+  if (!token) return false;
+  const lock = `${file}.lock`;
+  if (!ownsLock(lock, token)) return false;
+  const id = lockIds.get(file);
+  return id === undefined || fileIdentity(lock) === id;
+}
 
 /**
  * The sidecar beside a lock file that holds its owner's random ownership
@@ -872,8 +927,10 @@ function releaseHeldLocks(): void {
     const lock = `${file}.lock`;
     try {
       if (!ownsLock(lock, token)) continue;
-      fs.unlinkSync(lock);
+      // The sidecar first: once the lock is gone another process may take it
+      // and write its own sidecar, which must not be removed here.
       fs.unlinkSync(lockTokenFile(lock));
+      fs.unlinkSync(lock);
     } catch { /* already gone */ }
   }
 }
@@ -894,7 +951,10 @@ function releaseHeldLocks(): void {
  * Only a lock whose process is gone is taken over. A lock that names this
  * process but is not in the process-wide registry was taken by another copy
  * of the SDK in this process (one with a different registry version), so it
- * is in use, never stale.
+ * is in use, unless the file predates this process: then a dead process with
+ * the same pid left it (a container restarted as PID 1), and it is stale.
+ * Taking over a stale lock is not atomic against another taker; the loser
+ * finds out before its next payment ({@link holdsChannelFile}).
  *
  * @returns undefined when the lock is ours, or the live owner's pid (this
  *   process's own pid when another SDK copy in it holds the file).
@@ -908,7 +968,16 @@ export function lockChannelFile(file: string): number | undefined {
     const tmp = `${lock}.${process.pid}.${token}.tmp`;
     try {
       fs.writeFileSync(tmp, String(process.pid), { mode: 0o600 });
-      fs.linkSync(tmp, lock);
+      try {
+        fs.linkSync(tmp, lock);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        // Filesystems without hard links (FAT/exFAT, many SMB shares): an
+        // exclusive create, as 3.19.x did. A reader may briefly see it empty,
+        // which reads as no owner and is retried, never as stale.
+        if (code !== "EPERM" && code !== "ENOTSUP" && code !== "EXDEV" && code !== "EOPNOTSUPP") throw err;
+        fs.writeFileSync(lock, String(process.pid), { flag: "wx", mode: 0o600 });
+      }
       try {
         writeLockToken(lock, token);
       } catch (err) {
@@ -917,6 +986,9 @@ export function lockChannelFile(file: string): number | undefined {
         throw err;
       }
       registry.locks.set(file, token);
+      const id = fileIdentity(lock);
+      if (id) lockIds.set(file, id);
+      else lockIds.delete(file);
       if (!registry.exitHook) {
         registry.exitHook = true;
         process.once("exit", releaseHeldLocks);
@@ -929,9 +1001,13 @@ export function lockChannelFile(file: string): number | undefined {
     }
     const owner = readLockOwner(lock);
     if (!owner) continue; // released meanwhile: try again
-    // Never stale while this process is alive: another SDK copy in it holds it.
-    if (owner.pid === process.pid) return process.pid;
-    if (owner.pid > 0 && processAlive(owner.pid)) return owner.pid;
+    // Naming this process: another SDK copy in it holds it, unless it was
+    // written before this process started (a dead process that had this pid).
+    if (owner.pid === process.pid) {
+      if (!lockPredatesProcess(lock)) return process.pid;
+    } else if (owner.pid > 0 && processAlive(owner.pid)) {
+      return owner.pid;
+    }
     // Its process is gone. Remove it only if it is still the lock judged stale.
     try {
       if (readLockOwner(lock)?.raw === owner.raw) fs.unlinkSync(lock);
@@ -998,7 +1074,8 @@ interface ResyncTarget {
     | "receipt_unreconciled"
     | "orphaned_deposit"
     | "deposit_unrecorded"
-    | "channel_unusable";
+    | "channel_unusable"
+    | "deposit_refused";
 }
 
 /** Thrown into the scheme when a stored record needs a chain re-read before it can be used. */
@@ -1260,6 +1337,8 @@ export async function readChannelAccount(
     headers: { ...rpcHeaders, "Content-Type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [channelId, config] }),
     signal: AbortSignal.timeout(15_000),
+    // rpcHeaders may carry an API key: never let a redirect take it elsewhere.
+    redirect: "error",
   });
   if (!response.ok) throw new Error(`getAccountInfo answered HTTP ${response.status}`);
   const body = (await response.json()) as {
@@ -1293,6 +1372,8 @@ async function rpcRequest(
     headers: { ...rpcHeaders, "Content-Type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
     signal: AbortSignal.timeout(15_000),
+    // rpcHeaders may carry an API key: never let a redirect take it elsewhere.
+    redirect: "error",
   });
   if (!response.ok) throw new Error(`${method} answered HTTP ${response.status}`);
   const body = (await response.json()) as { result?: unknown; error?: { message?: string } };
@@ -1462,6 +1543,32 @@ function rebuiltCharge(settled: SettleResponseLike | undefined, payload: Payment
   return charged > ceiling ? ceiling : charged;
 }
 
+/** A channel record's confirmed cumulative and deposit, if it has confirmed state. */
+function confirmedState(record: StoredRecord | undefined): { cumulative: bigint; deposit: bigint } | undefined {
+  if (!record || !(record.pending === undefined || record.hasConfirmedState)) return undefined;
+  return { cumulative: parseAtomic(record.chargedCumulativeAmount), deposit: parseAtomic(record.deposit) };
+}
+
+/**
+ * Whether the scheme recorded a success receipt: the deposit the payload
+ * carried is in the channel's confirmed deposit, and the charge the receipt
+ * names is in its confirmed cumulative. A receipt that charged nothing for
+ * an authorization leaves nothing to check.
+ */
+function recordAdvanced(
+  before: { cumulative: bigint; deposit: bigint } | undefined,
+  after: { cumulative: bigint; deposit: bigint } | undefined,
+  payload: PaymentPayloadLike,
+  receipt: SettleResponseLike,
+): boolean {
+  const deposited = payload.payload?.type === "deposit" ? parseAtomic(payload.payload.deposit?.amount) : 0n;
+  const charged = rebuiltCharge(receipt, payload);
+  if (deposited === 0n && charged === 0n) return true;
+  if (!after) return false;
+  const prior = before ?? { cumulative: 0n, deposit: 0n };
+  return after.deposit >= prior.deposit + deposited && after.cumulative >= prior.cumulative + charged;
+}
+
 /**
  * The gateway's refusals of a batch payment that it gives before it verifies
  * or reserves anything, so they charge nothing and the call may pay `exact`
@@ -1476,7 +1583,27 @@ const BATCH_REFUSALS: ReadonlySet<string> = new Set([
   "batch_payer_not_admitted",
   "batch_admission_paused",
   "batch_server_signed_only",
+  "batch_unavailable",
   "PAYMENT_VERIFICATION_UNAVAILABLE",
+]);
+
+/**
+ * The {@link BATCH_REFUSALS} the gateway gives before it starts a batch
+ * request at all, so a deposit they refuse was never broadcast.
+ *
+ * Not `PAYMENT_VERIFICATION_UNAVAILABLE`, nor a plain 402: the gateway
+ * settles a deposit inside verification, before anything is served, and
+ * answers a deposit it judged "did not land" (its funding transaction
+ * broadcast, then a confirmation or bookkeeping failure) with one of those,
+ * without a receipt. The call itself was charged nothing and may pay exact,
+ * but the deposit stays in doubt until the chain settles it.
+ */
+const PRE_REQUEST_REFUSALS: ReadonlySet<string> = new Set([
+  "batch_payer_not_allowed",
+  "batch_payer_not_admitted",
+  "batch_admission_paused",
+  "batch_server_signed_only",
+  "batch_unavailable",
 ]);
 
 /**
@@ -1723,6 +1850,13 @@ type SendOutcome =
       status: number;
       errorReason?: string;
       rateLimited?: { retryAfterMs?: number };
+      /**
+       * Whether the answer also proves a deposit this payment carried was
+       * never broadcast. Without that proof the call may still pay again
+       * (nothing was charged for it), but the deposit is kept in doubt and
+       * settled from the chain ({@link PRE_REQUEST_REFUSALS}).
+       */
+      depositSafe: boolean;
     }
   | InDoubt;
 
@@ -1872,9 +2006,13 @@ function installRpcHeaderHook(): void {
   const hooked: HookedFetch = (input, init) => {
     const scope = rpcScope.getStore();
     if (!scope || requestUrl(input) !== scope.url) return current(input, init);
-    const headers = new Headers(scope.headers);
+    // A Request's own headers, then the scope's, then the call's: the call wins.
+    const headers = new Headers(input instanceof Request ? input.headers : undefined);
+    new Headers(scope.headers).forEach((value, name) => headers.set(name, value));
     new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
-    return current(input, { ...init, headers });
+    // Never follow a redirect with them: an RPC key in a custom header (say
+    // x-api-key) is not one of the headers fetch strips on a cross-origin hop.
+    return current(input, { ...init, headers, redirect: "error" });
   };
   hooked[RPC_HEADER_HOOK] = true;
   globalThis.fetch = hooked;
@@ -1904,6 +2042,8 @@ interface WalletBatch {
    * channel under a call that would then open a new one.
    */
   active: number;
+  /** The channel file whose lock this process holds, when the store is a file. */
+  file?: string;
   /** The scheme's channel store, kept across scheme rebuilds. */
   book: ChannelBook;
   /** Channel records to re-read from the chain before the next payment, by storage key. */
@@ -2074,14 +2214,36 @@ export class SolanaBatchPayer {
           detail: `cannot read ${(intents as FileIntentJournal).file}: ${err instanceof Error ? err.message : String(err)}`,
         };
       }
-      const created: WalletBatch = { config, busy: false, cooldownUntil: 0, active: 0, book, resyncs, intents, closes: 0 };
+      const created: WalletBatch = {
+        config,
+        busy: false,
+        cooldownUntil: 0,
+        active: 0,
+        ...(file ? { file } : {}),
+        book,
+        resyncs,
+        intents,
+        closes: 0,
+      };
       // A deposit journaled by a process that died is in doubt: settle it
       // from the chain before anything pays into the wallet's channels.
       for (const intent of journaled) addResyncTarget(created, intentTarget(intent));
       registry.wallets.set(address, created);
       return created;
     })();
-    return this.state;
+    // Only a wallet is kept. A refusal that can clear (a lock another process
+    // releases, a journal someone repairs) or a failure (an unwritable
+    // directory) is asked again on the next call, not for the client's life.
+    const state = this.state;
+    state.then(
+      (result) => {
+        if ("reason" in result && result.reason !== "wallet_config_conflict" && this.state === state) this.state = undefined;
+      },
+      () => {
+        if (this.state === state) this.state = undefined;
+      },
+    );
+    return state;
   }
 
   private build(wallet: WalletBatch): Promise<BuiltClient> {
@@ -2154,6 +2316,10 @@ export class SolanaBatchPayer {
     wallet.client = undefined;
     wallet.resyncs.delete(key);
     await wallet.book.forget(key);
+    // A close is deferred while any deposit is in doubt, so an intent left
+    // under a closed channel's key is stale, and would later be read as one
+    // for whatever channel is opened under that key.
+    this.forgetIntent(wallet, key);
   }
 
   /**
@@ -2172,10 +2338,17 @@ export class SolanaBatchPayer {
     const channelId = payloadChannelId(payload);
     const known = channelId ? wallet.book.find(channelId) : undefined;
     if (!channelId || !known) {
-      // Nothing to re-read by id (the scheme always stores a record before a
-      // payment, so this should not happen). Drop the scheme's memory so it
-      // reloads what storage holds; never delete the stored record.
+      // No record to name the channel by (the scheme drops an open's record
+      // when it rolls one back): a deposit's journaled intent still does.
       wallet.client = undefined;
+      let intent: DepositIntent | undefined;
+      try {
+        intent = sent.key ? wallet.intents.list().find((candidate) => candidate.key === sent.key) : undefined;
+      } catch {
+        intent = undefined;
+      }
+      // Otherwise the scheme reloads what storage holds; the stored record is never deleted.
+      if (intent) addResyncTarget(wallet, { ...intentTarget(intent), reason });
       return;
     }
     const { key, record } = known;
@@ -2302,7 +2475,12 @@ export class SolanaBatchPayer {
         throw failed(err);
       }
       let outcome: string;
-      if (channel === undefined) {
+      if (typeof stored?.channelId === "string" && stored.channelId !== target.channelId) {
+        // The key now holds another channel (this one was closed and a new one
+        // opened in its place, and a stale intent outlived it): never delete
+        // or overwrite the live record from what this channel shows.
+        outcome = `the record under its key now names channel ${stored.channelId}; left untouched`;
+      } else if (channel === undefined) {
         await wallet.book.delete(target.key);
         outcome = "no such channel at finalized commitment, past its deposit's last valid block; record dropped";
       } else if (!channel.open) {
@@ -2449,7 +2627,7 @@ export class SolanaBatchPayer {
     }
     wallet.active += 1;
     try {
-      return await this.payWith(wallet, paymentRequired, send, rechallenge);
+      return await this.payWith(wallet, paymentRequired, send, rechallenge, closesAtStart ?? wallet.closes);
     } finally {
       wallet.active -= 1;
     }
@@ -2477,6 +2655,7 @@ export class SolanaBatchPayer {
     paymentRequired: PaymentRequired,
     send: (headers: Record<string, string>) => Promise<Response>,
     rechallenge: () => Promise<Rechallenge>,
+    fence: number,
   ): Promise<BatchAttempt> {
     let current = paymentRequired;
     // A fallback pays exact against the freshest 402 this call holds.
@@ -2544,7 +2723,23 @@ export class SolanaBatchPayer {
           const unavailable = batchUnavailable(current);
           if (unavailable) return fallback({ ...unavailable, attempt: budget.attempt });
         }
+        // A close can complete while this call waits out a cooldown: checked
+        // again here, right before anything is paid into the wallet's channels.
+        if (wallet.closes !== fence) {
+          return fallback({
+            reason: "closed_during_call",
+            attempt: budget.attempt,
+            detail: "closeBatchChannel() closed this wallet's channel after this call started; it opens no channel",
+          });
+        }
         if (wallet.busy) return fallback({ reason: "channel_busy", attempt: budget.attempt });
+        if (wallet.file && !holdsChannelFile(wallet.file)) {
+          return fallback({
+            reason: "channel_store_locked",
+            attempt: budget.attempt,
+            detail: `this process no longer holds the lock on ${wallet.file}; another owner may be paying into its channels`,
+          });
+        }
         wallet.busy = true;
         holding = true;
 
@@ -2584,12 +2779,17 @@ export class SolanaBatchPayer {
         }
 
         if (outcome.kind === "not_charged") {
-          // Proven not charged, nothing broadcast: this call may pay again.
-          if (built.kind !== "authorization") this.forgetIntent(wallet, built.key);
+          // Proven not charged: this call may pay again. A deposit it carried
+          // is forgotten only on proof it was never broadcast; otherwise it is
+          // re-read from the chain before anything pays into the wallet again.
+          if (built.kind !== "authorization") {
+            if (outcome.depositSafe) this.forgetIntent(wallet, built.key);
+            else this.distrust(wallet, built, "deposit_refused");
+          }
           sent = undefined;
           release();
           if (!outcome.rateLimited) {
-            const { kind: _kind, rateLimited: _limited, ...event } = outcome;
+            const { kind: _kind, rateLimited: _limited, depositSafe: _safe, ...event } = outcome;
             return fallback({ ...event, attempt: budget.attempt });
           }
           const wait = this.coolDown(wallet, outcome.rateLimited.retryAfterMs ?? backoffDelay(budget.attempt));
@@ -2902,12 +3102,22 @@ export class SolanaBatchPayer {
 
     // Hand the answer to the scheme: it verifies the operator's voucher and
     // advances the channel, or rolls it back to its confirmed state.
+    const channelId = payloadChannelId(payload);
+    const before = channelId ? confirmedState(wallet.book.find(channelId)?.record) : undefined;
     const reconciled = await this.settle(http, payload, getHeader, status);
     const receipt = reconciled.settleResponse;
-    const definitive = receipt?.success === true && reconciled.ok;
+    // `processPaymentResult` does not say whether the scheme took the receipt:
+    // upstream rolls a voucher whose cumulative is out of range, or whose
+    // commitment it cannot match, back to the confirmed state without
+    // throwing. So "reconciled" is read from the record it left behind.
+    const definitive =
+      receipt?.success === true &&
+      reconciled.ok &&
+      recordAdvanced(before, channelId ? confirmedState(wallet.book.find(channelId)?.record) : undefined, payload, receipt);
 
-    // A replay resolves only on a receipt the scheme verified (success and a
-    // valid voucher); anything less leaves the original in doubt.
+    // A replay resolves only on a receipt the scheme verified and recorded
+    // (success, a valid voucher, the record advanced); anything less leaves
+    // the original in doubt.
     if (response.ok && (!replay || definitive)) {
       if (!definitive) {
         // Served, but without a receipt the scheme could reconcile (none at
@@ -2942,6 +3152,9 @@ export class SolanaBatchPayer {
           status,
           errorReason: await rateLimitReason(response, receipt),
           rateLimited: { retryAfterMs: parseRetryAfter(getHeader("retry-after")) },
+          // The facilitator's explicit failed receipt names no transaction: the
+          // deposit was never broadcast (see provesNothingBroadcast).
+          depositSafe: true,
         };
       }
       return {
@@ -2971,12 +3184,14 @@ export class SolanaBatchPayer {
             cause: await afterPaymentError(response),
           };
         }
-        return { kind: "not_charged", reason: "payment_required", status };
+        return { kind: "not_charged", reason: "payment_required", status, depositSafe: false };
       }
       const refusal = await batchRefusal(response);
       // A refusal charges nothing, so a refused top-up leaves a healthy
       // channel exactly as it was confirmed. Keep it.
-      if (refusal) return { kind: "not_charged", reason: refusal, status, errorReason: refusal };
+      if (refusal) {
+        return { kind: "not_charged", reason: refusal, status, errorReason: refusal, depositSafe: PRE_REQUEST_REFUSALS.has(refusal) };
+      }
     }
 
     return {
@@ -3063,9 +3278,14 @@ export class SolanaBatchPayer {
       if (err instanceof ChannelUnreadableError) {
         throw new ResyncError("channel_unreadable", `${err.message}; no top-up is signed into it`);
       }
-      // Only a failed read (transport or RPC error) keeps the lifetime cap:
-      // never assume more was settled than was read.
-      return;
+      // A failed read (transport or RPC error) cannot show whether the record
+      // is behind the chain (a deposit it never heard about landed), and a
+      // top-up sized from a record that is behind can exceed maxDeposit: no
+      // top-up without the read. The call pays exact, record kept.
+      throw new ResyncError(
+        "channel_resync_failed",
+        `could not read channel ${record.channelId} before topping it up: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
     // Not at finalized commitment (yet): keep the lifetime cap.
     if (channel === undefined) return;

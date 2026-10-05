@@ -114,13 +114,19 @@ src/
   the unsettled escrow (deposit − on-chain settled): what the operator could claim beyond what is
   settled. Upstream caps lifetime deposits, so `prepareTopUp` reads `settled` before a top-up and
   `capOutstandingEscrow` widens the scheme's cap by it (top-ups of that channel only; a failed
-  read keeps the lifetime cap). Deposit size: 402 `extra.minDeposit` if ≥ ceiling, else 5×,
+  read signs no top-up: `channel_resync_failed`, exact). Deposit size: 402 `extra.minDeposit` if ≥ ceiling, else 5×,
   capped by the room.
 - **One choke point, never double-pays.** `sendOnce()` is the only caller of `send()` for a batch
   payment and `classify()` the only interpreter of its answer: `charged` (any 2xx on a first send;
-  on a replay only a 2xx with `success: true`), `not_charged` (FIRST send only: a 402 or a
+  on a replay only a `definitive` one: success, scheme reconciled, record advanced — `recordAdvanced()`,
+  because upstream rolls an out-of-range voucher back WITHOUT throwing; a first-send 2xx that is not
+  definitive is booked and `distrust()`ed), `not_charged` (FIRST send only: a 402 or a
   `BATCH_REFUSALS` code — closed list — with no receipt or a clean failed one, or a 429 whose receipt
-  passes `provesNothingBroadcast` = the three facilitator reasons), or `in_doubt` (everything else:
+  passes `provesNothingBroadcast` = the three facilitator reasons; for a DEPOSIT only the
+  `PRE_REQUEST_REFUSALS` and that 429 prove it was never broadcast — a 402 or
+  `PAYMENT_VERIFICATION_UNAVAILABLE` is how the gateway answers a deposit it judged "did not land",
+  so the call pays exact but the deposit is `distrust()`ed (`deposit_refused`), intent kept), or
+  `in_doubt` (everything else:
   any exception once the send started whatever its `cause.code`, 5xx/unknown 4xx, a receipt with a
   transaction / `settlement_pending` / success on non-2xx, a 429 with any other receipt, ANY replay
   answer short of a success receipt — a 402 or `duplicate_settlement` on a replay means the original
@@ -149,7 +155,12 @@ src/
   The channel-file lock holds the bare pid ONLY (3.19.x reads it with `Number(raw.trim())`; any other
   format reads `NaN` to them = stale, so they would steal a live lock); the ownership token lives in the
   `<lock>.owner` sidecar, and a release needs both to match. A lock naming this pid that the registry
-  does not hold is NEVER stale (another SDK copy). Match errors from the shared book by `name`, not `instanceof`. One
+  does not hold is stale only when its mtime predates `performance.timeOrigin` (a dead process with
+  this pid, e.g. PID 1 in a restarted container); otherwise it is another SDK copy's. Takeover is not
+  atomic, so `payWith()` checks `holdsChannelFile()` (pid + token + the lock file's dev:ino:mtime)
+  before EVERY batch payment and pays exact (`channel_store_locked`) when ownership was lost. Only a
+  `WalletBatch` is memoised in `wallet()`; refusals (except `wallet_config_conflict`) and failures are
+  re-asked next call. `payWith()` re-checks the close fence right before taking `busy`. Match errors from the shared book by `name`, not `instanceof`. One
   batch request in flight per wallet; concurrent calls pay `exact`, they do not queue (they only wait
   out a 429 cooldown). `parseRetryAfter` drops a non-finite or > 1 day value (default backoff);
   `coolDown()` caps `wallet.cooldownUntil` at now + `maxWaitMs`, while the call itself weighs the full
@@ -198,8 +209,9 @@ src/
   against `@x402/svm`'s exported `CHANNEL_ACCOUNT_SIZE` / `CHANNEL_RENT_PAYER_OFFSET`:
   `readChannelAccount()` runs `checkChannelLayout()` before EVERY decode, and a `ChannelLayoutError`
   is `channel_unreadable` (record kept, exact) in `resync()` and in `prepareTopUp()` alike, and so is a
-  `ChannelUnreadableError` in `prepareTopUp()`; only a transport/RPC failure there keeps the lifetime cap
-  and continues. Fail closed: never size or sign a deposit from an unchecked or unreadable account.
+  `ChannelUnreadableError` in `prepareTopUp()`, and a transport/RPC failure there is
+  `channel_resync_failed` (exact, record kept). Fail closed: never size or sign a deposit from an
+  unchecked, unreadable or unread account.
 - **Same RPC config as exact:** `rpcUrl` + resolved `rpcHeaders` (incl. `SOLANA_RPC_HEADERS` /
   `SOLANA_RPC_API_KEY`). `BatchSvmScheme` takes only `rpcUrl` and kit's transport calls global
   `fetch`, so `withRpcHeaders()` runs scheme calls in an AsyncLocalStorage scope and a

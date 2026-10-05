@@ -37,7 +37,7 @@ never paid a second time.
 - **Trust model.** The gateway's explicit answer to a payment's first send is
   proof that nothing was charged: a 402 or a recognised refusal
   (`batch_payer_not_allowed`, `batch_payer_not_admitted`,
-  `batch_admission_paused`, `batch_server_signed_only`,
+  `batch_admission_paused`, `batch_server_signed_only`, `batch_unavailable`,
   `PAYMENT_VERIFICATION_UNAVAILABLE`), with no receipt or a failed one with
   no transaction, or a 429 whose failed receipt proves nothing was broadcast
   (`batch_account_channel_capacity_exhausted`,
@@ -46,6 +46,24 @@ never paid a second time.
   a new batch payment built from a fresh 402 (`exact` once `rateLimit` runs
   out). The refusal list is closed: an unknown `batch_*` code is no longer
   taken as "nothing charged".
+- **A refused deposit is not forgotten.** The gateway settles a deposit
+  inside verification and answers one it judged "did not land" (its funding
+  transaction broadcast, then a confirmation or bookkeeping failure) with a
+  plain 402 or `PAYMENT_VERIFICATION_UNAVAILABLE`, without a receipt. The
+  call was charged nothing and pays `exact`, but the open or top-up stays
+  journaled and its channel is re-read from finalized chain state
+  (`deposit_refused`) before anything pays into the wallet again. Only the
+  refusals the gateway gives before it starts a batch request
+  (`batch_payer_not_allowed`, `batch_payer_not_admitted`,
+  `batch_admission_paused`, `batch_server_signed_only`, `batch_unavailable`)
+  forget the deposit at once.
+- **A receipt the scheme did not record is re-read.** `@x402/svm` rolls a
+  voucher whose cumulative is out of range, or whose commitment it cannot
+  match, back to the confirmed state without throwing. A success receipt
+  that did not advance the channel record is now treated as unreconciled:
+  the call is served and booked, and the channel is re-read from the chain
+  before the next payment (`receipt_unreconciled`). On a replay it does not
+  end the doubt.
 - **Everything else is in doubt** and throws `BatchPaymentUnresolvedError`:
   an exception after the payment was sent (timeout, abort, network error,
   whatever its `cause.code`); a 5xx or other error status without a
@@ -53,6 +71,14 @@ never paid a second time.
   `settlement_pending`, or saying it succeeded on an error status; a 429 with
   any receipt that does not prove nothing was broadcast. Before, a timeout or
   a bare 5xx after a batch payment surfaced as a raw error or an `APIError`.
+- **Breaking for error handlers.** Any non-2xx after a batch payment (a
+  deterministic 4xx such as a context-length error included) is now a
+  `BatchPaymentUnresolvedError`, a `PaymentError` with no `statusCode`; the
+  gateway's answer is its `cause` (an `APIError`). Code that checked
+  `err instanceof APIError && err.statusCode` after a batch call must read
+  `err.cause`. Match it by `err.name === 'BatchPaymentUnresolvedError'` or
+  `retryDisposition(err) === 'paid-or-in-doubt'`: `instanceof` fails when the
+  error comes from another loaded copy of the SDK (the CJS and ESM builds).
 - **A 429 without a receipt** gets ONE byte-identical replay after its
   backoff (same request id, signed authorization and signed deposit
   transaction). Only a 2xx with a success receipt ends the doubt; any other
@@ -95,10 +121,7 @@ never paid a second time.
   blockhash and slot hints may be stale by then). That challenge is the
   request itself, sent unpaid: a 2xx answer is the call's result, with
   nothing paid (`recovered`, `served_unpaid_on_rechallenge`); any other
-  answer, or none, is thrown with retry disposition `'unpaid'`. An earlier
-  revision of this branch paid `exact` against the stale challenge instead
-  (`challenge_refresh_failed`), which could discard a served 2xx and run and
-  charge the request twice.
+  answer, or none, is thrown with retry disposition `'unpaid'`.
 - A `Retry-After` that is not finite (a long run of digits made the delay
   `Infinity`) or longer than a day is ignored, and the default backoff
   applies. Before, `Infinity` went into the wallet's shared cooldown and
@@ -182,7 +205,24 @@ never paid a second time.
   every copy; a random ownership token in a sidecar beside the lock
   (`<lock>.owner`) makes sure a release only removes the lock its own owner
   took; and a lock naming the current process that this SDK version did not
-  take is never treated as stale.
+  take is not treated as stale, unless it was written before this process
+  started (a container restarted under the same pid after a SIGKILL or an
+  OOM kill, which never ran its exit hook, no longer keeps batch off until
+  the lock is deleted by hand).
+- Before every batch payment, the process checks that it still holds the
+  lock it took (its pid, its token, and the very lock file it created). One
+  that lost it (a racing takeover of a stale lock, or a 3.19.x copy loaded in
+  the same process, which takes its own pid's lock for a stale one and
+  re-creates it) pays `exact` (`channel_store_locked`) instead of paying into
+  channels another owner may also be paying into. Running 3.19.x and this
+  version in one process is not supported.
+- A release removes the ownership sidecar before the lock, so it never
+  deletes the sidecar of an owner that took the lock in between. On a
+  filesystem without hard links (FAT/exFAT, many SMB shares) the lock is
+  taken with an exclusive create, as 3.19.x did, instead of failing.
+- A refusal to use batch that can clear (`channel_store_locked`,
+  `deposit_journal_unreadable`, a store directory that could not be created)
+  is no longer kept for the client's lifetime: the next call asks again.
 - The lock file itself still holds only the bare pid, the format released
   versions write and read (`Number(raw.trim())`). A lock in any other format
   reads as `NaN` to them, so a process still on 3.19.x sharing the channel
@@ -217,7 +257,7 @@ never paid a second time.
   challenge's client-signed accept names, through `@x402/svm`'s client-signed
   refund (a payer-signed voucher at its confirmed cumulative).
 
-### Fixed — `maxDeposit` caps the escrow at stake, not lifetime deposits
+### Changed — `maxDeposit` caps the escrow at stake, not lifetime deposits
 
 - `@x402/svm` checks a top-up against `maxDeposit - deposit`, where `deposit`
   is everything the channel ever took. Once a long-lived channel's deposits
@@ -225,8 +265,14 @@ never paid a second time.
   forever while its channel stayed open. A top-up is now allowed while
   `(deposit - settled) + topUp <= maxDeposit`, with `settled` read from the
   channel account on-chain (at `finalized` commitment) just before the
-  top-up. If that read fails, nothing is assumed settled (the old, stricter
-  cap).
+  top-up. If that read fails, no top-up is signed: the call pays `exact`
+  (`channel_resync_failed`) and the record is kept, because a record behind
+  the chain (a deposit it never heard about landed) could size a top-up past
+  `maxDeposit`.
+- **Migration.** Lifetime deposits on a long-lived channel can now exceed
+  `maxDeposit`. If you used it as a lifetime budget, size it as "the most I am
+  willing to have at stake" instead, and track total spend with
+  `getSpending()`.
 - That read now runs the same `@x402/svm` channel-layout check as the
   re-read of a record in doubt. Before, a peer `@x402/svm` with a moved
   layout would have been decoded with stale offsets, so a wrong `deposit` or
@@ -235,8 +281,7 @@ never paid a second time.
   `exact` (`channel_unreadable`), and the record is kept. The same goes for
   an account at the channel's address that cannot be read as a channel
   (another owner, short data, an unsupported encoding): before, that was
-  taken for a failed read, and the top-up was signed anyway. Only an RPC that
-  cannot answer still keeps the stricter lifetime cap and goes on. A re-read that
+  taken for a failed read, and the top-up was signed anyway. A re-read that
   fails the check now reports `channel_unreadable` too (was
   `channel_resync_failed`).
 - The trust bound is unchanged in kind: `maxDeposit` is the most the operator
@@ -252,6 +297,16 @@ never paid a second time.
   leaves.
 
 ### Fixed — Solana batch sends your RPC headers
+
+- RPC requests that carry `rpcHeaders` (the scheme's, through the scoped
+  `fetch` wrapper, and the SDK's own channel reads) never follow a redirect:
+  `fetch` strips `authorization` on a cross-origin hop, not a custom header
+  such as `x-api-key`. A `Request` passed to the wrapped `fetch` keeps its
+  own headers.
+- A re-read of a deposit in doubt never deletes or overwrites the record
+  stored under its key when that record now names another channel (a stale
+  intent outliving a closed channel whose key a new channel reuses), and
+  closing a channel clears any intent left under its key.
 
 - The batch scheme was built with `rpcUrl` only, so `rpcHeaders`,
   `SOLANA_RPC_HEADERS` and `SOLANA_RPC_API_KEY` never reached its RPC calls.

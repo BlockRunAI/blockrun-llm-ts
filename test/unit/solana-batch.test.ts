@@ -23,6 +23,7 @@ import {
   decodeChannelAccount,
   dropOrphanedPending,
   FileChannelStorage,
+  holdsChannelFile,
   lockChannelFile,
   parseRetryAfter,
   type SolanaBatchEvent,
@@ -35,6 +36,20 @@ import { APIError, retryDisposition } from "../../src/types";
  * decoder. The batch scheme itself (a separate entry point) is untouched.
  */
 const svmLayout = vi.hoisted(() => ({ shifted: false }));
+
+/**
+ * A filesystem without hard links (FAT/exFAT, many SMB shares): with
+ * `noHardLinks`, `fs.linkSync` fails with EPERM. Everything else is the real fs.
+ */
+const fsFaults = vi.hoisted(() => ({ noHardLinks: false }));
+vi.mock("fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs")>();
+  const linkSync: typeof actual.linkSync = (existing, target) => {
+    if (fsFaults.noHardLinks) throw Object.assign(new Error("EPERM: operation not permitted, link"), { code: "EPERM" });
+    return actual.linkSync(existing, target);
+  };
+  return { ...actual, default: { ...actual, linkSync }, linkSync };
+});
 vi.mock("@x402/svm", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@x402/svm")>();
   return {
@@ -645,6 +660,31 @@ describe("SolanaLLMClient batch-settlement", () => {
     expect(gatewayCalls).toHaveLength(2);
   });
 
+  it("uses batch once another process releases the channel file, without a new client", async () => {
+    const store = path.join(tmp, "channels.json");
+    fs.writeFileSync(`${store}.lock`, String(process.ppid));
+    const c = client({});
+    const exact = stubExact(c);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    gateway.push(
+      () => quote402([exactAccept(), batchAccept(operator.address)]),
+      () => new Response(JSON.stringify(CHAT_OK), { status: 200 }),
+      () => quote402([exactAccept(), batchAccept(operator.address)]),
+      async (_url, init) => {
+        const payment = decodePayment(init);
+        expect(payment.payload.type).toBe("deposit");
+        return servedWithVoucher(operator, channelIdOf(payment), 1000n, 1000n);
+      }
+    );
+
+    await c.chat("openai/gpt-4o-mini", "gm");
+    expect(exact).toHaveBeenCalledTimes(1);
+    // The other process exits; this long-lived client is not stuck on exact.
+    fs.unlinkSync(`${store}.lock`);
+    await c.chat("openai/gpt-4o-mini", "gm");
+    expect(exact).toHaveBeenCalledTimes(1);
+  });
+
   describe("channel retention", () => {
     let events: SolanaBatchEvent[];
 
@@ -711,6 +751,163 @@ describe("SolanaLLMClient batch-settlement", () => {
       await c.chat("openai/gpt-4o-mini", "gm");
       expect(rpcMethods.filter((m) => m === "getProgramAccounts").length).toBe(scans);
       expect(c.getBatchStats().resyncs).toBe(0);
+    });
+
+    it("keeps a top-up refused with a bare 402 in doubt, and books it once the chain shows it landed", async () => {
+      const c = kept({ maxDeposit: "$1" });
+      const exact = stubExact(c);
+      const channelId = await openChannel(c);
+      let topUp = 0n;
+      gateway.push(
+        () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
+        (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("deposit");
+          topUp = BigInt(payment.payload.deposit.amount);
+          // How the gateway answers a deposit it judged "did not land" after
+          // broadcasting it: a plain 402, no receipt.
+          return new Response(JSON.stringify({ error: "PAYMENT_INVALID", message: "batch_deposit_failed" }), { status: 402 });
+        },
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+
+      await c.chat("openai/gpt-4o-mini", "gm");
+      // The call itself was charged nothing: it pays exact.
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(events.at(-1)).toMatchObject({ type: "fallback", reason: "payment_required" });
+      // The deposit is not forgotten: its intent stays journaled.
+      const intents = JSON.parse(fs.readFileSync(path.join(tmp, "channels.json.deposit-intents"), "utf8"));
+      expect(Object.values(intents.intents)).toEqual([expect.objectContaining({ channelId, kind: "top-up" })]);
+
+      // It did land: the next payment re-reads the channel before paying into it.
+      chain.set(channelId, channelAccount({ payer: await c.getWalletAddress(), operator: operator.address, deposit: 25000n + topUp }));
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("authorization");
+          expect(channelIdOf(payment)).toBe(channelId);
+          return servedWithVoucher(operator, channelId, 2000n, 1000n);
+        }
+      );
+      await c.chat("openai/gpt-4o-mini", "gm");
+
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(events).toContainEqual(expect.objectContaining({ type: "resync", reason: "deposit_refused" }));
+      expect(storedRecord()).toMatchObject({ channelId, deposit: String(25000n + topUp), chargedCumulativeAmount: "2000" });
+      expect(fs.existsSync(path.join(tmp, "channels.json.deposit-intents"))).toBe(false);
+    });
+
+    it("signs no top-up when the chain cannot be read to check the record, and pays exact", async () => {
+      const c = kept({ maxDeposit: "$1" });
+      const exact = stubExact(c);
+      await openChannel(c);
+      rpcDown.add("getAccountInfo");
+      gateway.push(
+        () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
+        (_url, init) => {
+          expect((init?.headers as Record<string, string>)["PAYMENT-SIGNATURE"]).toBe("exact-payload");
+          return new Response(JSON.stringify(CHAT_OK), { status: 200 });
+        }
+      );
+
+      await c.chat("openai/gpt-4o-mini", "gm");
+
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(events.at(-1)).toMatchObject({ type: "fallback", reason: "channel_resync_failed" });
+      expect(storedRecord()).toMatchObject({ deposit: "25000", chargedCumulativeAmount: "1000" });
+    });
+
+    it("re-reads the channel when a success receipt's voucher is out of range and the scheme rolled it back", async () => {
+      const c = kept();
+      const exact = stubExact(c);
+      const channelId = await openChannel(c);
+      chain.set(channelId, channelAccount({ payer: await c.getWalletAddress(), operator: operator.address, deposit: 25000n }));
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        // A validly signed voucher whose cumulative jumps past this call's ceiling:
+        // upstream restores the confirmed state without throwing.
+        () => servedWithVoucher(operator, channelId, 1000n + 5001n, 1000n),
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => {
+          expect(decodePayment(init).payload.type).toBe("authorization");
+          return servedWithVoucher(operator, channelId, 3000n, 1000n);
+        }
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      expect(exact).not.toHaveBeenCalled();
+      expect(events).toContainEqual(expect.objectContaining({ type: "resync", reason: "receipt_unreconciled" }));
+      expect(storedRecord()).toMatchObject({ channelId, chargedCumulativeAmount: "3000" });
+    });
+
+    it("never deletes or overwrites the live record under a key a stale intent names for another channel", async () => {
+      const first = kept();
+      stubExact(first);
+      const channelId = await openChannel(first);
+      const store = path.join(tmp, "channels.json");
+      const [[key, record]] = Object.entries(JSON.parse(fs.readFileSync(store, "utf8"))) as Array<[string, Record<string, any>]>;
+      // A restart, with an intent left for a channel that was closed under the same key long ago.
+      __resetBatchWalletsForTests();
+      const stale = (await generateKeyPairSigner()).address;
+      fs.writeFileSync(
+        `${store}.deposit-intents`,
+        JSON.stringify({
+          version: 1,
+          intents: {
+            [key]: {
+              key,
+              channelId: stale,
+              channelConfig: record.channelConfig,
+              kind: "open",
+              cumulative: "0",
+              expectDeposit: "25000",
+              anchorHeight: rpcClock.blockHeight - 1_000,
+              at: Date.now() - 86_400_000,
+            },
+          },
+        }),
+        { mode: 0o600 }
+      );
+      const c = kept();
+      const exact = stubExact(c);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("authorization");
+          expect(channelIdOf(payment)).toBe(channelId);
+          return servedWithVoucher(operator, channelId, 2000n, 1000n);
+        }
+      );
+
+      await c.chat("openai/gpt-4o-mini", "gm");
+
+      expect(exact).not.toHaveBeenCalled();
+      expect(events).toContainEqual(expect.objectContaining({ type: "resync", detail: expect.stringContaining("left untouched") }));
+      expect(storedRecord()).toMatchObject({ channelId, chargedCumulativeAmount: "2000" });
+    });
+
+    it("pays exact once this process no longer holds its channel file's lock", async () => {
+      const c = kept();
+      const exact = stubExact(c);
+      await openChannel(c);
+      const lock = path.join(tmp, "channels.json.lock");
+      // An older SDK copy in this process re-creates the lock as its own: same pid, another file.
+      fs.writeFileSync(`${lock}.tmp`, String(process.pid));
+      fs.utimesSync(`${lock}.tmp`, new Date(Date.now() + 5_000), new Date(Date.now() + 5_000));
+      fs.renameSync(`${lock}.tmp`, lock);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+
+      await c.chat("openai/gpt-4o-mini", "gm");
+
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(events.at(-1)).toMatchObject({ type: "fallback", reason: "channel_store_locked" });
     });
 
     it("keeps the channel through a rate-limited top-up and tops up the same channel on retry", async () => {
@@ -2103,6 +2300,9 @@ describe("SolanaLLMClient batch-settlement", () => {
       }
       for (const call of gatewayCalls) expect(headerOf(call.init, "x-api-key")).toBeNull();
 
+      // They never follow a redirect: fetch does not strip a custom header on a cross-origin hop.
+      for (const call of rpcCalls) expect(call.init?.redirect).toBe("error");
+
       // Outside a batch scheme call, the same URL is left alone.
       await fetch(RPC_URL, { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: 9, method: "getSlot" }) });
       expect(headerOf(rpcCalls.at(-1)!.init, "x-api-key")).toBeNull();
@@ -3121,6 +3321,78 @@ describe("SolanaLLMClient batch-settlement", () => {
       expect(c.getBatchStats().fallbacksByReason).toEqual({ batch_admission_paused: 1 });
     });
 
+    it("pays exact on batch_unavailable, which the gateway gives before starting a batch request", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        () => new Response(JSON.stringify({ error: "batch_unavailable", message: "Batch settlement is unavailable; pay with the exact scheme." }), { status: 503 }),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(events).toEqual([expect.objectContaining({ type: "fallback", reason: "batch_unavailable", status: 503 })]);
+    });
+
+    it("opens nothing for a call that waited out a cooldown while a close completed", async () => {
+      const releases: Array<() => void> = [];
+      __setBatchSleepForTests((ms) => {
+        sleeps.push(ms);
+        return new Promise<void>((resolve) => releases.push(resolve));
+      });
+      const c = observed({ rateLimit: { maxAttempts: 1 } });
+      const exact = stubExact(c);
+      let channelId = "";
+      let authorizations = 0;
+      let deposits = 0;
+      let refunded: (response: Response) => void = () => {};
+      const route = async (_url: string, init?: RequestInit): Promise<Response> => {
+        const header = (init?.headers as Record<string, string> | undefined)?.["PAYMENT-SIGNATURE"];
+        if (!header) return quote402([exactAccept(), batchAccept(operator.address)]);
+        if (header === "exact-payload") return new Response(JSON.stringify(CHAT_OK), { status: 200 });
+        const payment = decodePayment(init);
+        if (payment.payload.type === "deposit") {
+          deposits += 1;
+          channelId = channelIdOf(payment);
+          return servedWithVoucher(operator, channelId, 1000n, 1000n);
+        }
+        if (payment.payload.type === "refund") {
+          return new Promise<Response>((resolve) => { refunded = resolve; });
+        }
+        authorizations += 1;
+        // A pre-broadcast 429 puts the wallet in a cooldown; with one attempt, the call pays exact.
+        return tooMany({ "Retry-After": "2", ...preBroadcast() });
+      };
+      for (let i = 0; i < 12; i += 1) gateway.push(route);
+      await c.chat("openai/gpt-4o-mini", "gm");
+      expect(deposits).toBe(1);
+      await c.chat("openai/gpt-4o-mini", "gm");
+      expect(authorizations).toBe(1);
+      expect(exact).toHaveBeenCalledTimes(1);
+
+      // The close starts first, and is refunding when the next call arrives.
+      const closing = c.closeBatchChannel();
+      await vi.waitFor(() => expect(gatewayCalls.some((call) => {
+        const header = (call.init?.headers as Record<string, string> | undefined)?.["PAYMENT-SIGNATURE"];
+        return header && header !== "exact-payload" && decodePayment(call.init).payload.type === "refund";
+      })).toBe(true));
+      const pending = c.chat("openai/gpt-4o-mini", "gm");
+      // That call enters while nothing is in flight, and sleeps out the cooldown.
+      await vi.waitFor(() => expect(sleeps).toHaveLength(1));
+      const receipt = { success: true, transaction: "close-tx", network: NETWORK };
+      refunded(new Response("{}", { status: 200, headers: { "PAYMENT-RESPONSE": Buffer.from(JSON.stringify(receipt)).toString("base64") } }));
+      await expect(closing).resolves.toMatchObject({ success: true });
+
+      releases[0]();
+      await expect(pending).resolves.toBe("gm");
+      // The channel the caller closed is not re-opened by a call that started before the close finished.
+      expect(deposits).toBe(1);
+      expect(exact).toHaveBeenCalledTimes(2);
+      expect(events.at(-1)).toMatchObject({ type: "fallback", reason: "closed_during_call" });
+    });
+
     it("never re-sends a batch payment the 429 says was charged", async () => {
       const c = observed();
       const exact = stubExact(c);
@@ -4009,6 +4281,50 @@ describe("batch channel storage", () => {
     expect(fs.readFileSync(`${file}.lock`, "utf8")).toBe(lock);
     __resetBatchWalletsForTests();
     expect(fs.readFileSync(`${file}.lock`, "utf8")).toBe(lock);
+  });
+
+  it("takes over a lock naming this pid that was written before this process started", () => {
+    // A container restarted as PID 1 after a SIGKILL: the dead process never ran its exit hook.
+    const file = path.join(tmp, "restarted.json");
+    fs.writeFileSync(`${file}.lock`, String(process.pid));
+    const before = new Date(performance.timeOrigin - 60_000);
+    fs.utimesSync(`${file}.lock`, before, before);
+
+    expect(lockChannelFile(file)).toBeUndefined();
+    expect(holdsChannelFile(file)).toBe(true);
+    __resetBatchWalletsForTests();
+    expect(fs.existsSync(`${file}.lock`)).toBe(false);
+  });
+
+  it("takes the lock with an exclusive create where the filesystem has no hard links", () => {
+    const file = path.join(tmp, "no-links.json");
+    fsFaults.noHardLinks = true;
+    try {
+      expect(lockChannelFile(file)).toBeUndefined();
+      expect(fs.readFileSync(`${file}.lock`, "utf8")).toBe(String(process.pid));
+      expect(holdsChannelFile(file)).toBe(true);
+      // Still exclusive: another owner's live lock is not overwritten.
+      __resetBatchWalletsForTests();
+      fs.writeFileSync(`${file}.lock`, String(process.ppid));
+      expect(lockChannelFile(file)).toBe(process.ppid);
+    } finally {
+      fsFaults.noHardLinks = false;
+      __resetBatchWalletsForTests();
+    }
+  });
+
+  it("knows it lost a lock that another owner re-created under this pid", () => {
+    const file = path.join(tmp, "stolen.json");
+    expect(lockChannelFile(file)).toBeUndefined();
+    expect(holdsChannelFile(file)).toBe(true);
+    // 3.19.x in this process takes its own pid's lock for a stale one and writes a new file;
+    // its sidecar is untouched, so only the lock file's identity tells.
+    fs.writeFileSync(`${file}.lock.tmp`, String(process.pid));
+    fs.utimesSync(`${file}.lock.tmp`, new Date(Date.now() + 5_000), new Date(Date.now() + 5_000));
+    fs.renameSync(`${file}.lock.tmp`, `${file}.lock`);
+
+    expect(holdsChannelFile(file)).toBe(false);
+    __resetBatchWalletsForTests();
   });
 
   it("removes only its own lock on reset or exit, never one another owner wrote since", () => {
