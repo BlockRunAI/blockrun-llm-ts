@@ -8,6 +8,7 @@ import { LLMClient } from "../../src/client";
 import { SolanaLLMClient } from "../../src/solana-client";
 import { isTransientError } from "../../src/router-adapter";
 import { APIError, PaymentError, retryDisposition, withDisposition } from "../../src/types";
+import { BatchPaymentUnresolvedError } from "../../src/solana-batch";
 import { TEST_PRIVATE_KEY, buildChatResponse, buildPaymentRequiredResponse } from "../helpers/testHelpers";
 
 const SOLANA_KEY = "5MaiiCavjCmn9Hs1o3eznqDEhRwxo7pXiAYez7keQUviQeRjpzKCY8trDwpvBMTKTpNFbCJsBZthJ4tCs6o62rr";
@@ -107,6 +108,12 @@ describe("isTransientError honours the retry disposition", () => {
   it("keeps PaymentError and non-transient statuses out even when unpaid", () => {
     expect(isTransientError(withDisposition(new PaymentError("no requirements"), "unpaid"))).toBe(false);
     expect(isTransientError(withDisposition(new APIError("bad request", 400), "unpaid"))).toBe(false);
+  });
+
+  it("treats BatchPaymentUnresolvedError as paid-or-in-doubt", () => {
+    const err = new BatchPaymentUnresolvedError({ reason: "replay_unresolved", wallet: "w", requestId: "r" });
+    expect(retryDisposition(err)).toBe("paid-or-in-doubt");
+    expect(isTransientError(err)).toBe(false);
   });
 });
 
