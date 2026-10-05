@@ -883,27 +883,51 @@ export class LLMClient {
     const now = Date.now();
 
     // --- Try pre-auth (skip 402 round-trip) ---
+    // Once the signed payment is SENT, only a 402 (the payment was refused at
+    // verification, e.g. the price changed) may fall through to the normal flow,
+    // which signs and sends a second payment. Any other answer, or no answer
+    // (timeout, network error), cannot be told apart from a call that settled:
+    // the gateway verified the payment and may have served and settled it (a
+    // proxy's 502/504 or our own timeout says nothing about the handler behind
+    // it). Paying again there could charge the call twice.
     if (cached && now - cached.cachedAt < LLMClient.PRE_AUTH_TTL_MS) {
+      let signed: { paymentPayload: string; costUsd: number } | undefined;
       try {
-        const { paymentPayload, costUsd } = await this.signPayment(cached.paymentHeader);
-        const preAuthResp = await this.fetchWithTimeout(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "User-Agent": USER_AGENT,
-            "PAYMENT-SIGNATURE": paymentPayload,
-          },
-          body: JSON.stringify(body),
-        });
-        if (preAuthResp.status !== 402 && preAuthResp.ok) {
+        signed = await this.signPayment(cached.paymentHeader);
+      } catch {
+        this.preAuthCache.delete(cacheKey); // nothing was sent: the normal flow pays once
+      }
+      if (signed) {
+        let preAuthResp: Response;
+        try {
+          preAuthResp = await this.fetchWithTimeout(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "User-Agent": USER_AGENT,
+              "PAYMENT-SIGNATURE": signed.paymentPayload,
+            },
+            body: JSON.stringify(body),
+          });
+        } catch (err) {
+          this.preAuthCache.delete(cacheKey);
+          throw withDisposition(err, "paid-or-in-doubt");
+        }
+        if (preAuthResp.ok) {
           this.sessionCalls += 1;
-          this.sessionTotalUsd += costUsd;
+          this.sessionTotalUsd += signed.costUsd;
           return preAuthResp; // Pre-auth hit — no 402 round-trip
         }
-        // Pre-auth rejected (price changed?) — evict and fall through
         this.preAuthCache.delete(cacheKey);
-      } catch {
-        this.preAuthCache.delete(cacheKey);
+        if (preAuthResp.status !== 402) {
+          let errorBody: unknown;
+          try { errorBody = await preAuthResp.json(); } catch { errorBody = { error: "Request failed" }; }
+          throw withDisposition(
+            new APIError(`API error after payment: ${preAuthResp.status}`, preAuthResp.status, sanitizeErrorResponse(errorBody)),
+            "paid-or-in-doubt",
+          );
+        }
+        // 402: the cached terms were refused (price changed?) — fall through and pay once.
       }
     }
 

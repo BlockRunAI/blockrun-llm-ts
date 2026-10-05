@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Fixed — a Base streamed chat call never pays twice
+
+- `chatCompletionStream` reuses the last 402's terms and sends a signed
+  payment on its first request ("pre-auth"). Until now, any answer other
+  than a 2xx, or no answer at all (timeout, network error), fell through to
+  the normal flow, which signs and sends a SECOND payment. A 5xx or a
+  timeout after the first payment cannot be told apart from a call the
+  gateway verified, served and settled (a proxy's 502/504 or the client's
+  own timeout says nothing about the handler behind it), so the call could
+  be charged twice. Now only a 402 (the payment was
+  refused at verification, e.g. the price changed) falls through and pays
+  once. Any other failure raises: `APIError` "API error after payment"
+  for an answer, or the network error itself, each with retry disposition
+  `'paid-or-in-doubt'`. A failed signature (nothing sent) still falls
+  through. The cached terms are evicted either way.
+
 ### Fixed — a Solana batch call the gateway cancelled can fail over to another model
 
 - When an upstream model fails after a batch authorization was verified
