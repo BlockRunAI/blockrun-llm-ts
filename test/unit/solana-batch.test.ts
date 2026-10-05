@@ -4274,6 +4274,254 @@ describe("SolanaLLMClient batch-settlement", () => {
     });
   });
 
+  describe("payment-identifier", () => {
+    let sleeps: number[];
+    let events: SolanaBatchEvent[];
+
+    beforeEach(() => {
+      sleeps = [];
+      events = [];
+      __setBatchSleepForTests(async (ms) => { sleeps.push(ms); });
+      vi.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    function observed(batch: Parameters<typeof client>[0] = {}) {
+      return client({ onEvent: (event) => events.push(event), ...batch });
+    }
+
+    const declaration = {
+      info: { required: false },
+      schema: {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        properties: { required: { type: "boolean" }, id: { type: "string", minLength: 16, maxLength: 128 } },
+        required: ["required"],
+      },
+    };
+
+    /** The gateway's 402, declaring the payment-identifier extension. */
+    function quote402WithId(): Response {
+      const body = JSON.stringify({
+        x402Version: 2,
+        resource: { url: CHAT_URL, description: "chat" },
+        accepts: [exactAccept(), batchAccept(operator.address)],
+        extensions: { "payment-identifier": declaration },
+      });
+      return new Response(body, {
+        status: 402,
+        headers: { "content-type": "application/json", "PAYMENT-REQUIRED": Buffer.from(body).toString("base64") },
+      });
+    }
+
+    const paymentId = (init: RequestInit | undefined): unknown => decodePayment(init).extensions?.["payment-identifier"]?.info?.id;
+    const batchSends = () =>
+      gatewayCalls
+        .map((call) => (call.init?.headers as Record<string, string> | undefined)?.["PAYMENT-SIGNATURE"])
+        .filter((h): h is string => !!h && h !== "exact-payload");
+    const outcomeUnknown = () => new Response(JSON.stringify({ error: "payment_outcome_unknown" }), { status: 409 });
+
+    /** Open a channel at cumulative 1000, and return its id. */
+    async function open(c: SolanaLLMClient): Promise<string> {
+      let channelId = "";
+      gateway.push(
+        () => quote402WithId(),
+        async (_url, init) => {
+          channelId = channelIdOf(decodePayment(init));
+          return servedWithVoucher(operator, channelId, 1000n, 1000n);
+        }
+      );
+      await c.chat("openai/gpt-4o-mini", "gm");
+      return channelId;
+    }
+
+    it("attaches a new identifier to each batch payment when the 402 declares the extension, and none otherwise", async () => {
+      const c = observed();
+      stubExact(c);
+      const ids: unknown[] = [];
+      const declared: unknown[] = [];
+      let channelId = "";
+      gateway.push(
+        () => quote402WithId(),
+        async (_url, init) => {
+          ids.push(paymentId(init));
+          declared.push(decodePayment(init).extensions["payment-identifier"]);
+          channelId = channelIdOf(decodePayment(init));
+          return servedWithVoucher(operator, channelId, 1000n, 1000n);
+        },
+        () => quote402WithId(),
+        async (_url, init) => {
+          ids.push(paymentId(init));
+          return servedWithVoucher(operator, channelId, 2000n, 1000n);
+        },
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => {
+          expect(decodePayment(init).extensions?.["payment-identifier"]).toBeUndefined();
+          return servedWithVoucher(operator, channelId, 3000n, 1000n);
+        }
+      );
+
+      for (let i = 0; i < 3; i += 1) await c.chat("openai/gpt-4o-mini", "gm");
+
+      expect(ids).toHaveLength(2);
+      for (const id of ids) expect(id).toMatch(/^pay_[0-9a-f]{32}$/);
+      expect(ids[1]).not.toBe(ids[0]);
+      expect(declared[0]).toEqual({ ...declaration, info: { required: false, id: ids[0] } });
+    });
+
+    it("replays an unanswered authorization once, byte for byte, and books the stored response", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      const channelId = await open(c);
+      gateway.push(
+        () => quote402WithId(),
+        () => { throw new TypeError("fetch failed"); },
+        // The gateway stored the original's response under its identifier.
+        () => servedWithVoucher(operator, channelId, 2000n, 1000n)
+      );
+      const before = batchSends().length;
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      const sends = batchSends().slice(before);
+      expect(sends).toHaveLength(2);
+      expect(sends[1]).toBe(sends[0]);
+      expect(exact).not.toHaveBeenCalled();
+      expect(sleeps).toHaveLength(1);
+      expect(events.map((e) => [e.type, e.reason])).toEqual([
+        ["backoff", "in_doubt"],
+        ["recovered", "in_doubt"],
+      ]);
+      expect(c.getBatchStats()).toMatchObject({ retries: 1, recoveries: 1, unresolved: 0, fallbacks: 0 });
+      expect(c.getSpending()).toEqual({ totalUsd: 0.002, calls: 2 });
+
+      // The channel advanced to the stored receipt: the next payment builds on it.
+      gateway.push(
+        () => quote402WithId(),
+        async (_url, init) => {
+          expect(decodePayment(init).payload.type).toBe("authorization");
+          return servedWithVoucher(operator, channelId, 3000n, 1000n);
+        }
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      const [record] = Object.values(JSON.parse(fs.readFileSync(path.join(tmp, "channels.json"), "utf8"))) as Array<Record<string, unknown>>;
+      expect(record).toMatchObject({ chargedCumulativeAmount: "3000" });
+    });
+
+    it("replays an open answered 409 once, same deposit transaction, and books it once", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      let first: Record<string, any> = {};
+      gateway.push(
+        () => quote402WithId(),
+        (_url, init) => {
+          first = decodePayment(init);
+          expect(first.payload.type).toBe("deposit");
+          return outcomeUnknown();
+        },
+        async (_url, init) => {
+          const replay = decodePayment(init);
+          expect(replay.payload.deposit.transaction).toBe(first.payload.deposit.transaction);
+          expect(paymentId(init)).toBe(first.extensions["payment-identifier"].info.id);
+          return servedWithVoucher(operator, channelIdOf(replay), 1000n, 1000n);
+        }
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      expect(exact).not.toHaveBeenCalled();
+      expect(c.getSpending()).toEqual({ totalUsd: 0.001, calls: 1 });
+      const [record] = Object.values(JSON.parse(fs.readFileSync(path.join(tmp, "channels.json"), "utf8"))) as Array<Record<string, unknown>>;
+      expect(record).toMatchObject({ chargedCumulativeAmount: "1000", deposit: "25000" });
+    });
+
+    it("raises replay_unresolved when the replay is answered 409 again, and pays nothing more", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      const channelId = await open(c);
+      gateway.push(
+        () => quote402WithId(),
+        () => new Response(JSON.stringify({ error: "upstream_timeout" }), { status: 504 }),
+        () => outcomeUnknown()
+      );
+      const before = batchSends().length;
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).rejects.toMatchObject({
+        name: "BatchPaymentUnresolvedError",
+        reason: "replay_unresolved",
+        status: 409,
+        payloadKind: "authorization",
+      });
+
+      const sends = batchSends().slice(before);
+      expect(sends).toHaveLength(2);
+      expect(sends[1]).toBe(sends[0]);
+      expect(exact).not.toHaveBeenCalled();
+      expect(events.map((e) => [e.type, e.reason])).toEqual([
+        ["backoff", "in_doubt"],
+        ["unresolved", "replay_unresolved"],
+      ]);
+
+      // The channel was released: the next call pays with batch again.
+      gateway.push(
+        () => quote402WithId(),
+        () => servedWithVoucher(operator, channelId, 2000n, 1000n)
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+    });
+
+    it("still pays exact at once on a refusal, with no replay, and keeps the channel", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      const channelId = await open(c);
+      gateway.push(
+        () => quote402WithId(),
+        () => new Response(JSON.stringify({ error: "batch_admission_paused" }), { status: 503 }),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      expect(sleeps).toEqual([]);
+      expect(exact).toHaveBeenCalledTimes(1);
+      // The exact payment is signed against the gateway's own 402, with no identifier in it.
+      expect(JSON.stringify(exact.mock.calls[0])).not.toContain("pay_");
+      expect(events.map((e) => [e.type, e.reason])).toEqual([["fallback", "batch_admission_paused"]]);
+
+      // The scheme released the refused authorization: the next one builds on 1000.
+      gateway.push(
+        () => quote402WithId(),
+        () => servedWithVoucher(operator, channelId, 2000n, 1000n)
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      const [record] = Object.values(JSON.parse(fs.readFileSync(path.join(tmp, "channels.json"), "utf8"))) as Array<Record<string, unknown>>;
+      expect(record).toMatchObject({ chargedCumulativeAmount: "2000" });
+    });
+
+    it("raises the original reason without a replay when rateLimit leaves no room, and releases the channel", async () => {
+      const c = observed({ rateLimit: { maxWaitMs: 0 } });
+      const exact = stubExact(c);
+      const channelId = await open(c);
+      gateway.push(
+        () => quote402WithId(),
+        () => { throw new TypeError("fetch failed"); }
+      );
+      const before = batchSends().length;
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).rejects.toMatchObject({
+        name: "BatchPaymentUnresolvedError",
+        reason: "no_response",
+      });
+      expect(batchSends().slice(before)).toHaveLength(1);
+      expect(exact).not.toHaveBeenCalled();
+
+      gateway.push(
+        () => quote402WithId(),
+        () => servedWithVoucher(operator, channelId, 2000n, 1000n)
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+    });
+  });
+
   it("ignores the batch option in API-key mode", async () => {
     const c = new SolanaLLMClient({ apiKey: "brk_test_key", batch: { operators: [operator.address] } });
     await expect(c.closeBatchChannel()).rejects.toThrow("requires the `batch` option");

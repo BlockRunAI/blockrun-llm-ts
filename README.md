@@ -595,8 +595,16 @@ gateway's answer proves, in one place:
 | first send: a 429 whose failed receipt proves nothing was broadcast (`batch_account_channel_capacity_exhausted`, `batch_channel_capacity_exhausted`, `batch_deposit_rate_limited`) | nothing was charged: backs off, then pays again with a new batch payment from a fresh 402; `exact` once `rateLimit` runs out |
 | first send: a 429 with no receipt | **in doubt**: after the backoff, replays the identical payment **once**; a 2xx with a success receipt ends it, anything else raises |
 | first send of an authorization: an error status with a cancelled receipt (`success: false`, `errorReason: "batch_cancelled"`, no transaction) | nothing was charged: the error is raised with retry disposition `'unpaid'`, so `fallbackModels` / `smartChat()` move on to the next model |
-| anything else: a timeout, an abort or a network error after sending; a 5xx or other error status without a recognised refusal; a receipt naming a transaction, saying `settlement_pending` or saying it succeeded on an error status; a 429 with any other receipt | **in doubt**: raises `BatchPaymentUnresolvedError` |
+| anything else: a timeout, an abort or a network error after sending; a 5xx or other error status without a recognised refusal; a receipt naming a transaction, saying `settlement_pending` or saying it succeeded on an error status; a 429 with any other receipt | **in doubt**: raises `BatchPaymentUnresolvedError`, unless the payment carries a payment identifier (below) |
+| first send of a payment carrying a payment identifier: any answer that leaves it in doubt | **in doubt**: after a short backoff, replays the identical payment **once**; a 2xx with a success receipt ends it, anything else raises |
 
+- **Payment identifier.** When the gateway's 402 declares the x402
+  `payment-identifier` extension, every batch payment carries a new id in
+  its `extensions` (`pay_` and 32 hex digits), so the replay of a payment in
+  doubt carries the same id. A gateway that stores each paid response under
+  its id answers the replay of a completed request with the original
+  response and receipt, and the call is served and booked once. The `exact`
+  payment never carries one. Without the extension nothing changes.
 - **Trust model.** The gateway is already trusted with the escrow up to
   `maxDeposit`, so its explicit answer to a payment's first send is taken as
   proof that nothing was charged. Nothing else is: not an error's type or
@@ -613,8 +621,9 @@ gateway's answer proves, in one place:
   `'top-up'` or `'authorization'`), `depositInDoubt`, `status` (the gateway's
   last answer, when there was one), `cause` (that answer as an `APIError`, or
   the transport error) and `reason`:
-  - `'replay_unresolved'`: a 429 without a receipt, whose one replay got no
-    success receipt (or `rateLimit` left no room for it);
+  - `'replay_unresolved'`: a 429 without a receipt (or `rateLimit` left no
+    room to replay it), or any doubt about a payment carrying a payment
+    identifier, whose one replay got no success receipt;
   - `'ambiguous_rate_limit'`: a 429 whose receipt does not prove nothing was
     broadcast;
   - `'no_response'`: sending it threw (timeout, abort, network error);

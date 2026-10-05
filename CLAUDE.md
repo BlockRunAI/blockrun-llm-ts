@@ -139,15 +139,19 @@ src/
   2xx → `served` (the call's result, nothing paid; `recovered` / `served_unpaid_on_rechallenge`);
   anything else or no answer → `failed`, its error raised `"unpaid"`. NEVER exact against the stale 402.
   in_doubt ends only in `resolveInDoubt()` — a receipt-less 429 gets ONE byte-identical replay after
-  its backoff (owner policy) — or `raiseUnresolved()` →
+  its backoff (owner policy), and so does ANY first-send doubt about a payment carrying a
+  `payment-identifier` id (`withPaymentIdentifier()` adds a fresh `pay_<32 hex>` to a COPY of the 402
+  when it declares the extension, never to the exact 402; `classify()` holds an error answer back from
+  the scheme (`hold`, receipt only peeked) until it knows there will be no replay, because a rolled-back
+  pending cannot take the replay's receipt; a non-429 doubt waits `backoffDelay` without a wallet
+  cooldown; events `backoff`/`recovered` reason `in_doubt`) — or `raiseUnresolved()` →
   `BatchPaymentUnresolvedError` (`PaymentError`, disposition `paid-or-in-doubt`; reason
   `replay_unresolved | ambiguous_rate_limit | no_response | duplicate_settlement | outcome_unknown`; wallet, requestId,
   channelId, payloadKind, depositInDoubt, status, cause) + `unresolved` event/log/counter. NEVER a new
   authorization, new deposit, exact or fallback model for a call in doubt; NEVER chain state or the
   402's `lastValidBlockHeight` to clear charge doubt (the old `neverCompletes` open-replacement proof is
   gone on purpose). `payWith()`'s catch turns any unexpected error after a send into the same raise.
-  Future gateway evidence (receipts on every response, a fenced request-status endpoint) plugs into
-  `resolveInDoubt()`.
+  Other gateway evidence (a fenced request-status endpoint) would plug into `resolveInDoubt()`.
 - **Never silent:** every fallback/backoff/recovery/resync/unresolved goes through `report()` — one
   stderr line (`[@blockrun/llm] batch-settlement event=... reason=...`, never deduplicated), the
   client's counters (`getBatchStats()`: ..., `unresolved`, `unresolvedByReason`), and `batch.onEvent`.

@@ -290,6 +290,8 @@ export interface PaymentRequired {
   x402Version: number;
   accepts: PaymentRequirement[];
   resource?: ResourceInfo;
+  /** x402 v2 extensions the gateway declares, keyed by extension name. */
+  extensions?: Record<string, unknown>;
 }
 
 export interface LLMClientOptions extends ApiKeyOptions {

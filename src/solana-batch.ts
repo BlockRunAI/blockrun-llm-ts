@@ -38,9 +38,11 @@
  * never replaced (no new authorization, no new deposit, no exact, no fallback
  * model): a receipt-less 429 gets one byte-identical replay after its
  * backoff, and anything short of a success receipt on it raises
- * {@link BatchPaymentUnresolvedError}. Resolving doubt automatically needs
- * the gateway's help (a receipt on every response, a request-status
- * endpoint); `resolveInDoubt` is where such evidence will plug in.
+ * {@link BatchPaymentUnresolvedError}. When the gateway declares the x402
+ * `payment-identifier` extension, every batch payment carries a new payment
+ * identifier, and any doubt about it gets that one replay: a gateway that
+ * stores each paid response under its identifier answers the replay of a
+ * completed request with the original response and receipt.
  *
  * A 429 that provably charged nothing is not a reason to give up on batch:
  * the gateway (or the facilitator behind it) is shedding load, and paying
@@ -144,8 +146,10 @@ export const DEFAULT_BATCH_RATE_LIMIT = { maxAttempts: 3, maxWaitMs: 60_000 } as
  *   when no batch payment of this call can have been charged.
  * - `backoff`: this call is waiting before it retries batch, after a 429
  *   (`reason: "rate_limited"`) or because another call for the wallet hit one
- *   (`reason: "cooldown"`).
- * - `recovered`: a call that backed off was then paid with batch, or its
+ *   (`reason: "cooldown"`), or before it replays a payment in doubt that
+ *   carries a payment identifier (`reason: "in_doubt"`).
+ * - `recovered`: a call that backed off was then paid with batch (`reason:
+ *   "in_doubt"` when the replay of a payment in doubt resolved it), or its
  *   fresh challenge after the wait was served without a payment (`reason:
  *   "served_unpaid_on_rechallenge"`: that response is the call's result, and
  *   nothing was paid).
@@ -168,7 +172,8 @@ export interface SolanaBatchEvent {
    * `wallet_config_conflict`, `channel_store_locked`, `payment_required`,
    * `channel_resync_pending`, `channel_resync_failed`, `channel_unreadable`,
    * `deposit_journal_unreadable`, `deposit_journal_failed`,
-   * `served_unpaid_on_rechallenge` or `batch_cancelled` (`recovered` events), or one of the gateway's refusal codes the
+   * `served_unpaid_on_rechallenge` or `batch_cancelled` (`recovered` events), `in_doubt` (`backoff` and `recovered`
+   * events), or one of the gateway's refusal codes the
    * SDK recognises (`batch_payer_not_allowed`, `batch_payer_not_admitted`,
    * `batch_admission_paused`, `batch_server_signed_only`, `batch_unavailable`,
    * `batch_channel_limit`, `PAYMENT_VERIFICATION_UNAVAILABLE`). An `unresolved` event's reason is a
@@ -202,7 +207,7 @@ export interface SolanaBatchStats {
   fallbacksByReason: Record<string, number>;
   /** Waits before a batch retry (own 429s and shared cooldowns). */
   backoffs: number;
-  /** Batch payments sent again after a 429: a new payment, or the one replay of a receipt-less 429. */
+  /** Batch payments sent again: a new payment after a 429, or the one replay of a payment in doubt. */
   retries: number;
   /**
    * Calls paid with batch after at least one backoff, or served without a
@@ -223,10 +228,12 @@ export interface SolanaBatchStats {
 /**
  * Why a batch payment is left in doubt; see {@link BatchPaymentUnresolvedError}.
  *
- * - `replay_unresolved`: a 429 without a receipt. Its one byte-identical
- *   replay got no definitive success receipt (a 402, `duplicate_settlement`,
- *   another 429, a 5xx, a timeout...), or `batch.rateLimit` left no room to
- *   replay it.
+ * - `replay_unresolved`: a 429 without a receipt, or any doubt about a
+ *   payment carrying a payment identifier. Its one byte-identical replay got
+ *   no definitive success receipt (a 402, `duplicate_settlement`, a 409,
+ *   another 429, a 5xx, a timeout...). A 429 without a receipt keeps this
+ *   reason when `batch.rateLimit` leaves no room to replay it; any other
+ *   doubt keeps its own reason.
  * - `ambiguous_rate_limit`: a 429 whose receipt does not prove nothing was
  *   broadcast (one that says it was charged, `settlement_pending`, or one
  *   naming a transaction).
@@ -393,6 +400,7 @@ interface PaymentPayloadLike {
     deposit?: { amount?: string; transaction?: string };
   };
   accepted?: { amount?: string };
+  extensions?: Record<string, unknown>;
 }
 interface StoredRecord {
   channelConfig: {
@@ -1492,6 +1500,44 @@ function withoutClientSignedBatch(paymentRequired: PaymentRequired): PaymentRequ
   return accepts.some(clientSignedBatch) ? { ...paymentRequired, accepts: accepts.filter((accept) => !clientSignedBatch(accept)) } : paymentRequired;
 }
 
+/** The x402 `payment-identifier` extension: a client-chosen id the gateway can store a paid response under. */
+const PAYMENT_IDENTIFIER = "payment-identifier";
+
+/**
+ * A copy of the 402 with a new payment identifier in its `payment-identifier`
+ * extension, when the gateway declares one. `@x402/core` echoes the 402's
+ * extensions into the payment, so the id travels in the `PAYMENT-SIGNATURE`
+ * header and a byte-identical replay carries the same id. A copy, because
+ * the caller's 402 also backs the exact payment.
+ */
+function withPaymentIdentifier(paymentRequired: PaymentRequired): PaymentRequired {
+  const declared = paymentRequired.extensions?.[PAYMENT_IDENTIFIER] as { info?: Record<string, unknown> } | undefined;
+  if (typeof declared?.info?.required !== "boolean") return paymentRequired;
+  const id = `pay_${randomUUID().replace(/-/g, "")}`;
+  return {
+    ...paymentRequired,
+    extensions: { ...paymentRequired.extensions, [PAYMENT_IDENTIFIER]: { ...declared, info: { ...declared.info, id } } },
+  };
+}
+
+/** An answer's `PAYMENT-RESPONSE` receipt, read without handing it to the scheme. */
+function peekReceipt(
+  http: HttpPaymentClient,
+  getHeader: (name: string) => string | null | undefined,
+): SettleResponseLike | undefined {
+  try {
+    return http.getPaymentSettleResponse(getHeader);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether a payment carries a payment identifier (see {@link withPaymentIdentifier}). */
+function hasPaymentIdentifier(payload: PaymentPayloadLike): boolean {
+  const info = (payload.extensions?.[PAYMENT_IDENTIFIER] as { info?: { id?: unknown } } | undefined)?.info;
+  return typeof info?.id === "string";
+}
+
 /** A 402's server-signed batch accept naming an operator the caller trusts. */
 function trustedBatchAccepts(paymentRequired: PaymentRequired, operators: string[]): PaymentRequirement[] {
   return (paymentRequired.accepts ?? []).filter((candidate) => {
@@ -1867,9 +1913,10 @@ interface SentPayment {
  *   receipt or a clean failed one, or a 429 whose failed receipt proves
  *   nothing was broadcast (`rateLimited`). Never from a replay.
  * - `in_doubt`: everything else, including every exception once the send
- *   started. `replayable` marks the one case allowed a replay: a 429 with
- *   no receipt, on a first send. `settled` says whether the scheme was
- *   handed the answer (and so has already released the payment).
+ *   started. `replayable` marks the cases allowed a replay, on a first send
+ *   only: a 429 with no receipt, and any doubt about a payment carrying a
+ *   payment identifier. `settled` says whether the scheme was handed the
+ *   answer (and so has already released the payment).
  */
 type SendOutcome =
   | { kind: "charged"; response: Response; chargedUsd: number }
@@ -2630,8 +2677,9 @@ export class SolanaBatchPayer {
    *   is the call's error (`failed`, `"unpaid"`), never an exact payment
    *   against the stale challenge;
    * - in doubt: ends only with a definitive success receipt from the one
-   *   replay a receipt-less 429 is allowed ({@link resolveInDoubt}), or a
-   *   thrown {@link BatchPaymentUnresolvedError}. No new authorization, no
+   *   replay a receipt-less 429, or a payment carrying a payment identifier,
+   *   is allowed ({@link resolveInDoubt}), or a thrown
+   *   {@link BatchPaymentUnresolvedError}. No new authorization, no
    *   new deposit, no exact payment and no fallback model is ever paid for a
    *   call in doubt.
    *
@@ -2881,7 +2929,7 @@ export class SolanaBatchPayer {
           if (built.kind !== "authorization" && !(built.key && wallet.resyncs.has(built.key))) this.forgetIntent(wallet, built.key);
           sent = undefined;
           release();
-          await this.report({ type: "recovered", reason: "rate_limited", attempt: budget.attempt });
+          await this.report({ type: "recovered", reason: outcome.status === 429 ? "rate_limited" : "in_doubt", attempt: budget.attempt });
           return { kind: "paid", response: resolved.response, chargedUsd: resolved.chargedUsd };
         }
         return await this.raiseUnresolved(wallet, built, resolved, budget.attempt);
@@ -2936,17 +2984,18 @@ export class SolanaBatchPayer {
   /**
    * Try to end a payment in doubt with the gateway's own word.
    *
-   * The one source of evidence this SDK accepts today is a definitive
-   * success receipt on the single byte-identical replay a 429 without a
-   * receipt is allowed, after its backoff (the owner's bounded safety
-   * attempt). Any other answer to it (a 402 or `duplicate_settlement`, which
-   * mean the original reached the gateway; another 429; a 5xx; a timeout)
+   * The one source of evidence this SDK accepts is a definitive success
+   * receipt on a single byte-identical replay, after a backoff (the owner's
+   * bounded safety attempt). A 429 without a receipt gets that replay. So
+   * does any doubt about a payment carrying a payment identifier: a gateway
+   * that stores each paid response under its identifier answers the replay
+   * of a completed request with the original response and receipt. Any
+   * other answer to the replay (a 402 or `duplicate_settlement`, which mean
+   * the original reached the gateway; a 409; another 429; a 5xx; a timeout)
    * leaves it in doubt. Every other in-doubt outcome is never replayed.
    *
    * Chain state is not evidence here: it can settle a deposit (see
-   * `resync`), never whether the gateway charged. Gateway-side evidence (a
-   * receipt on every response, a request-status endpoint with a fence)
-   * plugs in here, before the caller raises.
+   * `resync`), never whether the gateway charged.
    *
    * @returns the charged replay, or the doubt to raise.
    */
@@ -2958,7 +3007,10 @@ export class SolanaBatchPayer {
     budget: { attempt: number; waited: number },
   ): Promise<Extract<SendOutcome, { kind: "charged" }> | InDoubt> {
     if (!doubt.replayable) return doubt;
-    const wait = this.coolDown(wallet, doubt.retryAfterMs ?? backoffDelay(budget.attempt));
+    // Only a 429 puts the wallet in cooldown; any other doubt just waits.
+    const rateLimited = doubt.status === 429;
+    const delay = doubt.retryAfterMs ?? backoffDelay(budget.attempt);
+    const wait = rateLimited ? this.coolDown(wallet, delay) : delay;
     if (budget.attempt >= this.maxAttempts || budget.waited + wait > this.maxWaitMs) {
       return {
         ...doubt,
@@ -2967,8 +3019,8 @@ export class SolanaBatchPayer {
     }
     await this.report({
       type: "backoff",
-      reason: "rate_limited",
-      status: 429,
+      reason: rateLimited ? "rate_limited" : "in_doubt",
+      status: doubt.status,
       errorReason: doubt.errorReason,
       retryAfterMs: wait,
       attempt: budget.attempt,
@@ -3091,7 +3143,7 @@ export class SolanaBatchPayer {
    * here, and only for a first send.
    *
    * @param retry - count this send in `retries` (it follows this call's own 429).
-   * @param replay - this is the one replay of a receipt-less 429: only a 2xx
+   * @param replay - this is the one replay of a payment in doubt: only a 2xx
    *   with a success receipt counts, everything else stays in doubt.
    */
   private async sendOnce(
@@ -3110,7 +3162,7 @@ export class SolanaBatchPayer {
       return {
         kind: "in_doubt",
         reason: replay ? "replay_unresolved" : "no_response",
-        replayable: false,
+        replayable: !replay && hasPaymentIdentifier(sent.payload),
         settled: false,
         detail: `${replay ? "the replay" : "the payment"} got no answer (${err instanceof Error ? `${err.name}: ${err.message}` : String(err)})`,
         cause: err,
@@ -3154,11 +3206,39 @@ export class SolanaBatchPayer {
       };
     }
 
+    // A payment carrying a payment identifier that a first answer leaves in
+    // doubt gets one byte-identical replay (see resolveInDoubt). The scheme
+    // rolls a payment back when handed an error answer, and could not then
+    // take the replay's receipt, so an error answer is first classified from
+    // its receipt alone, and handed over only if there will be no replay.
+    const hold = !response.ok && !replay && hasPaymentIdentifier(payload);
+    const outcome = await this.classifyAnswer(wallet, sent, response, replay, hold);
+    if (!hold) return outcome;
+    if (outcome.kind === "in_doubt") return { ...outcome, replayable: true, settled: false };
+    await this.settle(http, payload, getHeader, status);
+    return outcome;
+  }
+
+  /**
+   * {@link classify}, past a receipt-less 429. With `hold`, the answer is not
+   * handed to the scheme: its receipt is only read.
+   */
+  private async classifyAnswer(
+    wallet: WalletBatch,
+    sent: SentPayment,
+    response: Response,
+    replay: boolean,
+    hold: boolean,
+  ): Promise<SendOutcome> {
+    const { http, payload } = sent;
+    const getHeader = (name: string) => response.headers.get(name);
+    const status = response.status;
+
     // Hand the answer to the scheme: it verifies the operator's voucher and
     // advances the channel, or rolls it back to its confirmed state.
     const channelId = payloadChannelId(payload);
     const before = channelId ? confirmedState(wallet.book.find(channelId)?.record) : undefined;
-    const reconciled = await this.settle(http, payload, getHeader, status);
+    const reconciled = hold ? { settleResponse: peekReceipt(http, getHeader), ok: false } : await this.settle(http, payload, getHeader, status);
     const receipt = reconciled.settleResponse;
     // `processPaymentResult` does not say whether the scheme took the receipt:
     // upstream rolls a voucher whose cumulative is out of range, or whose
@@ -3286,7 +3366,7 @@ export class SolanaBatchPayer {
       const http = (await this.build(wallet)).http;
       try {
         await this.prepareTopUp(wallet, paymentRequired);
-        return { http, payload: await http.createPaymentPayload(withoutClientSignedBatch(paymentRequired)) };
+        return { http, payload: await http.createPaymentPayload(withPaymentIdentifier(withoutClientSignedBatch(paymentRequired))) };
       } catch (err) {
         if (pass > 0 || !isResyncRequired(err) || wallet.resyncs.size === 0) throw err;
       } finally {
@@ -3411,13 +3491,7 @@ export class SolanaBatchPayer {
       console.error(
         `[@blockrun/llm] batch-settlement receipt not reconciled: ${JSON.stringify(err instanceof Error ? err.message : String(err))}`,
       );
-      let settleResponse: SettleResponseLike | undefined;
-      try {
-        settleResponse = http.getPaymentSettleResponse(getHeader);
-      } catch {
-        settleResponse = undefined;
-      }
-      return { settleResponse, ok: false };
+      return { settleResponse: peekReceipt(http, getHeader), ok: false };
     }
   }
 

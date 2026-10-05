@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added — a batch payment in doubt is recovered through `payment-identifier`
+
+- When the gateway's 402 declares the x402 `payment-identifier` extension,
+  every Solana batch payment carries a new payment id. A payment whose first
+  answer leaves it in doubt (a timeout or network error, a 5xx, a 409
+  `payment_outcome_unknown`, an ambiguous receipt) gets one byte-identical
+  replay after a short backoff, the same id included. A gateway that stores
+  each paid response under its id answers it with the original response and
+  receipt, so the call is served and booked once instead of raising
+  `BatchPaymentUnresolvedError`. Anything short of a success receipt on the
+  replay still raises (`replay_unresolved`). Without the extension nothing
+  changes, and the `exact` payment never carries an id.
+
 ## [3.20.1] - 2026-10-05
 
 ### Fixed — an API key's chat call fails over again when the gateway itself answers 5xx
