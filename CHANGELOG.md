@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Fixed — a Solana batch call the gateway cancelled can fail over to another model
+
+- When an upstream model fails after a batch authorization was verified
+  (a 503 `MODEL_UNAVAILABLE`, a 504, an upstream 429…), the gateway cancels
+  the authorization: nothing is settled, so nothing is charged. It now says
+  so with a failed receipt, `PAYMENT-RESPONSE {success: false, errorReason:
+  "batch_cancelled", transaction: ""}`. On a first send the SDK raises that
+  error as an `APIError` with retry disposition `'unpaid'` (event
+  `recovered`, reason `batch_cancelled`), so `fallbackModels` and
+  `smartChat()` move on to the next model. Before, the receipt-less answer
+  could not be told from a charged failure and raised
+  `BatchPaymentUnresolvedError`, so batch never failed over where `exact`
+  did. The call is not paid again with `exact`, which would hit the same
+  failure.
+- Only for an authorization: a deposit's funding transaction may already be
+  on chain, so a cancelled receipt on an open or top-up is not trusted and
+  stays in doubt. On a replay it only describes the replay, and the
+  original stays in doubt. Needs the matching blockrun-sol gateway change;
+  until it ships, nothing changes.
+
 ### Changed — a failure after a payment never buys another model
 
 - `fallbackModels`, and the fallback chain `smartChat()` /
