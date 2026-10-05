@@ -58,7 +58,7 @@ never paid a second time.
   proof that nothing was charged: a 402 or a recognised refusal
   (`batch_payer_not_allowed`, `batch_payer_not_admitted`,
   `batch_admission_paused`, `batch_server_signed_only`, `batch_unavailable`,
-  `PAYMENT_VERIFICATION_UNAVAILABLE`), with no receipt or a failed one with
+  `batch_channel_limit`, `PAYMENT_VERIFICATION_UNAVAILABLE`), with no receipt or a failed one with
   no transaction, or a 429 whose failed receipt proves nothing was broadcast
   (`batch_account_channel_capacity_exhausted`,
   `batch_channel_capacity_exhausted`, `batch_deposit_rate_limited`). The
@@ -75,8 +75,11 @@ never paid a second time.
   (`deposit_refused`) before anything pays into the wallet again. Only the
   refusals the gateway gives before it starts a batch request
   (`batch_payer_not_allowed`, `batch_payer_not_admitted`,
-  `batch_admission_paused`, `batch_server_signed_only`, `batch_unavailable`)
-  forget the deposit at once.
+  `batch_admission_paused`, `batch_server_signed_only`, `batch_unavailable`,
+  `batch_channel_limit`) forget the deposit at once. `batch_channel_limit` is
+  sol.blockrun.ai's 403 (since 2026-10-05) for a deposit that would open a
+  second live channel for the payer; it is answered before verification, so
+  the deposit was never broadcast.
 - **A receipt the scheme did not record is re-read.** `@x402/svm` rolls a
   voucher whose cumulative is out of range, or whose commitment it cannot
   match, back to the confirmed state without throwing. A success receipt

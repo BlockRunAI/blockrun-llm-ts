@@ -417,6 +417,9 @@ describe("SolanaLLMClient batch-settlement", () => {
     [403, { error: "batch_payer_not_allowed" }],
     [503, { error: "batch_admission_paused" }],
     [400, { error: "batch_server_signed_only" }],
+    [503, { error: "batch_unavailable" }],
+    // sol.blockrun.ai since 2026-10-05: a deposit that would open a second live channel for the payer.
+    [403, { error: "batch_channel_limit", channels: ["6kAzSaTScCBTtRpb8soCY2o33nrFsfERFAjeGP1J1111"], message: "This payer already holds a batch channel that is open or still closing; top it up, wait for its close to finish, or pay with the exact scheme." }],
     [503, { error: "Payment verification temporarily unavailable", code: "PAYMENT_VERIFICATION_UNAVAILABLE" }],
   ])("falls back to exact when the gateway refuses batch (%i %j)", async (status, error) => {
     const c = client({});

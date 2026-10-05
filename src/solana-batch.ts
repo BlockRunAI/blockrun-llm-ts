@@ -171,7 +171,7 @@ export interface SolanaBatchEvent {
    * `served_unpaid_on_rechallenge` or `batch_cancelled` (`recovered` events), or one of the gateway's refusal codes the
    * SDK recognises (`batch_payer_not_allowed`, `batch_payer_not_admitted`,
    * `batch_admission_paused`, `batch_server_signed_only`, `batch_unavailable`,
-   * `PAYMENT_VERIFICATION_UNAVAILABLE`). An `unresolved` event's reason is a
+   * `batch_channel_limit`, `PAYMENT_VERIFICATION_UNAVAILABLE`). An `unresolved` event's reason is a
    * {@link BatchUnresolvedReason}. A `resync` event's reason is
    * `deposit_unanswered`, `deposit_failed`, `deposit_rate_limited`,
    * `deposit_refused`, `receipt_missing`, `receipt_unreconciled`,
@@ -1584,6 +1584,7 @@ const BATCH_REFUSALS: ReadonlySet<string> = new Set([
   "batch_admission_paused",
   "batch_server_signed_only",
   "batch_unavailable",
+  "batch_channel_limit",
   "PAYMENT_VERIFICATION_UNAVAILABLE",
 ]);
 
@@ -1604,6 +1605,7 @@ const PRE_REQUEST_REFUSALS: ReadonlySet<string> = new Set([
   "batch_admission_paused",
   "batch_server_signed_only",
   "batch_unavailable",
+  "batch_channel_limit",
 ]);
 
 /**
