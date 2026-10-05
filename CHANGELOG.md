@@ -7,9 +7,11 @@
 - `chatCompletionStream` reuses the last 402's terms and sends a signed
   payment on its first request ("pre-auth"). Until now, any answer other
   than a 2xx, or no answer at all (timeout, network error), fell through to
-  the normal flow, which signs and sends a SECOND payment. The gateway
-  settles a stream when it starts, so a 5xx or a timeout after the first
-  payment could charge the call twice. Now only a 402 (the payment was
+  the normal flow, which signs and sends a SECOND payment. A 5xx or a
+  timeout after the first payment cannot be told apart from a call the
+  gateway verified, served and settled (a proxy's 502/504 or the client's
+  own timeout says nothing about the handler behind it), so the call could
+  be charged twice. Now only a 402 (the payment was
   refused at verification, e.g. the price changed) falls through and pays
   once. Any other failure raises: `APIError` "API error after payment"
   for an answer, or the network error itself, each with retry disposition
