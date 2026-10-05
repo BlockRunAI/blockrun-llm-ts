@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [3.20.1] - 2026-10-05
+
+### Fixed — an API key's chat call fails over again when the gateway itself answers 5xx
+
+- 3.20.0 stopped `fallbackModels` from moving on after any 5xx in account
+  (API key) mode. api.blockrun.ai debits a chat request only on an accepted
+  2xx and releases the credit hold on any other answer, so its own 5xx (one
+  carrying its JSON error envelope) is `'unpaid'` again and moves on. A 5xx
+  without that envelope (an HTML or empty 502/504 from a proxy in front of
+  it), a timeout or a network error stays `'paid-or-in-doubt'`.
+
+### Fixed — Solana exact and batch agree on `PAYMENT_VERIFICATION_UNAVAILABLE`
+
+- A `503 PAYMENT_VERIFICATION_UNAVAILABLE` in answer to an exact payment is
+  `'unpaid'`, as it already was on the batch path: sol.blockrun.ai sends it
+  only when verification could not run, so nothing was settled or broadcast.
+  This holds on every exact-paid Solana endpoint. Any other 503, or the code
+  on another status, stays `'paid-or-in-doubt'`.
+
 ### Fixed — a capacity-refused batch deposit no longer parks the wallet on exact
 
 - sol.blockrun.ai answers a deposit that PayAI refused for capacity or rate
@@ -74,17 +93,11 @@
   ones: the unpaid first request and its 402 challenge, or signing. Anything
   after the signed payment was sent (a timeout, abort or network error, any
   error status, a 2xx whose body cannot be read) is `'paid-or-in-doubt'` and
-  propagates, except a Solana `503 PAYMENT_VERIFICATION_UNAVAILABLE`: the
-  gateway sends that only when verification could not run (nothing settled or
-  broadcast), so it is `'unpaid'` on the exact path as on the batch path. An
-  error without a disposition counts as `'paid-or-in-doubt'`.
+  propagates. An error without a disposition counts as `'paid-or-in-doubt'`.
 - With an API key the request itself is billed, so only the account API's
-  explicit answers move on: a 4xx (such as a 429), or a 5xx that carries its
-  JSON error envelope. api.blockrun.ai debits a chat request only on an
-  accepted 2xx and releases the credit hold on any other answer. A 5xx
-  without that envelope (an HTML or empty 502/504 from a proxy in front of
-  it), a timeout or a network error no longer moves on. The account
-  transport still never re-sends a POST itself.
+  explicit 4xx answer (such as a 429) moves on; a 5xx, a timeout or a
+  network error no longer does. This matches the account transport, which
+  already never re-sends a POST after a 5xx.
 - New export `retryDisposition(err)` returns `'unpaid'`,
   `'paid-or-in-doubt'` or `undefined`, for your own retry wrappers
   (type `RetryDisposition`). `BatchPaymentUnresolvedError` is always
