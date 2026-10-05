@@ -3483,6 +3483,13 @@ describe("SolanaLLMClient batch-settlement", () => {
           [() => tooMany({ "Retry-After": "1" }), () => tooMany({ "Retry-After": "1", ...preBroadcast() })],
         ],
         ["a receipt-less 429 whose replay is answered 503", "replay_unresolved", 503, [() => tooMany({ "Retry-After": "1" }), () => new Response("{}", { status: 503 })]],
+        // A cancelled receipt on a replay only describes the replay.
+        [
+          "a receipt-less 429 whose replay is answered with a cancelled receipt",
+          "replay_unresolved",
+          503,
+          [() => tooMany({ "Retry-After": "1" }), () => new Response("{}", { status: 503, headers: receipt({ success: false, errorReason: "batch_cancelled", transaction: "" }) })],
+        ],
         ["a receipt-less 429 whose replay times out", "replay_unresolved", undefined, [() => tooMany({ "Retry-After": "1" }), timedOut]],
         // Only a definitive success receipt ends the doubt on a replay.
         [
@@ -3527,6 +3534,78 @@ describe("SolanaLLMClient batch-settlement", () => {
         ["a 500 with a success receipt", "outcome_unknown", 500, [() => new Response("{}", { status: 500, headers: receipt({ success: true, transaction: "" }) })]],
       ];
       let requestIds: string[];
+
+      it("moves on to the fallback model when the gateway cancelled the authorization, paying nothing more", async () => {
+        const c = observed();
+        const exact = stubExact(c);
+        await inDoubtThenFallback(c, [
+          () =>
+            new Response(JSON.stringify({ error: { message: "Model unavailable", code: "MODEL_UNAVAILABLE" } }), {
+              status: 503,
+              headers: receipt({ success: false, errorReason: "batch_cancelled", transaction: "" }),
+            }),
+        ]);
+
+        const result = await c.chatCompletion("openai/gpt-4o-mini", [{ role: "user", content: "gm" }], {
+          fallbackModels: ["anthropic/claude-sonnet-4.6"],
+        });
+
+        expect(result.choices[0].message.content).toBe("gm");
+        expect(gatewayCalls.map((call) => JSON.parse(String(call.init?.body)).model)).toEqual([
+          "openai/gpt-4o-mini",
+          "openai/gpt-4o-mini",
+          "anthropic/claude-sonnet-4.6",
+          "anthropic/claude-sonnet-4.6",
+        ]);
+        // The cancelled model is never paid again with exact; the fallback model pays its own way.
+        expect(exact).toHaveBeenCalledTimes(1);
+        expect(events).toContainEqual(expect.objectContaining({ type: "recovered", reason: "batch_cancelled", status: 503 }));
+        expect(c.getBatchStats().unresolved).toBe(0);
+      });
+
+      it("raises a cancelled authorization's error unpaid, never as in doubt, and never pays it with exact", async () => {
+        const c = observed();
+        const exact = stubExact(c);
+        await inDoubtThenFallback(c, [
+          () => new Response(JSON.stringify({ error: "upstream_unavailable" }), { status: 503, headers: receipt({ success: false, errorReason: "batch_cancelled", transaction: "" }) }),
+        ]);
+
+        const raised = await c.chat("openai/gpt-4o-mini", "gm").catch((err: unknown) => err);
+
+        expect(raised).toBeInstanceOf(APIError);
+        expect(raised).toMatchObject({ statusCode: 503 });
+        expect(retryDisposition(raised)).toBe("unpaid");
+        expect(exact).not.toHaveBeenCalled();
+        // The channel is back to its confirmed state: the next call pays into it.
+        gateway.length = 0;
+        gateway.push(
+          () => quote402([exactAccept(), batchAccept(operator.address)]),
+          async (_url, init) => {
+            const payment = decodePayment(init);
+            expect(payment.payload.type).toBe("authorization");
+            return servedWithVoucher(operator, channelIdOf(payment), 2000n, 1000n);
+          }
+        );
+        await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      });
+
+      it("never trusts a cancelled receipt for a deposit: the open stays in doubt", async () => {
+        const c = observed();
+        const exact = stubExact(c);
+        gateway.push(
+          () => quote402([exactAccept(), batchAccept(operator.address)]),
+          (_url, init) => {
+            expect(decodePayment(init).payload.type).toBe("deposit");
+            return new Response("{}", { status: 503, headers: receipt({ success: false, errorReason: "batch_cancelled", transaction: "" }) });
+          }
+        );
+
+        const raised = await c.chat("openai/gpt-4o-mini", "gm").catch((err: unknown) => err);
+
+        expect(raised).toBeInstanceOf(BatchPaymentUnresolvedError);
+        expect(raised).toMatchObject({ reason: "outcome_unknown", payloadKind: "open" });
+        expect(exact).not.toHaveBeenCalled();
+      });
 
       /**
        * Open a channel, then queue the next call's 402 and `answer` for each

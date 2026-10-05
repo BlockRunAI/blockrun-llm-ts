@@ -126,6 +126,9 @@ src/
   `PRE_REQUEST_REFUSALS` and that 429 prove it was never broadcast — a 402 or
   `PAYMENT_VERIFICATION_UNAVAILABLE` is how the gateway answers a deposit it judged "did not land",
   so the call pays exact but the deposit is `distrust()`ed (`deposit_refused`), intent kept), or
+  `cancelled` (FIRST send of an AUTHORIZATION only: a non-2xx with the gateway's
+  `{success:false, errorReason:"batch_cancelled", transaction:""}` receipt → its error raised as an
+  `"unpaid"` APIError, never paid with exact; never trusted for a deposit or a replay), or
   `in_doubt` (everything else:
   any exception once the send started whatever its `cause.code`, 5xx/unknown 4xx, a receipt with a
   transaction / `settlement_pending` / success on non-2xx, a 429 with any other receipt, ANY replay

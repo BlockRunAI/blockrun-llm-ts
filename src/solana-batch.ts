@@ -168,7 +168,7 @@ export interface SolanaBatchEvent {
    * `wallet_config_conflict`, `channel_store_locked`, `payment_required`,
    * `channel_resync_pending`, `channel_resync_failed`, `channel_unreadable`,
    * `deposit_journal_unreadable`, `deposit_journal_failed`,
-   * `served_unpaid_on_rechallenge` (a `recovered` event), or one of the gateway's refusal codes the
+   * `served_unpaid_on_rechallenge` or `batch_cancelled` (`recovered` events), or one of the gateway's refusal codes the
    * SDK recognises (`batch_payer_not_allowed`, `batch_payer_not_admitted`,
    * `batch_admission_paused`, `batch_server_signed_only`, `batch_unavailable`,
    * `PAYMENT_VERIFICATION_UNAVAILABLE`). An `unresolved` event's reason is a
@@ -1684,6 +1684,32 @@ async function afterPaymentError(response: Response): Promise<APIError> {
   );
 }
 
+/**
+ * Whether a receipt is the gateway's word that it CANCELLED this payment's
+ * authorization: `success: false`, `errorReason: "batch_cancelled"`, no
+ * transaction. The gateway gives it on an error it answered after verify
+ * when nothing was settled, so nothing was charged, nor can be later (only a
+ * settle signs a voucher). Never given for a deposit.
+ */
+function cancelledReceipt(receipt: SettleResponseLike | undefined): boolean {
+  return receipt?.success === false && receipt.errorReason === "batch_cancelled" && !receipt.transaction;
+}
+
+/**
+ * The gateway's error answer to a payment it cancelled, as an `"unpaid"`
+ * {@link APIError}: nothing was charged, so the caller may retry it or move
+ * on to a fallback model.
+ */
+async function cancelledError(response: Response): Promise<APIError> {
+  let body: unknown;
+  try {
+    body = await response.clone().json();
+  } catch {
+    body = { error: "Request failed" };
+  }
+  return withDisposition(new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(body)), "unpaid");
+}
+
 /** A short description of a receipt, for an event's `detail`. */
 function describeReceipt(receipt: SettleResponseLike | undefined): string {
   if (!receipt) return "no receipt";
@@ -1857,6 +1883,17 @@ type SendOutcome =
        * settled from the chain ({@link PRE_REQUEST_REFUSALS}).
        */
       depositSafe: boolean;
+    }
+  | {
+      /**
+       * An authorization the gateway cancelled ({@link cancelledReceipt}):
+       * nothing was charged, and the call failed upstream. Its error is
+       * raised `"unpaid"`, so `fallbackModels` / `smartChat()` may move on;
+       * it is not paid again with exact, which would hit the same failure.
+       */
+      kind: "cancelled";
+      status: number;
+      error: APIError;
     }
   | InDoubt;
 
@@ -2821,6 +2858,20 @@ export class SolanaBatchPayer {
           continue;
         }
 
+        if (outcome.kind === "cancelled") {
+          sent = undefined;
+          release();
+          await this.report({
+            type: "recovered",
+            reason: "batch_cancelled",
+            status: outcome.status,
+            errorReason: "batch_cancelled",
+            attempt: budget.attempt,
+            detail: "the gateway cancelled the payment: nothing was charged, and its error is raised unpaid",
+          });
+          return { kind: "failed", error: outcome.error };
+        }
+
         // In doubt. The wallet stays busy until it is resolved or raised.
         const resolved = await this.resolveInDoubt(wallet, built, outcome, send, budget);
         if (resolved.kind === "charged") {
@@ -3114,6 +3165,12 @@ export class SolanaBatchPayer {
       receipt?.success === true &&
       reconciled.ok &&
       recordAdvanced(before, channelId ? confirmedState(wallet.book.find(channelId)?.record) : undefined, payload, receipt);
+
+    // An authorization the gateway cancelled on a first send: nothing was
+    // charged. (On a replay it only describes the replay: still in doubt.)
+    if (!response.ok && !replay && sent.kind === "authorization" && cancelledReceipt(receipt)) {
+      return { kind: "cancelled", status, error: await cancelledError(response) };
+    }
 
     // A replay resolves only on a receipt the scheme verified and recorded
     // (success, a valid voucher, the record advanced); anything less leaves
