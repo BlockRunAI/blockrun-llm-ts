@@ -184,6 +184,34 @@ describe("account mode (API key): the request itself is billed", () => {
     await expect(chat(client)).resolves.toMatchObject({ model: FALLBACK });
   });
 
+  // api.blockrun.ai debits only an accepted 2xx; its own 5xx (a JSON error
+  // envelope) released the credit hold, so the fallback may be tried.
+  it.each([
+    ["502 upstream unavailable", 502, { error: { message: "Upstream provider unavailable. Please retry.", type: "api_error", code: "upstream_unavailable" } }],
+    ["502 invalid upstream response", 502, { error: { message: "Provider returned an invalid API response. Please retry.", type: "api_error", code: "invalid_upstream_response" } }],
+    ["503 with a top-level message", 503, { message: "Service temporarily unavailable", code: "MODEL_UNAVAILABLE" }],
+  ])("moves on after the account API's own %s (nothing was debited)", async (_label, code, body) => {
+    const client = evmClient({ apiKey: KEY });
+    answers.push(() => Response.json(body, { status: code }), ok());
+
+    await expect(chat(client)).resolves.toMatchObject({ model: FALLBACK });
+    expect(calls.map((c) => c.model)).toEqual([PRIMARY, FALLBACK]);
+  });
+
+  it.each([
+    ["HTML 502 from a load balancer", () => new Response("<html><body>502 Bad Gateway</body></html>", { status: 502, headers: { "content-type": "text/html" } })],
+    ["plain-text 504 upstream timeout", () => new Response("upstream request timeout", { status: 504 })],
+    ["502 with an empty message", () => Response.json({ error: { message: "" } }, { status: 502 })],
+  ])("does not move on after an %s, which proves nothing about the debit", async (_label, failure) => {
+    const client = evmClient({ apiKey: KEY });
+    answers.push(failure as Answer, ok());
+
+    const raised = await chat(client).catch((err: unknown) => err);
+
+    expect(retryDisposition(raised)).toBe("paid-or-in-doubt");
+    expect(calls.map((c) => c.model)).toEqual([PRIMARY]);
+  });
+
   it.each([
     ["503", status(503)],
     ["timeout", timeout],

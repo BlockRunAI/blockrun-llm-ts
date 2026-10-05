@@ -323,8 +323,10 @@ a retry disposition, which `retryDisposition(err)` returns:
   have been charged — a timeout, abort or network error after sending it, any
   error status in answer to it, or a 2xx whose body could not be read. The
   error propagates; no other model is bought for the call. With an API key
-  the request itself is billed, so only the account API's explicit 4xx
-  answer (such as a 429) is `'unpaid'`; a 5xx or a timeout is not.
+  the request itself is billed, so only the account API's explicit answers
+  are `'unpaid'`: a 4xx (such as a 429), or a 5xx carrying its JSON error
+  envelope (api.blockrun.ai debits only an accepted 2xx). An HTML or empty
+  5xx from a proxy, or a timeout, is not.
 
 An error without a disposition counts as `'paid-or-in-doubt'`. Use the same
 check in your own retry wrapper:

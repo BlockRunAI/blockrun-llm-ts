@@ -52,16 +52,31 @@ export function resolveApiKeyAuth(
 }
 
 /**
- * The {@link RetryDisposition} of an error from an account-mode request.
+ * The {@link RetryDisposition} of an error from an account-mode chat request.
  *
  * With an API key the request itself is the billed one (which is why
  * {@link ApiKeyAuth.fetch} never replays a POST), so a request that was sent
- * may have been charged. Only the account API's explicit 4xx answer (a 429
- * rate limit, a 402 for credits, a 400 or 401) is a refusal that charged
- * nothing; a 5xx, a timeout, an abort or a network error is not.
+ * may have been charged. The account API's explicit answers are refusals that
+ * charged nothing: a 4xx (a 429 rate limit, a 402 for credits, a 400 or 401),
+ * and a 5xx that carries its JSON error envelope. api.blockrun.ai holds credit
+ * at verification and debits only an accepted 2xx; any other answer of a chat
+ * request releases the hold at $0. A 5xx WITHOUT that envelope (an HTML or
+ * empty 502/504 from a proxy or load balancer in front of it), a timeout, an
+ * abort or a network error proves nothing and stays in doubt.
+ *
+ * Used only on chat requests, the ones `fallbackModels` re-sends.
  */
 export function accountErrorDisposition(err: unknown): RetryDisposition {
-  return err instanceof APIError && err.statusCode >= 400 && err.statusCode < 500 ? "unpaid" : "paid-or-in-doubt";
+  if (!(err instanceof APIError)) return "paid-or-in-doubt";
+  if (err.statusCode >= 400 && err.statusCode < 500) return "unpaid";
+  if (err.statusCode >= 500 && hasGatewayErrorEnvelope(err.response)) return "unpaid";
+  return "paid-or-in-doubt";
+}
+
+/** The account API's own error body: {@link ApiKeyAuth.fetch} keeps its string `message`. */
+function hasGatewayErrorEnvelope(response: unknown): boolean {
+  return !!response && typeof response === "object" && typeof (response as { message?: unknown }).message === "string"
+    && (response as { message: string }).message.length > 0;
 }
 
 /** Throws for wallet-only operations instead of inventing a wallet identity. */
