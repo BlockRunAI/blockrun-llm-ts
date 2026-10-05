@@ -1758,7 +1758,8 @@ const NOT_BROADCAST_429 = new Set([
 ]);
 
 /**
- * Whether a 429's receipt proves the payment went nowhere: a failed receipt
+ * Whether a refusal's receipt (a 429, or sol.blockrun.ai's 402 for the same
+ * refusal) proves the payment went nowhere: a failed receipt
  * with no transaction, for one of {@link NOT_BROADCAST_429}. Any other
  * receipt (charged, `settlement_pending`, one naming a transaction) means a
  * deposit may have been broadcast, which rolling back local state cannot undo.
@@ -3243,7 +3244,11 @@ export class SolanaBatchPayer {
             cause: await afterPaymentError(response),
           };
         }
-        return { kind: "not_charged", reason: "payment_required", status, depositSafe: false };
+        // sol.blockrun.ai answers PayAI's capacity / rate refusal of a deposit
+        // with this 402 and PayAI's failed receipt (blockrun-sol #426): the
+        // receipt proves nothing was broadcast, so the deposit is forgotten at
+        // once instead of being re-read from the chain for ~300 blocks.
+        return { kind: "not_charged", reason: "payment_required", status, errorReason: receipt?.errorReason, depositSafe: provesNothingBroadcast(receipt) };
       }
       const refusal = await batchRefusal(response);
       // A refusal charges nothing, so a refused top-up leaves a healthy
