@@ -62,9 +62,12 @@
   error status, a 2xx whose body cannot be read) is `'paid-or-in-doubt'` and
   propagates. An error without a disposition counts as `'paid-or-in-doubt'`.
 - With an API key the request itself is billed, so only the account API's
-  explicit 4xx answer (such as a 429) moves on; a 5xx, a timeout or a
-  network error no longer does. This matches the account transport, which
-  already never re-sends a POST after a 5xx.
+  explicit answers move on: a 4xx (such as a 429), or a 5xx that carries its
+  JSON error envelope. api.blockrun.ai debits a chat request only on an
+  accepted 2xx and releases the credit hold on any other answer. A 5xx
+  without that envelope (an HTML or empty 502/504 from a proxy in front of
+  it), a timeout or a network error no longer moves on. The account
+  transport still never re-sends a POST itself.
 - New export `retryDisposition(err)` returns `'unpaid'`,
   `'paid-or-in-doubt'` or `undefined`, for your own retry wrappers
   (type `RetryDisposition`). `BatchPaymentUnresolvedError` is always
