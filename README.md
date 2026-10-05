@@ -322,6 +322,7 @@ a retry disposition, which `retryDisposition(err)` returns:
   PAYMENT_VERIFICATION_UNAVAILABLE` in answer to the payment is `'unpaid'`
   too: the gateway sends it only when verification could not run, so nothing
   was settled or broadcast (the batch path already treats it as a refusal).
+  This holds on every exact-paid Solana endpoint, not only chat.
 - `'paid-or-in-doubt'`: the signed payment (exact or batch) was sent and may
   have been charged — a timeout, abort or network error after sending it, any
   error status in answer to it, or a 2xx whose body could not be read. The
