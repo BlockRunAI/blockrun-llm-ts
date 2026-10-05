@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.20.0] - 2026-10-05
+
 ### Fixed — a Base streamed chat call never pays twice
 
 - `chatCompletionStream` reuses the last 402's terms and sends a signed
