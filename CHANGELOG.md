@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed — `AnthropicClient` in wallet mode charged up to three times for one call
+
+- The Anthropic SDK retries 408, 409, 429, 5xx and connection errors on its
+  own (`maxRetries` defaults to 2) by calling the client's fetch again. In
+  wallet mode that fetch runs the whole x402 flow (unpaid request, 402, sign,
+  send), so each retry signed and sent a NEW payment: one
+  `messages.create` that met a 5xx after paying sent three payments. The SDK
+  now runs with `maxRetries: 0` in wallet mode too (account mode already
+  did). A failure after the payment raises; retry it yourself only if you
+  accept paying again. Present in 3.19.1 and earlier.
 ### Fixed — a Base streamed chat call never pays twice
 
 - `chatCompletionStream` reuses the last 402's terms and sends a signed
