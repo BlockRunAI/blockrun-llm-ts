@@ -61,8 +61,12 @@ export class AnthropicClient {
         baseURL: this._apiUrl,
         apiKey: 'blockrun',
         fetch: this._x402Fetch.bind(this),
-        // Account POSTs may already be billed when an upstream error arrives.
-        ...(this.apiAuth ? { maxRetries: 0 } : {}),
+        // Never let the Anthropic SDK retry. It retries 408/409/429/5xx and
+        // connection errors by calling this fetch again, which in wallet mode
+        // runs the whole x402 flow and signs a NEW payment each time (three
+        // payments for one call at the default maxRetries of 2); in account
+        // mode the POST itself may already be billed.
+        maxRetries: 0,
       });
       return this._client;
     })();
