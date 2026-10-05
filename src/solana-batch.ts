@@ -1748,19 +1748,41 @@ export function parseRetryAfter(value: string | null | undefined, now = Date.now
 }
 
 /**
- * 429 reasons the facilitator gives before it broadcasts anything: the
- * account or channel capacity limit, and the deposit-attempt rate limit.
+ * The facilitator's admission refusals: every `batch_*` errorReason PayAI's
+ * `/settle` (and, from its admission checks there, `/verify`) answers before
+ * anything is broadcast, always with an empty transaction (PayAI 10-05). They
+ * arrive as PayAI's 429 (capacity, rate), 503 (funding headroom, new channels
+ * disabled), 403 (account paused, fee-payer lane) or 400 (deposit terms);
+ * sol.blockrun.ai answers every one as a 402 carrying the failed receipt
+ * (blockrun-sol #427). A closed list: any other code is not proof.
  */
-const NOT_BROADCAST_429 = new Set([
+const NOT_BROADCAST_REFUSALS = new Set([
+  // 429
   "batch_account_channel_capacity_exhausted",
   "batch_channel_capacity_exhausted",
   "batch_deposit_rate_limited",
+  "batch_deposit_ip_rate_limited",
+  // 503
+  "batch_signer_funding_headroom_exhausted",
+  "batch_new_channels_disabled",
+  "batch_public_new_channels_disabled",
+  // 403
+  "batch_account_admission_paused",
+  "batch_channel_owner_mismatch",
+  "batch_fee_payer_unavailable",
+  "batch_fee_payer_not_dedicated",
+  "batch_fee_payer_lane_not_authorized",
+  "batch_transaction_fee_payer_mismatch",
+  // 400
+  "batch_initial_deposit_out_of_range",
+  "batch_deposit_asset_not_supported",
+  "batch_withdraw_delay_out_of_range",
 ]);
 
 /**
  * Whether a refusal's receipt (a 429, or sol.blockrun.ai's 402 for the same
  * refusal) proves the payment went nowhere: a failed receipt
- * with no transaction, for one of {@link NOT_BROADCAST_429}. Any other
+ * with no transaction, for one of {@link NOT_BROADCAST_REFUSALS}. Any other
  * receipt (charged, `settlement_pending`, one naming a transaction) means a
  * deposit may have been broadcast, which rolling back local state cannot undo.
  */
@@ -1769,7 +1791,7 @@ function provesNothingBroadcast(receipt: SettleResponseLike | undefined): boolea
     receipt?.success === false &&
     !receipt.transaction &&
     typeof receipt.errorReason === "string" &&
-    NOT_BROADCAST_429.has(receipt.errorReason)
+    NOT_BROADCAST_REFUSALS.has(receipt.errorReason)
   );
 }
 
