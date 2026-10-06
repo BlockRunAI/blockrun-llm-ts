@@ -138,13 +138,19 @@ src/
   when `rateLimit` runs out. The rechallenge is the request itself, unpaid (`Rechallenge`): 402 → go on;
   2xx → `served` (the call's result, nothing paid; `recovered` / `served_unpaid_on_rechallenge`);
   anything else or no answer → `failed`, its error raised `"unpaid"`. NEVER exact against the stale 402.
-  in_doubt ends only in `resolveInDoubt()` — a receipt-less 429 gets ONE byte-identical replay after
-  its backoff (owner policy), and so does ANY first-send doubt about a payment carrying a
+  in_doubt ends only in `resolveInDoubt()` — without a payment id, a receipt-less 429 gets ONE
+  byte-identical replay after its backoff within `rateLimit` (owner policy); a payment carrying a
   `payment-identifier` id (`withPaymentIdentifier()` adds a fresh `pay_<32 hex>` to a COPY of the 402
-  when it declares the extension, never to the exact 402; `classify()` holds an error answer back from
-  the scheme (`hold`, receipt only peeked) until it knows there will be no replay, because a rolled-back
-  pending cannot take the replay's receipt; a non-429 doubt waits `backoffDelay` without a wallet
-  cooldown; events `backoff`/`recovered` reason `in_doubt`) — or `raiseUnresolved()` →
+  when it declares the extension, never to the exact 402) goes to `replayInDoubt()`: replayed byte for
+  byte (same header; the body is serialized ONCE in `requestWithPayment`) while `replayMayResolve()`
+  (no answer `unanswered`, 5xx, 429, or 409 WITH `Retry-After`), waiting `inDoubtWait()` =
+  clamp(Retry-After ?? backoffDelay, 1 s, 30 s), within `inDoubt.maxWaitMs` (default 300000: waits +
+  replay round trips from the first doubt), counted apart from `rateLimit` (a 429 still cools the
+  wallet down). `classify()` holds EVERY error answer to such a payment back from the scheme (`held`,
+  receipt only peeked), and `replayInDoubt()` hands over only the last answer once no replay follows:
+  the scheme deletes the pending on ANY answer it is handed, so handing it a middle answer would make
+  the final success receipt unmatchable. Events `backoff` (per wait, status + retryAfterMs) and
+  `recovered` reason `in_doubt` (`rate_limited` for a 429) — or `raiseUnresolved()` →
   `BatchPaymentUnresolvedError` (`PaymentError`, disposition `paid-or-in-doubt`; reason
   `replay_unresolved | ambiguous_rate_limit | no_response | duplicate_settlement | outcome_unknown`; wallet, requestId,
   channelId, payloadKind, depositInDoubt, status, cause) + `unresolved` event/log/counter. NEVER a new

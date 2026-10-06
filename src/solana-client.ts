@@ -973,6 +973,10 @@ export class SolanaLLMClient {
     body: Record<string, unknown>
   ): Promise<ChatResponse> {
     const url = `${this.apiUrl}${endpoint}`;
+    // Serialized once: every send of this call carries these exact bytes, so
+    // a batch payment's replays match the original even if the caller edits
+    // its messages meanwhile (a payment-identifier gateway binds the body).
+    const json = JSON.stringify(body);
     // Taken before the first request: a channel close that completes while
     // this call waits for its 402 keeps it from opening a new channel.
     const closesAtStart = await this.batchPayer?.closeFence();
@@ -980,7 +984,7 @@ export class SolanaLLMClient {
       const response = await this.sendUnpaid(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
-        body: JSON.stringify(body),
+        body: json,
       });
 
       if (response.status === 402) {
@@ -999,7 +1003,7 @@ export class SolanaLLMClient {
                 this.fetchWithTimeout(url, {
                   method: "POST",
                   headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT, ...paymentHeaders },
-                  body: JSON.stringify(body),
+                  body: json,
                 }),
               // A fresh, unpaid challenge after a 429 wait: the request itself,
               // sent again without a payment. Every error it throws is unpaid.
@@ -1007,7 +1011,7 @@ export class SolanaLLMClient {
                 const challenge = await this.sendUnpaid(url, {
                   method: "POST",
                   headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
-                  body: JSON.stringify(body),
+                  body: json,
                 });
                 if (challenge.status === 402) {
                   try {

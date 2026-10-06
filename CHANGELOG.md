@@ -5,15 +5,33 @@
 ### Added — a batch payment in doubt is recovered through `payment-identifier`
 
 - When the gateway's 402 declares the x402 `payment-identifier` extension,
-  every Solana batch payment carries a new payment id. A payment whose first
-  answer leaves it in doubt (a timeout or network error, a 5xx, a 409
-  `payment_outcome_unknown`, an ambiguous receipt) gets one byte-identical
-  replay after a short backoff, the same id included. A gateway that stores
-  each paid response under its id answers it with the original response and
-  receipt, so the call is served and booked once instead of raising
-  `BatchPaymentUnresolvedError`. Anything short of a success receipt on the
-  replay still raises (`replay_unresolved`). Without the extension nothing
-  changes, and the `exact` payment never carries an id.
+  every Solana batch payment carries a new payment id. A payment left in
+  doubt is replayed byte for byte (the same `PAYMENT-SIGNATURE` header, id
+  included, and the same request body) for as long as the gateway's answer
+  says a later replay can succeed: no answer (a timeout, an abort, a network
+  error), a 5xx, a 429, or a 409 with `Retry-After` (the original is still
+  running). Each wait is the answer's `Retry-After`, or about 1s, 2s, 4s...
+  with jitter, clamped to 1-30 s. A gateway that stores each paid response
+  under its id answers a replay of a completed request with the original
+  response and receipt, so the call is served and booked once instead of
+  raising `BatchPaymentUnresolvedError`. This also recovers a generation that
+  outlasts the client's 60 s `timeout`. A 409 without `Retry-After`, a 402, a
+  2xx without a receipt the SDK can verify, or running out of time raises
+  (`replay_unresolved` once a replay was sent; the message counts them).
+  Every error answer is held back from the scheme until no replay follows
+  it, so a later success receipt still reconciles the channel. Without the
+  extension nothing changes, and the `exact` payment never carries an id.
+- New option `batch.inDoubt.maxWaitMs` (default `300000`, exported as
+  `DEFAULT_BATCH_IN_DOUBT`): how long one call keeps replaying a payment in
+  doubt that carries a payment id, counted from its first answer in doubt,
+  waits and replays included. These replays do not count against
+  `batch.rateLimit`.
+
+### Fixed — every send of a chat call carries the same body
+
+- `requestWithPayment` serializes the request body once per call, so a batch
+  payment's replays repeat the original's bytes even if the caller edits its
+  `messages` while the call waits.
 
 ## [3.20.1] - 2026-10-05
 
