@@ -2028,6 +2028,12 @@ interface InDoubt {
   /** Sending threw: no answer reached this client (a timeout, an abort, a network error). */
   unanswered?: boolean;
   /**
+   * For a payment replayed while in doubt: why its first send was left in
+   * doubt. That answer, not a replay's, says what may have happened to a
+   * deposit it carried.
+   */
+  firstReason?: BatchUnresolvedReason;
+  /**
    * The error answer to a payment carrying a payment identifier, not handed
    * to the scheme (`settled` is false): the scheme rolls a payment back when
    * handed an error, and could not then take a later replay's receipt.
@@ -3157,6 +3163,7 @@ export class SolanaBatchPayer {
         ...doubt,
         settled: doubt.settled || held !== undefined,
         held: undefined,
+        firstReason: first.reason,
         detail: [doubt.detail, ...notes].filter(Boolean).join("; "),
       };
     };
@@ -3165,11 +3172,13 @@ export class SolanaBatchPayer {
         return stop(doubt.held?.status === 409 ? "the gateway sent no Retry-After, so no replay can resolve it" : undefined);
       }
       const wait = inDoubtWait(doubt, replays + 1);
+      const status = doubt.held?.status;
+      // A 429 cools the wallet down for the gateway's own Retry-After, whether
+      // or not this call replays: its other calls must not send into it.
+      if (status === 429) this.coolDown(wallet, (doubt.held && parseRetryAfter(doubt.held.headers.get("retry-after"))) ?? wait);
       if (spent + wait > this.inDoubtMaxWaitMs) {
         return stop(`batch.inDoubt.maxWaitMs (${this.inDoubtMaxWaitMs} ms) leaves no room for ${replays > 0 ? "another replay" : "a replay"}`);
       }
-      const status = doubt.held?.status;
-      if (status === 429) this.coolDown(wallet, wait);
       await this.report({
         type: "backoff",
         reason: status === 429 ? "rate_limited" : "in_doubt",
@@ -3203,12 +3212,13 @@ export class SolanaBatchPayer {
   private async raiseUnresolved(wallet: WalletBatch, sent: SentPayment, doubt: InDoubt, attempt: number): Promise<never> {
     if (!doubt.settled) await this.settle(sent.http, sent.payload, () => null, 0);
     if (sent.kind !== "authorization") {
+      const reason = doubt.firstReason ?? doubt.reason;
       this.distrust(
         wallet,
         sent,
-        doubt.reason === "no_response"
+        reason === "no_response"
           ? "deposit_unanswered"
-          : doubt.reason === "replay_unresolved"
+          : reason === "replay_unresolved"
             ? "deposit_rate_limited"
             : "deposit_failed",
       );

@@ -4841,6 +4841,71 @@ describe("SolanaLLMClient batch-settlement", () => {
       expect(sleeps).toEqual([3_000, 3_000]);
     });
 
+    it("keeps the gateway's 429 cooldown for the wallet even when there is no room to replay", async () => {
+      const c = observed({ inDoubt: { maxWaitMs: 0 } });
+      stubExact(c);
+      const channelId = await open(c);
+      gateway.push(
+        () => quote402WithId(),
+        () => new Response(JSON.stringify({ error: "rate_limited" }), { status: 429, headers: { "Retry-After": "20" } })
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).rejects.toMatchObject({
+        name: "BatchPaymentUnresolvedError",
+        reason: "replay_unresolved",
+        status: 429,
+      });
+      expect(sleeps).toEqual([]);
+
+      // The next call waits out the gateway's Retry-After before it pays, from a fresh challenge.
+      gateway.push(
+        () => quote402WithId(),
+        () => quote402WithId(),
+        () => servedWithVoucher(operator, channelId, 2000n, 1000n)
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(events.find((e) => e.type === "backoff")).toMatchObject({ reason: "cooldown" });
+      expect(sleeps).toHaveLength(1);
+      expect(sleeps[0]).toBeGreaterThan(19_000);
+      expect(sleeps[0]).toBeLessThanOrEqual(20_000);
+    });
+
+    it("re-reads a deposit whose first send went unanswered as deposit_unanswered, whatever its replays got", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      const payer = await c.getWalletAddress();
+      let channelId = "";
+      gateway.push(
+        () => quote402WithId(),
+        (_url, init) => {
+          channelId = channelIdOf(decodePayment(init));
+          // It landed; only the answer was lost.
+          chain.set(channelId, channelAccount({ payer, operator: operator.address, deposit: 25000n }));
+          return timedOut();
+        },
+        () => outcomeUnknown()
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).rejects.toMatchObject({
+        name: "BatchPaymentUnresolvedError",
+        reason: "replay_unresolved",
+        payloadKind: "open",
+        depositInDoubt: true,
+      });
+
+      gateway.push(
+        () => quote402WithId(),
+        async (_url, init) => {
+          expect(decodePayment(init).payload.type).toBe("authorization");
+          return servedWithVoucher(operator, channelId, 1000n, 1000n);
+        }
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exact).not.toHaveBeenCalled();
+      const resyncs = events.filter((e) => e.type === "resync");
+      expect(resyncs.map((e) => e.reason)).toEqual(["deposit_unanswered"]);
+    });
+
     it("raises the original reason without a replay when inDoubt leaves no room, and releases the channel", async () => {
       const c = observed({ inDoubt: { maxWaitMs: 0 } });
       const exact = stubExact(c);
