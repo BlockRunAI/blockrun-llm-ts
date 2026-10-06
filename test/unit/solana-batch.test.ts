@@ -3781,8 +3781,14 @@ describe("SolanaLLMClient batch-settlement", () => {
     describe("a 429 with no receipt is replayed, never replaced", () => {
       const paymentHeader = (init: RequestInit | undefined) =>
         (init?.headers as Record<string, string> | undefined)?.["PAYMENT-SIGNATURE"];
-      const batchSends = () =>
-        gatewayCalls.map((call) => paymentHeader(call.init)).filter((h): h is string => !!h && h !== "exact-payload");
+      const batchCalls = () =>
+        gatewayCalls.filter((call) => {
+          const header = paymentHeader(call.init);
+          return !!header && header !== "exact-payload";
+        });
+      const batchSends = () => batchCalls().map((call) => paymentHeader(call.init) as string);
+      // The body each batch send carried: a replay must repeat it byte for byte, as it does the header.
+      const batchBodies = () => batchCalls().map((call) => String(call.init?.body));
       const unpaid = () => gatewayCalls.filter((call) => !paymentHeader(call.init)).length;
 
       it("replays the identical open, byte for byte, and books its success once", async () => {
@@ -3810,6 +3816,8 @@ describe("SolanaLLMClient batch-settlement", () => {
         const sends = batchSends();
         expect(sends).toHaveLength(2);
         expect(sends[1]).toBe(sends[0]);
+        const bodies = batchBodies();
+        expect(bodies[1]).toBe(bodies[0]);
         expect(unpaid()).toBe(1); // no fresh challenge: nothing new was built
         expect(exact).not.toHaveBeenCalled();
         expect(c.getSpending()).toEqual({ totalUsd: 0.001, calls: 1 });
@@ -3966,11 +3974,13 @@ describe("SolanaLLMClient batch-settlement", () => {
         const topUpAccept = batchAccept(operator.address, "30000");
         Object.assign(topUpAccept.extra, { recentBlockhash: "9T1tBhLxWWKf1XhD9deySUK2tNcmGQhBsR2tMKFLgFUL", lastValidBlockHeight: 1_000 });
         const sends: string[] = [];
+        const bodies: string[] = [];
         gateway.push(
           () => quote402([exactAccept("30000"), topUpAccept]),
           (_url, init) => {
             expect(decodePayment(init).payload.type).toBe("deposit");
             sends.push((init?.headers as Record<string, string>)["PAYMENT-SIGNATURE"]);
+            bodies.push(String(init?.body));
             // Expired, and the chain still shows only the original deposit.
             rpcClock.blockHeight = 2_000;
             chain.set(channelId, channelAccount({ payer, operator: operator.address, deposit: 25000n }));
@@ -3978,6 +3988,7 @@ describe("SolanaLLMClient batch-settlement", () => {
           },
           async (_url, init) => {
             sends.push((init?.headers as Record<string, string>)["PAYMENT-SIGNATURE"]);
+            bodies.push(String(init?.body));
             // Its authorization could be charged against the existing escrow: replayed, not replaced.
             return servedWithVoucher(operator, channelId, 31000n, 30000n);
           }
@@ -3987,6 +3998,7 @@ describe("SolanaLLMClient batch-settlement", () => {
 
         expect(sends).toHaveLength(2);
         expect(sends[1]).toBe(sends[0]);
+        expect(bodies[1]).toBe(bodies[0]);
         expect(exact).not.toHaveBeenCalled();
       });
 
@@ -4065,6 +4077,8 @@ describe("SolanaLLMClient batch-settlement", () => {
         const sends = batchSends();
         expect(sends).toHaveLength(2);
         expect(sends[1]).toBe(sends[0]);
+        const bodies = batchBodies();
+        expect(bodies[1]).toBe(bodies[0]);
         expect(unpaid()).toBe(1);
       });
 
@@ -4082,6 +4096,8 @@ describe("SolanaLLMClient batch-settlement", () => {
         expect(rpcCalls.some((r) => r.method === "isBlockhashValid" || r.method === "getBlockHeight")).toBe(false);
         const sends = batchSends();
         expect(sends[1]).toBe(sends[0]);
+        const bodies = batchBodies();
+        expect(bodies[1]).toBe(bodies[0]);
       });
     });
 
@@ -4271,6 +4287,676 @@ describe("SolanaLLMClient batch-settlement", () => {
     it("validates the rateLimit options", () => {
       expect(() => client({ rateLimit: { maxAttempts: 0 } })).toThrow("maxAttempts");
       expect(() => client({ rateLimit: { maxWaitMs: -1 } })).toThrow("maxWaitMs");
+    });
+  });
+
+  describe("payment-identifier", () => {
+    let sleeps: number[];
+    let events: SolanaBatchEvent[];
+
+    beforeEach(() => {
+      sleeps = [];
+      events = [];
+      __setBatchSleepForTests(async (ms) => { sleeps.push(ms); });
+      vi.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    function observed(batch: Parameters<typeof client>[0] = {}) {
+      return client({ onEvent: (event) => events.push(event), ...batch });
+    }
+
+    const declaration = {
+      info: { required: false },
+      schema: {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        properties: { required: { type: "boolean" }, id: { type: "string", minLength: 16, maxLength: 128 } },
+        required: ["required"],
+      },
+    };
+
+    /** The gateway's 402, declaring the payment-identifier extension. */
+    function quote402WithId(): Response {
+      const body = JSON.stringify({
+        x402Version: 2,
+        resource: { url: CHAT_URL, description: "chat" },
+        accepts: [exactAccept(), batchAccept(operator.address)],
+        extensions: { "payment-identifier": declaration },
+      });
+      return new Response(body, {
+        status: 402,
+        headers: { "content-type": "application/json", "PAYMENT-REQUIRED": Buffer.from(body).toString("base64") },
+      });
+    }
+
+    const paymentId = (init: RequestInit | undefined): unknown => decodePayment(init).extensions?.["payment-identifier"]?.info?.id;
+    const batchCalls = () =>
+      gatewayCalls.filter((call) => {
+        const header = (call.init?.headers as Record<string, string> | undefined)?.["PAYMENT-SIGNATURE"];
+        return !!header && header !== "exact-payload";
+      });
+    const batchSends = () => batchCalls().map((call) => (call.init?.headers as Record<string, string>)["PAYMENT-SIGNATURE"]);
+    // The body each batch send carried: the gateway binds the id to it as well as to the header.
+    const batchBodies = () => batchCalls().map((call) => String(call.init?.body));
+    const outcomeUnknown = (headers: Record<string, string> = {}) =>
+      new Response(JSON.stringify({ error: "payment_outcome_unknown" }), { status: 409, headers });
+    /** The gateway's answer while the original request is still running. */
+    const stillRunning = (retryAfter: string) => outcomeUnknown({ "Retry-After": retryAfter });
+    const timedOut = (): Response => {
+      throw new DOMException("This operation was aborted", "AbortError");
+    };
+    const record = () =>
+      (Object.values(JSON.parse(fs.readFileSync(path.join(tmp, "channels.json"), "utf8"))) as Array<Record<string, unknown>>)[0];
+
+    /** A 200 whose receipt the gateway rebuilt from its ledger: the charge in `amount`, and `extra` as given. */
+    function rebuilt(extra?: Record<string, unknown>): Response {
+      const receipt = { success: true, transaction: "", network: NETWORK, amount: "1000", ...(extra ? { extra } : {}) };
+      return new Response(JSON.stringify(CHAT_OK), {
+        status: 200,
+        headers: { "content-type": "application/json", "PAYMENT-RESPONSE": Buffer.from(JSON.stringify(receipt)).toString("base64") },
+      });
+    }
+
+    /** Open a channel at cumulative 1000, and return its id. */
+    async function open(c: SolanaLLMClient): Promise<string> {
+      let channelId = "";
+      gateway.push(
+        () => quote402WithId(),
+        async (_url, init) => {
+          channelId = channelIdOf(decodePayment(init));
+          return servedWithVoucher(operator, channelId, 1000n, 1000n);
+        }
+      );
+      await c.chat("openai/gpt-4o-mini", "gm");
+      return channelId;
+    }
+
+    it("attaches a new identifier to each batch payment when the 402 declares the extension, and none otherwise", async () => {
+      const c = observed();
+      stubExact(c);
+      const ids: unknown[] = [];
+      const declared: unknown[] = [];
+      let channelId = "";
+      gateway.push(
+        () => quote402WithId(),
+        async (_url, init) => {
+          ids.push(paymentId(init));
+          declared.push(decodePayment(init).extensions["payment-identifier"]);
+          channelId = channelIdOf(decodePayment(init));
+          return servedWithVoucher(operator, channelId, 1000n, 1000n);
+        },
+        () => quote402WithId(),
+        async (_url, init) => {
+          ids.push(paymentId(init));
+          return servedWithVoucher(operator, channelId, 2000n, 1000n);
+        },
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => {
+          expect(decodePayment(init).extensions?.["payment-identifier"]).toBeUndefined();
+          return servedWithVoucher(operator, channelId, 3000n, 1000n);
+        }
+      );
+
+      for (let i = 0; i < 3; i += 1) await c.chat("openai/gpt-4o-mini", "gm");
+
+      expect(ids).toHaveLength(2);
+      for (const id of ids) expect(id).toMatch(/^pay_[0-9a-f]{32}$/);
+      expect(ids[1]).not.toBe(ids[0]);
+      expect(declared[0]).toEqual({ ...declaration, info: { required: false, id: ids[0] } });
+    });
+
+    it("replays an unanswered authorization byte for byte, and books the stored response", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      const channelId = await open(c);
+      gateway.push(
+        () => quote402WithId(),
+        () => { throw new TypeError("fetch failed"); },
+        // The gateway stored the original's response under its identifier.
+        () => servedWithVoucher(operator, channelId, 2000n, 1000n)
+      );
+      const before = batchSends().length;
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      const sends = batchSends().slice(before);
+      expect(sends).toHaveLength(2);
+      expect(sends[1]).toBe(sends[0]);
+      const bodies = batchBodies().slice(before);
+      expect(bodies[1]).toBe(bodies[0]);
+      expect(exact).not.toHaveBeenCalled();
+      // No Retry-After: the first backoff, about 1 s, never under it.
+      expect(sleeps).toHaveLength(1);
+      expect(sleeps[0]).toBeGreaterThanOrEqual(1_000);
+      expect(sleeps[0]).toBeLessThanOrEqual(1_250);
+      expect(events.map((e) => [e.type, e.reason])).toEqual([
+        ["backoff", "in_doubt"],
+        ["recovered", "in_doubt"],
+      ]);
+      expect(c.getBatchStats()).toMatchObject({ retries: 1, recoveries: 1, unresolved: 0, fallbacks: 0 });
+      expect(c.getSpending()).toEqual({ totalUsd: 0.002, calls: 2 });
+
+      // The channel advanced to the stored receipt: the next payment builds on it.
+      gateway.push(
+        () => quote402WithId(),
+        async (_url, init) => {
+          expect(decodePayment(init).payload.type).toBe("authorization");
+          return servedWithVoucher(operator, channelId, 3000n, 1000n);
+        }
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(record()).toMatchObject({ chargedCumulativeAmount: "3000" });
+    });
+
+    it("waits the Retry-After a 409 asks for before it replays", async () => {
+      const c = observed();
+      stubExact(c);
+      const channelId = await open(c);
+      gateway.push(
+        () => quote402WithId(),
+        () => stillRunning("5"),
+        () => servedWithVoucher(operator, channelId, 2000n, 1000n)
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      expect(sleeps).toEqual([5_000]);
+      expect(events.map((e) => [e.type, e.reason, e.status, e.retryAfterMs])).toEqual([
+        ["backoff", "in_doubt", 409, 5_000],
+        ["recovered", "in_doubt", undefined, undefined],
+      ]);
+      expect(record()).toMatchObject({ chargedCumulativeAmount: "2000" });
+    });
+
+    it("replays through every in-flight answer with the identical header and body, and books the stored response once", async () => {
+      // rateLimit allows no retry at all: these replays are counted apart from it.
+      const c = observed({ rateLimit: { maxAttempts: 1, maxWaitMs: 0 } });
+      const exact = stubExact(c);
+      const channelId = await open(c);
+      const messages = [{ role: "user" as const, content: "gm" }];
+      __setBatchSleepForTests(async (ms) => {
+        sleeps.push(ms);
+        // The caller edits its messages while the payment is in doubt.
+        messages[0].content = `edited ${sleeps.length}`;
+      });
+      gateway.push(
+        () => quote402WithId(),
+        () => stillRunning("2"),
+        () => new Response("bad gateway", { status: 502 }),
+        () => stillRunning("3"),
+        () => stillRunning("3"),
+        // Every answer before this one was held back from the scheme, so its receipt still matches the pending payment.
+        () => servedWithVoucher(operator, channelId, 2000n, 1000n)
+      );
+      const before = batchSends().length;
+
+      const response = await c.chatCompletion("openai/gpt-4o-mini", messages);
+
+      expect(response.choices[0].message.content).toBe("gm");
+      const sends = batchSends().slice(before);
+      const bodies = batchBodies().slice(before);
+      expect(sends).toHaveLength(5);
+      expect(new Set(sends).size).toBe(1);
+      expect(new Set(bodies).size).toBe(1);
+      expect(JSON.parse(bodies[0]).messages).toEqual([{ role: "user", content: "gm" }]);
+      expect(sleeps[0]).toBe(2_000);
+      // A 502 names no Retry-After: the second backoff step, about 2 s.
+      expect(sleeps[1]).toBeGreaterThanOrEqual(1_500);
+      expect(sleeps[1]).toBeLessThanOrEqual(2_500);
+      expect(sleeps.slice(2)).toEqual([3_000, 3_000]);
+      expect(events.filter((e) => e.type === "backoff").map((e) => [e.reason, e.status])).toEqual([
+        ["in_doubt", 409],
+        ["in_doubt", 502],
+        ["in_doubt", 409],
+        ["in_doubt", 409],
+      ]);
+      expect(exact).not.toHaveBeenCalled();
+      expect(c.getBatchStats()).toMatchObject({ retries: 4, backoffs: 4, recoveries: 1, unresolved: 0, fallbacks: 0 });
+      // Booked once: one more call, the channel advanced by one charge.
+      expect(c.getSpending()).toEqual({ totalUsd: 0.002, calls: 2 });
+      expect(record()).toMatchObject({ chargedCumulativeAmount: "2000" });
+    });
+
+    it("replays after a timeout, then after the 409 that says the original is still running", async () => {
+      const c = observed();
+      stubExact(c);
+      const channelId = await open(c);
+      gateway.push(
+        () => quote402WithId(),
+        timedOut,
+        () => stillRunning("4"),
+        () => servedWithVoucher(operator, channelId, 2000n, 1000n)
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      expect(sleeps).toHaveLength(2);
+      expect(sleeps[0]).toBeGreaterThanOrEqual(1_000);
+      expect(sleeps[0]).toBeLessThanOrEqual(1_250);
+      expect(sleeps[1]).toBe(4_000);
+      expect(events.map((e) => [e.type, e.reason, e.status])).toEqual([
+        ["backoff", "in_doubt", undefined],
+        ["backoff", "in_doubt", 409],
+        ["recovered", "in_doubt", undefined],
+      ]);
+      expect(record()).toMatchObject({ chargedCumulativeAmount: "2000" });
+    });
+
+    it("clamps each wait to 1-30 s, and keeps replaying through a 429", async () => {
+      const c = observed();
+      stubExact(c);
+      const channelId = await open(c);
+      gateway.push(
+        () => quote402WithId(),
+        () => stillRunning("3600"),
+        () => new Response(JSON.stringify({ error: "rate_limited" }), { status: 429, headers: { "Retry-After": "0" } }),
+        () => servedWithVoucher(operator, channelId, 2000n, 1000n)
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      expect(sleeps).toEqual([30_000, 1_000]);
+      expect(events.map((e) => [e.type, e.reason, e.status, e.retryAfterMs])).toEqual([
+        ["backoff", "in_doubt", 409, 30_000],
+        ["backoff", "rate_limited", 429, 1_000],
+        ["recovered", "in_doubt", undefined, undefined],
+      ]);
+    });
+
+    it("raises replay_unresolved once inDoubt.maxWaitMs runs out, and releases the channel", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      const channelId = await open(c);
+      gateway.push(() => quote402WithId());
+      for (let i = 0; i < 11; i += 1) gateway.push(() => stillRunning("29"));
+      const before = batchSends().length;
+
+      const raised = await c.chat("openai/gpt-4o-mini", "gm").catch((err: unknown) => err);
+
+      // Ten waits of 29 s fit the default 5 minutes; an eleventh would not.
+      expect(raised).toMatchObject({ name: "BatchPaymentUnresolvedError", reason: "replay_unresolved", status: 409, payloadKind: "authorization" });
+      expect((raised as Error).message).toContain("10 replays did not resolve it");
+      expect((raised as Error).message).toContain("batch.inDoubt.maxWaitMs (300000 ms) leaves no room for another replay");
+      expect(sleeps).toEqual(Array(10).fill(29_000));
+      const sends = batchSends().slice(before);
+      expect(sends).toHaveLength(11);
+      expect(new Set(sends).size).toBe(1);
+      expect(new Set(batchBodies().slice(before)).size).toBe(1);
+      expect(gateway).toHaveLength(0);
+      expect(exact).not.toHaveBeenCalled();
+      expect(c.getBatchStats()).toMatchObject({ retries: 10, backoffs: 10, unresolved: 1, unresolvedByReason: { replay_unresolved: 1 } });
+
+      // Released, and rolled back to its confirmed state: the next call pays with batch from 1000.
+      gateway.push(
+        () => quote402WithId(),
+        () => servedWithVoucher(operator, channelId, 2000n, 1000n)
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(record()).toMatchObject({ chargedCumulativeAmount: "2000" });
+    });
+
+    it("never replays a first answer of 409 without Retry-After, and releases the channel", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      const channelId = await open(c);
+      gateway.push(() => quote402WithId(), () => outcomeUnknown());
+      const before = batchSends().length;
+
+      const raised = await c.chat("openai/gpt-4o-mini", "gm").catch((err: unknown) => err);
+
+      expect(raised).toMatchObject({ name: "BatchPaymentUnresolvedError", reason: "outcome_unknown", status: 409 });
+      expect((raised as Error).message).toContain("no Retry-After");
+      expect(batchSends().slice(before)).toHaveLength(1);
+      expect(sleeps).toEqual([]);
+      expect(exact).not.toHaveBeenCalled();
+      expect(events.map((e) => [e.type, e.reason])).toEqual([["unresolved", "outcome_unknown"]]);
+
+      gateway.push(
+        () => quote402WithId(),
+        () => servedWithVoucher(operator, channelId, 2000n, 1000n)
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+    });
+
+    it("replays an open answered 409 with Retry-After, same deposit transaction, and books it once", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      let first: Record<string, any> = {};
+      gateway.push(
+        () => quote402WithId(),
+        (_url, init) => {
+          first = decodePayment(init);
+          expect(first.payload.type).toBe("deposit");
+          return stillRunning("2");
+        },
+        async (_url, init) => {
+          const replay = decodePayment(init);
+          expect(replay.payload.deposit.transaction).toBe(first.payload.deposit.transaction);
+          expect(paymentId(init)).toBe(first.extensions["payment-identifier"].info.id);
+          return servedWithVoucher(operator, channelIdOf(replay), 1000n, 1000n);
+        }
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      const bodies = batchBodies();
+      expect(bodies).toHaveLength(2);
+      expect(bodies[1]).toBe(bodies[0]);
+      expect(sleeps).toEqual([2_000]);
+      expect(exact).not.toHaveBeenCalled();
+      expect(c.getSpending()).toEqual({ totalUsd: 0.001, calls: 1 });
+      expect(record()).toMatchObject({ chargedCumulativeAmount: "1000", deposit: "25000" });
+    });
+
+    it("raises replay_unresolved when a replay is answered 409 without Retry-After, and pays nothing more", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      const channelId = await open(c);
+      gateway.push(
+        () => quote402WithId(),
+        () => new Response(JSON.stringify({ error: "upstream_timeout" }), { status: 504 }),
+        () => outcomeUnknown()
+      );
+      const before = batchSends().length;
+
+      const raised = await c.chat("openai/gpt-4o-mini", "gm").catch((err: unknown) => err);
+
+      expect(raised).toMatchObject({
+        name: "BatchPaymentUnresolvedError",
+        reason: "replay_unresolved",
+        status: 409,
+        payloadKind: "authorization",
+      });
+      expect((raised as Error).message).toContain("1 replay did not resolve it");
+      const sends = batchSends().slice(before);
+      expect(sends).toHaveLength(2);
+      expect(sends[1]).toBe(sends[0]);
+      const bodies = batchBodies().slice(before);
+      expect(bodies[1]).toBe(bodies[0]);
+      expect(exact).not.toHaveBeenCalled();
+      expect(events.map((e) => [e.type, e.reason])).toEqual([
+        ["backoff", "in_doubt"],
+        ["unresolved", "replay_unresolved"],
+      ]);
+
+      // The channel was released: the next call pays with batch again.
+      gateway.push(
+        () => quote402WithId(),
+        () => servedWithVoucher(operator, channelId, 2000n, 1000n)
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+    });
+
+    it("resolves on a receipt the gateway rebuilt from its ledger when it carries the voucher, commitment and channel state", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      const channelId = await open(c);
+      const voucher = await signBatchVoucher(operator, { channelId, maxClaimableAmount: 2000n, expiresAt: 0 });
+      gateway.push(
+        () => quote402WithId(),
+        timedOut,
+        () =>
+          rebuilt({
+            voucher,
+            commitmentId: "commit-2000",
+            channelState: { channelId, chargedCumulativeAmount: "2000" },
+          })
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      expect(exact).not.toHaveBeenCalled();
+      expect(c.getSpending()).toEqual({ totalUsd: 0.002, calls: 2 });
+      expect(c.getBatchStats()).toMatchObject({ recoveries: 1, unresolved: 0 });
+      expect(record()).toMatchObject({ chargedCumulativeAmount: "2000" });
+    });
+
+    it("stays unresolved on a rebuilt receipt with no extra, and replays no further", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      await open(c);
+      gateway.push(() => quote402WithId(), timedOut, () => rebuilt());
+      const before = batchSends().length;
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).rejects.toMatchObject({
+        name: "BatchPaymentUnresolvedError",
+        reason: "replay_unresolved",
+        status: 200,
+      });
+
+      expect(batchSends().slice(before)).toHaveLength(2);
+      expect(sleeps).toHaveLength(1);
+      expect(exact).not.toHaveBeenCalled();
+      expect(c.getSpending()).toMatchObject({ calls: 1 });
+      expect(record()).toMatchObject({ chargedCumulativeAmount: "1000" });
+    });
+
+    it("keeps the channel while it waits: other calls pay exact (channel_busy), and a close is deferred", async () => {
+      const releases: Array<() => void> = [];
+      const c = observed();
+      const exact = stubExact(c);
+      const channelId = await open(c);
+      __setBatchSleepForTests((ms) => {
+        sleeps.push(ms);
+        return new Promise<void>((resolve) => releases.push(resolve));
+      });
+      let batchPayments = 0;
+      // Requests may arrive in either order, so route by content.
+      const route = async (_url: string, init?: RequestInit): Promise<Response> => {
+        const header = (init?.headers as Record<string, string> | undefined)?.["PAYMENT-SIGNATURE"];
+        if (!header) return quote402WithId();
+        if (header === "exact-payload") return new Response(JSON.stringify(CHAT_OK), { status: 200 });
+        batchPayments += 1;
+        return batchPayments === 1 ? stillRunning("5") : servedWithVoucher(operator, channelId, 2000n, 1000n);
+      };
+      for (let i = 0; i < 10; i += 1) gateway.push(route);
+
+      const first = c.chat("openai/gpt-4o-mini", "one");
+      await vi.waitFor(() => expect(sleeps).toEqual([5_000]));
+
+      await expect(c.chat("openai/gpt-4o-mini", "two")).resolves.toBe("gm");
+      expect(exact).toHaveBeenCalledTimes(1);
+      const deferred = await c.closeBatchChannel().catch((err: unknown) => err);
+      expect(deferred).toBeInstanceOf(BatchCloseDeferredError);
+      expect(deferred).toMatchObject({ reason: "call_in_flight" });
+
+      releases[0]();
+      await expect(first).resolves.toBe("gm");
+      expect(batchPayments).toBe(2);
+      expect(c.getBatchStats()).toMatchObject({ fallbacksByReason: { channel_busy: 1 }, retries: 1, recoveries: 1, unresolved: 0 });
+      expect(record()).toMatchObject({ chargedCumulativeAmount: "2000" });
+    });
+
+    it("still pays exact at once on a refusal, with no replay, and keeps the channel", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      const channelId = await open(c);
+      gateway.push(
+        () => quote402WithId(),
+        () => new Response(JSON.stringify({ error: "batch_admission_paused" }), { status: 503 }),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      expect(sleeps).toEqual([]);
+      expect(exact).toHaveBeenCalledTimes(1);
+      // The exact payment is signed against the gateway's own 402, with no identifier in it.
+      expect(JSON.stringify(exact.mock.calls[0])).not.toContain("pay_");
+      expect(events.map((e) => [e.type, e.reason])).toEqual([["fallback", "batch_admission_paused"]]);
+
+      // The scheme released the refused authorization: the next one builds on 1000.
+      gateway.push(
+        () => quote402WithId(),
+        () => servedWithVoucher(operator, channelId, 2000n, 1000n)
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(record()).toMatchObject({ chargedCumulativeAmount: "2000" });
+    });
+
+    it("pays exact with the same body the gateway challenged, even if the caller edits its messages meanwhile", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      await open(c);
+      const messages = [{ role: "user" as const, content: "gm" }];
+      gateway.push(
+        () => quote402WithId(),
+        () => {
+          // The caller edits its messages while the batch payment is in flight.
+          messages[0].content = "edited";
+          return new Response(JSON.stringify({ error: "batch_admission_paused" }), { status: 503 });
+        },
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+      const before = gatewayCalls.length;
+
+      await c.chatCompletion("openai/gpt-4o-mini", messages);
+
+      expect(exact).toHaveBeenCalledTimes(1);
+      const bodies = gatewayCalls.slice(before).map((call) => String(call.init?.body));
+      expect(bodies).toHaveLength(3); // the challenge, the batch payment, the exact payment
+      expect(new Set(bodies).size).toBe(1);
+      expect(JSON.parse(bodies[2]).messages).toEqual([{ role: "user", content: "gm" }]);
+    });
+
+    it("counts each wait as long as it really took against inDoubt.maxWaitMs", async () => {
+      const c = observed({ inDoubt: { maxWaitMs: 10_000 } });
+      stubExact(c);
+      await open(c);
+      const t0 = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(t0);
+      // Every 3 s wait overruns to 6 s (a busy event loop, a suspended laptop).
+      __setBatchSleepForTests(async (ms) => {
+        sleeps.push(ms);
+        clock.mockReturnValue(Date.now() + 2 * ms);
+      });
+      gateway.push(() => quote402WithId());
+      for (let i = 0; i < 4; i += 1) gateway.push(() => stillRunning("3"));
+
+      const raised = await c.chat("openai/gpt-4o-mini", "gm").catch((err: unknown) => err);
+
+      // 6 s + 6 s used: a third 3 s wait would end past 10 s.
+      expect(raised).toMatchObject({ name: "BatchPaymentUnresolvedError", reason: "replay_unresolved" });
+      expect((raised as Error).message).toContain("2 replays did not resolve it");
+      expect(sleeps).toEqual([3_000, 3_000]);
+    });
+
+    it("keeps the gateway's 429 cooldown for the wallet even when there is no room to replay", async () => {
+      const c = observed({ inDoubt: { maxWaitMs: 0 } });
+      stubExact(c);
+      const channelId = await open(c);
+      gateway.push(
+        () => quote402WithId(),
+        () => new Response(JSON.stringify({ error: "rate_limited" }), { status: 429, headers: { "Retry-After": "20" } })
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).rejects.toMatchObject({
+        name: "BatchPaymentUnresolvedError",
+        reason: "replay_unresolved",
+        status: 429,
+      });
+      expect(sleeps).toEqual([]);
+
+      // The next call waits out the gateway's Retry-After before it pays, from a fresh challenge.
+      gateway.push(
+        () => quote402WithId(),
+        () => quote402WithId(),
+        () => servedWithVoucher(operator, channelId, 2000n, 1000n)
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(events.find((e) => e.type === "backoff")).toMatchObject({ reason: "cooldown" });
+      expect(sleeps).toHaveLength(1);
+      expect(sleeps[0]).toBeGreaterThan(19_000);
+      expect(sleeps[0]).toBeLessThanOrEqual(20_000);
+    });
+
+    it("re-reads a deposit whose first send went unanswered as deposit_unanswered, whatever its replays got", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      const payer = await c.getWalletAddress();
+      let channelId = "";
+      gateway.push(
+        () => quote402WithId(),
+        (_url, init) => {
+          channelId = channelIdOf(decodePayment(init));
+          // It landed; only the answer was lost.
+          chain.set(channelId, channelAccount({ payer, operator: operator.address, deposit: 25000n }));
+          return timedOut();
+        },
+        () => outcomeUnknown()
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).rejects.toMatchObject({
+        name: "BatchPaymentUnresolvedError",
+        reason: "replay_unresolved",
+        payloadKind: "open",
+        depositInDoubt: true,
+      });
+
+      gateway.push(
+        () => quote402WithId(),
+        async (_url, init) => {
+          expect(decodePayment(init).payload.type).toBe("authorization");
+          return servedWithVoucher(operator, channelId, 1000n, 1000n);
+        }
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exact).not.toHaveBeenCalled();
+      const resyncs = events.filter((e) => e.type === "resync");
+      expect(resyncs.map((e) => e.reason)).toEqual(["deposit_unanswered"]);
+    });
+
+    it("raises the original reason without a replay when inDoubt leaves no room, and releases the channel", async () => {
+      const c = observed({ inDoubt: { maxWaitMs: 0 } });
+      const exact = stubExact(c);
+      const channelId = await open(c);
+      gateway.push(
+        () => quote402WithId(),
+        () => { throw new TypeError("fetch failed"); }
+      );
+      const before = batchSends().length;
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).rejects.toMatchObject({
+        name: "BatchPaymentUnresolvedError",
+        reason: "no_response",
+      });
+      expect(batchSends().slice(before)).toHaveLength(1);
+      expect(sleeps).toEqual([]);
+      expect(exact).not.toHaveBeenCalled();
+
+      gateway.push(
+        () => quote402WithId(),
+        () => servedWithVoucher(operator, channelId, 2000n, 1000n)
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+    });
+
+    it("without the extension, never replays a 409, even one with Retry-After", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => servedWithVoucher(operator, channelIdOf(decodePayment(init)), 1000n, 1000n)
+      );
+      await c.chat("openai/gpt-4o-mini", "gm");
+      gateway.push(() => quote402([exactAccept(), batchAccept(operator.address)]), () => stillRunning("5"));
+      const before = batchSends().length;
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).rejects.toMatchObject({
+        name: "BatchPaymentUnresolvedError",
+        reason: "outcome_unknown",
+        status: 409,
+      });
+
+      expect(batchSends().slice(before)).toHaveLength(1);
+      expect(sleeps).toEqual([]);
+      expect(exact).not.toHaveBeenCalled();
+    });
+
+    it("validates the inDoubt option", () => {
+      expect(() => client({ inDoubt: { maxWaitMs: -1 } })).toThrow("batch.inDoubt.maxWaitMs");
+      expect(() => client({ inDoubt: { maxWaitMs: Number.NaN } })).toThrow("batch.inDoubt.maxWaitMs");
+      expect(() => client({ inDoubt: { maxWaitMs: 0 } })).not.toThrow();
     });
   });
 

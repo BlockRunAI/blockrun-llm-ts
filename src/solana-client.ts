@@ -973,6 +973,11 @@ export class SolanaLLMClient {
     body: Record<string, unknown>
   ): Promise<ChatResponse> {
     const url = `${this.apiUrl}${endpoint}`;
+    // Serialized once: every send of this call carries these exact bytes, so
+    // a payment matches the request it was challenged for, and a batch
+    // payment's replays match the original (a payment-identifier gateway
+    // binds the body), even if the caller edits its messages meanwhile.
+    const json = JSON.stringify(body);
     // Taken before the first request: a channel close that completes while
     // this call waits for its 402 keeps it from opening a new channel.
     const closesAtStart = await this.batchPayer?.closeFence();
@@ -980,7 +985,7 @@ export class SolanaLLMClient {
       const response = await this.sendUnpaid(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
-        body: JSON.stringify(body),
+        body: json,
       });
 
       if (response.status === 402) {
@@ -999,7 +1004,7 @@ export class SolanaLLMClient {
                 this.fetchWithTimeout(url, {
                   method: "POST",
                   headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT, ...paymentHeaders },
-                  body: JSON.stringify(body),
+                  body: json,
                 }),
               // A fresh, unpaid challenge after a 429 wait: the request itself,
               // sent again without a payment. Every error it throws is unpaid.
@@ -1007,7 +1012,7 @@ export class SolanaLLMClient {
                 const challenge = await this.sendUnpaid(url, {
                   method: "POST",
                   headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
-                  body: JSON.stringify(body),
+                  body: json,
                 });
                 if (challenge.status === 402) {
                   try {
@@ -1033,7 +1038,7 @@ export class SolanaLLMClient {
             if (batch.kind === "failed") throw batch.error;
             exactRequired = batch.paymentRequired ?? paymentRequired;
           }
-          return await this.handlePaymentAndRetry(url, body, exactRequired, staleRetries > 0);
+          return await this.handlePaymentAndRetry(url, json, exactRequired, staleRetries > 0);
         } catch (error) {
           if (
             !(error instanceof SafeStaleBlockhashError) ||
@@ -1288,7 +1293,7 @@ export class SolanaLLMClient {
 
   private async handlePaymentAndRetry(
     url: string,
-    body: Record<string, unknown>,
+    json: string,
     paymentRequired: PaymentRequired,
     forceFreshBlockhash = false
   ): Promise<ChatResponse> {
@@ -1310,7 +1315,7 @@ export class SolanaLLMClient {
           "User-Agent": USER_AGENT,
           "PAYMENT-SIGNATURE": paymentPayload,
         },
-        body: JSON.stringify(body),
+        body: json,
       });
     } catch (error) {
       // The signed transfer may have reached the gateway and settled.

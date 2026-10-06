@@ -213,6 +213,7 @@ export { SolanaLLMClient, solanaClient, type SolanaLLMClientOptions } from "./so
 export {
   BLOCKRUN_SOL_OPERATOR,
   DEFAULT_BATCH_RATE_LIMIT,
+  DEFAULT_BATCH_IN_DOUBT,
   BatchPaymentUnresolvedError,
   BatchCloseDeferredError,
   type BatchUnresolvedReason,
