@@ -974,8 +974,9 @@ export class SolanaLLMClient {
   ): Promise<ChatResponse> {
     const url = `${this.apiUrl}${endpoint}`;
     // Serialized once: every send of this call carries these exact bytes, so
-    // a batch payment's replays match the original even if the caller edits
-    // its messages meanwhile (a payment-identifier gateway binds the body).
+    // a payment matches the request it was challenged for, and a batch
+    // payment's replays match the original (a payment-identifier gateway
+    // binds the body), even if the caller edits its messages meanwhile.
     const json = JSON.stringify(body);
     // Taken before the first request: a channel close that completes while
     // this call waits for its 402 keeps it from opening a new channel.
@@ -1037,7 +1038,7 @@ export class SolanaLLMClient {
             if (batch.kind === "failed") throw batch.error;
             exactRequired = batch.paymentRequired ?? paymentRequired;
           }
-          return await this.handlePaymentAndRetry(url, body, exactRequired, staleRetries > 0);
+          return await this.handlePaymentAndRetry(url, json, exactRequired, staleRetries > 0);
         } catch (error) {
           if (
             !(error instanceof SafeStaleBlockhashError) ||
@@ -1292,7 +1293,7 @@ export class SolanaLLMClient {
 
   private async handlePaymentAndRetry(
     url: string,
-    body: Record<string, unknown>,
+    json: string,
     paymentRequired: PaymentRequired,
     forceFreshBlockhash = false
   ): Promise<ChatResponse> {
@@ -1314,7 +1315,7 @@ export class SolanaLLMClient {
           "User-Agent": USER_AGENT,
           "PAYMENT-SIGNATURE": paymentPayload,
         },
-        body: JSON.stringify(body),
+        body: json,
       });
     } catch (error) {
       // The signed transfer may have reached the gateway and settled.

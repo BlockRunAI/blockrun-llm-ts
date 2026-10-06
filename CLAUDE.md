@@ -142,10 +142,12 @@ src/
   byte-identical replay after its backoff within `rateLimit` (owner policy); a payment carrying a
   `payment-identifier` id (`withPaymentIdentifier()` adds a fresh `pay_<32 hex>` to a COPY of the 402
   when it declares the extension, never to the exact 402) goes to `replayInDoubt()`: replayed byte for
-  byte (same header; the body is serialized ONCE in `requestWithPayment`) while `replayMayResolve()`
+  byte (same header; the body is serialized ONCE in `requestWithPayment`, and the exact path sends
+  that same string) while `replayMayResolve()`
   (no answer `unanswered`, 5xx, 429, or 409 WITH `Retry-After`), waiting `inDoubtWait()` =
-  clamp(Retry-After ?? backoffDelay, 1 s, 30 s), within `inDoubt.maxWaitMs` (default 300000: waits +
-  replay round trips from the first doubt), counted apart from `rateLimit` (a 429 still cools the
+  clamp(Retry-After ?? backoffDelay, 1 s, 30 s), while the wait fits `inDoubt.maxWaitMs` (default
+  300000: waits as really slept + replay round trips from the first doubt; it gates a replay's START,
+  a sent replay runs to the client `timeout`), counted apart from `rateLimit` (a 429 still cools the
   wallet down). `classify()` holds EVERY error answer to such a payment back from the scheme (`held`,
   receipt only peeked), and `replayInDoubt()` hands over only the last answer once no replay follows:
   the scheme deletes the pending on ANY answer it is handed, so handing it a middle answer would make

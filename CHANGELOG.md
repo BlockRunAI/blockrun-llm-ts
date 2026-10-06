@@ -24,14 +24,17 @@
 - New option `batch.inDoubt.maxWaitMs` (default `300000`, exported as
   `DEFAULT_BATCH_IN_DOUBT`): how long one call keeps replaying a payment in
   doubt that carries a payment id, counted from its first answer in doubt,
-  waits and replays included. These replays do not count against
-  `batch.rateLimit`.
+  waits and replays included. No replay starts once its wait would end past
+  it; one already sent runs until its answer or the client's `timeout`.
+  These replays do not count against `batch.rateLimit`.
 
 ### Fixed — every send of a chat call carries the same body
 
-- `requestWithPayment` serializes the request body once per call, so a batch
-  payment's replays repeat the original's bytes even if the caller edits its
-  `messages` while the call waits.
+- `requestWithPayment` serializes the request body once per call and sends
+  those bytes with the unpaid request, the batch payment and its replays,
+  and the exact payment, so every payment matches the request it was
+  challenged for even if the caller edits its `messages` while the call
+  waits.
 
 ## [3.20.1] - 2026-10-05
 

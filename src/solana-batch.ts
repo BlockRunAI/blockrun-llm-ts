@@ -146,8 +146,11 @@ export interface SolanaBatchOptions {
     /**
      * Most time, in ms, one call spends replaying a payment in doubt,
      * counted from the first answer that left it in doubt: every wait and
-     * every replay's own round trip. A wait that would end past it is not
-     * started; the call raises. `0` never replays. Default 300000 (5 min).
+     * every replay's own round trip. It decides whether another replay
+     * starts: a wait that would end past it is not started, and the call
+     * raises. A replay already sent runs until its answer or the client's
+     * `timeout`, so a call can end up to one `timeout` past it. `0` never
+     * replays. Default 300000 (5 min).
      */
     maxWaitMs?: number;
   };
@@ -3119,10 +3122,11 @@ export class SolanaBatchPayer {
    * still running, it answers 409 with a `Retry-After`. So the identical
    * payment (the same `PAYMENT-SIGNATURE` header and the same body) is
    * replayed for as long as the last answer says a later one can succeed
-   * ({@link replayMayResolve}), after {@link inDoubtWait} each time, within
-   * `inDoubt.maxWaitMs` counted from the first doubt: every wait and every
-   * replay's round trip. These replays do not count against `rateLimit`; a
-   * 429 among them still puts the wallet in cooldown.
+   * ({@link replayMayResolve}), after {@link inDoubtWait} each time, as long
+   * as the wait fits in `inDoubt.maxWaitMs`, counted from the first doubt:
+   * every wait (as long as it really took) and every replay's round trip. A
+   * replay already sent is not cut short. These replays do not count
+   * against `rateLimit`; a 429 among them still puts the wallet in cooldown.
    *
    * Every error answer is held back from the scheme ({@link InDoubt.held}).
    * The last one the gateway gave is handed over only once no replay
@@ -3175,8 +3179,9 @@ export class SolanaBatchPayer {
         attempt,
         detail: `replay ${replays + 1} of the payment in doubt`,
       });
-      spent += wait;
+      const sleptFrom = Date.now();
       await sleep(wait);
+      spent += Math.max(wait, Date.now() - sleptFrom);
       replays += 1;
       const startedAt = Date.now();
       const replayed = replayDoubt(await this.sendOnce(wallet, sent, send, true, true));

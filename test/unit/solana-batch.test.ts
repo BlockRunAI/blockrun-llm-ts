@@ -4794,6 +4794,53 @@ describe("SolanaLLMClient batch-settlement", () => {
       expect(record()).toMatchObject({ chargedCumulativeAmount: "2000" });
     });
 
+    it("pays exact with the same body the gateway challenged, even if the caller edits its messages meanwhile", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      await open(c);
+      const messages = [{ role: "user" as const, content: "gm" }];
+      gateway.push(
+        () => quote402WithId(),
+        () => {
+          // The caller edits its messages while the batch payment is in flight.
+          messages[0].content = "edited";
+          return new Response(JSON.stringify({ error: "batch_admission_paused" }), { status: 503 });
+        },
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+      const before = gatewayCalls.length;
+
+      await c.chatCompletion("openai/gpt-4o-mini", messages);
+
+      expect(exact).toHaveBeenCalledTimes(1);
+      const bodies = gatewayCalls.slice(before).map((call) => String(call.init?.body));
+      expect(bodies).toHaveLength(3); // the challenge, the batch payment, the exact payment
+      expect(new Set(bodies).size).toBe(1);
+      expect(JSON.parse(bodies[2]).messages).toEqual([{ role: "user", content: "gm" }]);
+    });
+
+    it("counts each wait as long as it really took against inDoubt.maxWaitMs", async () => {
+      const c = observed({ inDoubt: { maxWaitMs: 10_000 } });
+      stubExact(c);
+      await open(c);
+      const t0 = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(t0);
+      // Every 3 s wait overruns to 6 s (a busy event loop, a suspended laptop).
+      __setBatchSleepForTests(async (ms) => {
+        sleeps.push(ms);
+        clock.mockReturnValue(Date.now() + 2 * ms);
+      });
+      gateway.push(() => quote402WithId());
+      for (let i = 0; i < 4; i += 1) gateway.push(() => stillRunning("3"));
+
+      const raised = await c.chat("openai/gpt-4o-mini", "gm").catch((err: unknown) => err);
+
+      // 6 s + 6 s used: a third 3 s wait would end past 10 s.
+      expect(raised).toMatchObject({ name: "BatchPaymentUnresolvedError", reason: "replay_unresolved" });
+      expect((raised as Error).message).toContain("2 replays did not resolve it");
+      expect(sleeps).toEqual([3_000, 3_000]);
+    });
+
     it("raises the original reason without a replay when inDoubt leaves no room, and releases the channel", async () => {
       const c = observed({ inDoubt: { maxWaitMs: 0 } });
       const exact = stubExact(c);
