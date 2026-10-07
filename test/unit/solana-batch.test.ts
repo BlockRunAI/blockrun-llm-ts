@@ -2847,6 +2847,58 @@ describe("SolanaLLMClient batch-settlement", () => {
       expect(events.some((e) => e.type === "resync")).toBe(false);
     });
 
+    it.each([
+      "batch_deposit_ip_rate_limited",
+      "batch_signer_funding_headroom_exhausted",
+      "batch_new_channels_disabled",
+      "batch_public_new_channels_disabled",
+      "batch_account_admission_paused",
+      "batch_channel_owner_mismatch",
+      "batch_fee_payer_unavailable",
+      "batch_fee_payer_not_dedicated",
+      "batch_fee_payer_lane_not_authorized",
+      "batch_transaction_fee_payer_mismatch",
+      "batch_initial_deposit_out_of_range",
+      "batch_deposit_asset_not_supported",
+      "batch_withdraw_delay_out_of_range",
+    ])("every PayAI admission refusal (blockrun-sol #427): a 402 + failed %s receipt forgets the deposit at once; the next call opens batch", async (reason) => {
+      const c = observed();
+      const exact = stubExact(c);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        () => new Response(JSON.stringify({ error: reason }), { status: 402, headers: { "content-type": "application/json", ...preBroadcast(reason) } }),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(c.getBatchStats()).toMatchObject({ backoffs: 0, retries: 0, unresolved: 0, resyncs: 0 });
+
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("deposit");
+          return servedWithVoucher(operator, channelIdOf(payment), 1000n, 1000n);
+        }
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(events.some((e) => e.type === "resync" || (e.type === "fallback" && e.reason === "channel_resync_pending"))).toBe(false);
+    });
+
+    it("control: a 402 + failed receipt naming a code NOT on the list keeps the deposit in doubt", async () => {
+      const c = observed();
+      stubExact(c);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        () => new Response(JSON.stringify({ error: "batch_some_future_code" }), { status: 402, headers: { "content-type": "application/json", ...preBroadcast("batch_some_future_code") } }),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+      await c.chat("openai/gpt-4o-mini", "gm");
+      const intents = JSON.parse(fs.readFileSync(path.join(tmp, "channels.json.deposit-intents"), "utf8"));
+      expect(Object.keys(intents.intents)).toHaveLength(1);
+    });
+
     it("control: a bare 402 to a deposit (no receipt) still keeps it in doubt and resyncs", async () => {
       const c = observed();
       stubExact(c);
