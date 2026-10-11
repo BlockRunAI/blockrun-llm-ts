@@ -1543,9 +1543,11 @@ const PAYMENT_IDENTIFIER = "payment-identifier";
  * extension, when the gateway declares one. `@x402/core` echoes the 402's
  * extensions into the payment, so the id travels in the `PAYMENT-SIGNATURE`
  * header and a byte-identical replay carries the same id. A copy, because
- * the caller's 402 also backs the exact payment.
+ * the caller's 402 also backs the exact payment, which takes its own copy
+ * (and so its own id): a payment echoing the declaration without an id would
+ * be refused by a gateway that declares it `required`.
  */
-function withPaymentIdentifier(paymentRequired: PaymentRequired): PaymentRequired {
+export function withPaymentIdentifier(paymentRequired: PaymentRequired): PaymentRequired {
   const declared = paymentRequired.extensions?.[PAYMENT_IDENTIFIER] as { info?: Record<string, unknown> } | undefined;
   if (typeof declared?.info?.required !== "boolean") return paymentRequired;
   const id = `pay_${randomUUID().replace(/-/g, "")}`;
@@ -1565,6 +1567,11 @@ function peekReceipt(
   } catch {
     return undefined;
   }
+}
+
+/** Whether an answer's receipt says the payment succeeded (read, not handed to the scheme). */
+function receiptSucceeded(http: HttpPaymentClient, answer: Response): boolean {
+  return peekReceipt(http, (name) => answer.headers.get(name))?.success === true;
 }
 
 /** Whether a payment carries a payment identifier (see {@link withPaymentIdentifier}). */
@@ -1983,8 +1990,9 @@ interface SentPayment {
  *   payment identifier: a 429 with no receipt, on a first send. `settled`
  *   says whether the scheme was handed the answer (and so has already
  *   released the payment). A payment carrying a payment identifier keeps
- *   every error answer from the scheme (`held`) until it is known to be the
- *   last one ({@link SolanaBatchPayer.replayInDoubt}).
+ *   every error answer, and a replay's 2xx without a success receipt, from
+ *   the scheme (`held`) until no replay follows
+ *   ({@link SolanaBatchPayer.replayInDoubt}).
  */
 type SendOutcome =
   | { kind: "charged"; response: Response; chargedUsd: number }
@@ -2034,9 +2042,10 @@ interface InDoubt {
    */
   firstReason?: BatchUnresolvedReason;
   /**
-   * The error answer to a payment carrying a payment identifier, not handed
-   * to the scheme (`settled` is false): the scheme rolls a payment back when
-   * handed an error, and could not then take a later replay's receipt.
+   * The answer to a payment carrying a payment identifier that was not
+   * handed to the scheme (`settled` is false): an error, or a replay's 2xx
+   * without a success receipt. The scheme rolls a payment back when handed
+   * one, and could not then take a later replay's receipt.
    */
   held?: Response;
 }
@@ -3134,10 +3143,14 @@ export class SolanaBatchPayer {
    * replay already sent is not cut short. These replays do not count
    * against `rateLimit`; a 429 among them still puts the wallet in cooldown.
    *
-   * Every error answer is held back from the scheme ({@link InDoubt.held}).
-   * The last one the gateway gave is handed over only once no replay
-   * follows, so the scheme rolls the payment back once, or takes the receipt
-   * that answer carries.
+   * Every answer that does not settle it is held back from the scheme
+   * ({@link InDoubt.held}) and handed over only once no replay follows, so
+   * the scheme rolls the payment back once, or takes the receipt that answer
+   * carries. That is the last answer, unless an earlier one carried a
+   * success receipt and the later ones do not: a success receipt is the
+   * gateway's word that it charged, and handing the scheme a receipt-less
+   * refusal of a replay instead would roll a real charge back and desync the
+   * channel's cumulative.
    *
    * @returns the charged replay, or the doubt to raise.
    */
@@ -3149,8 +3162,10 @@ export class SolanaBatchPayer {
     attempt: number,
   ): Promise<Extract<SendOutcome, { kind: "charged" }> | InDoubt> {
     let doubt = first;
-    // The gateway's last answer that the scheme has not been handed.
+    // The answer the scheme will be handed if no replay settles the payment:
+    // the gateway's last one, or the last that carried a success receipt.
     let held = first.held;
+    let heldSucceeded = held !== undefined && receiptSucceeded(sent.http, held);
     let replays = 0;
     let spent = 0;
     const stop = async (note?: string): Promise<InDoubt> => {
@@ -3198,8 +3213,18 @@ export class SolanaBatchPayer {
       if (replayed.kind === "charged") return replayed;
       doubt = replayed;
       // An answer handed to the scheme already released the payment; a
-      // replay that got no answer leaves the last one held.
-      if (doubt.held || doubt.settled) held = doubt.held;
+      // replay that got no answer leaves the last one held, and so does one
+      // without a success receipt when the held one has it.
+      if (doubt.held) {
+        const succeeded = receiptSucceeded(sent.http, doubt.held);
+        if (succeeded || !heldSucceeded) {
+          held = doubt.held;
+          heldSucceeded = succeeded;
+        }
+      } else if (doubt.settled) {
+        held = undefined;
+        heldSucceeded = false;
+      }
     }
   }
 
@@ -3363,7 +3388,11 @@ export class SolanaBatchPayer {
     // a payment back when handed an error answer, and could not then take a
     // later replay's receipt, so an error answer to one is first classified
     // from its receipt alone, and held back if it leaves the payment in doubt.
-    const hold = !response.ok && hasPaymentIdentifier(payload);
+    // So is a replay's 2xx without a success receipt: it settles nothing, and
+    // handing it over would release an earlier held answer's receipt.
+    const hold =
+      hasPaymentIdentifier(payload) &&
+      (!response.ok || (replay && peekReceipt(http, getHeader)?.success !== true));
 
     if (status === 429 && !receipted) {
       // No receipt: it may or may not have gone through (a receipt can be

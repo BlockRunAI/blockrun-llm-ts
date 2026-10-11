@@ -632,9 +632,14 @@ gateway's answer proves, in one place:
   replay resolves the call only on a 2xx whose receipt the SDK can verify
   (`success: true`, and an `extra` with the operator's `voucher` for this
   request's charge and a `commitmentId`; a `channelState`, when present,
-  must match). Every error answer is held back from the channel's
-  bookkeeping until no replay follows it. These replays do not count
-  against `rateLimit`, and the `exact` payment never carries an id. Without
+  must match). Every error answer, and a replay's 2xx without a success
+  receipt, is held back from the channel's bookkeeping until no replay
+  follows it; the bookkeeping then takes the last answer, unless an earlier
+  one carried a success receipt and the later ones do not, so a charge the
+  gateway reported on an error status is never rolled back by a replay's
+  refusal. These replays do not count against `rateLimit`. An `exact`
+  payment carries its own new id when the extension is declared, so a
+  gateway that declares it `required` takes the exact fallback too. Without
   the extension nothing changes.
 - **Trust model.** The gateway is already trusted with the escrow up to
   `maxDeposit`, so its explicit answer to a payment's first send is taken as

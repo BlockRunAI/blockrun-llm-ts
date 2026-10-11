@@ -154,17 +154,21 @@ src/
   in_doubt ends only in `resolveInDoubt()` — without a payment id, a receipt-less 429 gets ONE
   byte-identical replay after its backoff within `rateLimit` (owner policy); a payment carrying a
   `payment-identifier` id (`withPaymentIdentifier()` adds a fresh `pay_<32 hex>` to a COPY of the 402
-  when it declares the extension, never to the exact 402) goes to `replayInDoubt()`: replayed byte for
+  when it declares the extension; `signExactPayment()` takes its own copy, so the exact payment
+  gets its OWN fresh id, never the batch one — a declaration echoed without an id would be refused
+  when the gateway marks it `required`) goes to `replayInDoubt()`: replayed byte for
   byte (same header; the body is serialized ONCE in `requestWithPayment`, and the exact path sends
   that same string) while `replayMayResolve()`
   (no answer `unanswered`, 5xx, 429, or 409 WITH `Retry-After`), waiting `inDoubtWait()` =
   clamp(Retry-After ?? backoffDelay, 1 s, 30 s), while the wait fits `inDoubt.maxWaitMs` (default
   300000: waits as really slept + replay round trips from the first doubt; it gates a replay's START,
   a sent replay runs to the client `timeout`), counted apart from `rateLimit` (a 429 still cools the
-  wallet down). `classify()` holds EVERY error answer to such a payment back from the scheme (`held`,
-  receipt only peeked), and `replayInDoubt()` hands over only the last answer once no replay follows:
-  the scheme deletes the pending on ANY answer it is handed, so handing it a middle answer would make
-  the final success receipt unmatchable. Events `backoff` (per wait, status + retryAfterMs) and
+  wallet down). `classify()` holds EVERY error answer to such a payment (and a replay's 2xx without a
+  success receipt) back from the scheme (`held`, receipt only peeked), and `replayInDoubt()` hands over
+  ONE answer once no replay follows: the scheme deletes the pending on ANY answer it is handed, so
+  handing it a middle answer would make the final success receipt unmatchable. That answer is the
+  last, unless an earlier held one peeked `success: true` and the later ones did not — keep the
+  success receipt, or a replay's 409/402/budget-out rolls a real charge back and desyncs cumulative. Events `backoff` (per wait, status + retryAfterMs) and
   `recovered` reason `in_doubt` (`rate_limited` for a 429) — or `raiseUnresolved()` →
   `BatchPaymentUnresolvedError` (`PaymentError`, disposition `paid-or-in-doubt`; reason
   `replay_unresolved | ambiguous_rate_limit | no_response | duplicate_settlement | outcome_unknown`; wallet, requestId,

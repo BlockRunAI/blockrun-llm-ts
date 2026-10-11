@@ -50,7 +50,7 @@ import {
 } from "./x402";
 import { solanaKeyToBytes, solanaPublicKey } from "./solana-wallet";
 import { pollJobIdFromUrl, signPollOwnership, type PollKind } from "./poll-ownership";
-import { BATCH_SCHEME, SolanaBatchPayer, type Rechallenge, type SolanaBatchOptions, type SolanaBatchStats } from "./solana-batch";
+import { BATCH_SCHEME, SolanaBatchPayer, withPaymentIdentifier, type Rechallenge, type SolanaBatchOptions, type SolanaBatchStats } from "./solana-batch";
 import type { PaymentRequired } from "./types";
 import {
   sanitizeErrorResponse,
@@ -1535,7 +1535,11 @@ export class SolanaLLMClient {
 
     const fromAddress = await this.getWalletAddress();
     const secretKey = await solanaKeyToBytes(this.privateKey);
-    const extensions = ((paymentRequired as unknown) as Record<string, unknown>).extensions as Record<string, unknown> | undefined;
+    // A gateway that declares `payment-identifier` gets a new id with this
+    // payment too: echoing its declaration without one would be refused when
+    // the gateway marks it `required`. Never the batch payment's id, which
+    // names a different payment.
+    const extensions = withPaymentIdentifier(paymentRequired).extensions;
 
     const paymentPayload = await createSolanaPaymentPayload(
       secretKey,

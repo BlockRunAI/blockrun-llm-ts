@@ -18,9 +18,15 @@
   outlasts the client's 60 s `timeout`. A 409 without `Retry-After`, a 402, a
   2xx without a receipt the SDK can verify, or running out of time raises
   (`replay_unresolved` once a replay was sent; the message counts them).
-  Every error answer is held back from the scheme until no replay follows
-  it, so a later success receipt still reconciles the channel. Without the
-  extension nothing changes, and the `exact` payment never carries an id.
+  Every error answer (and a replay's 2xx without a success receipt) is held
+  back from the scheme until no replay follows it, so a later success
+  receipt still reconciles the channel. The scheme is then handed the last
+  answer, unless an earlier one carried a success receipt and the later
+  ones do not: a 500 carrying the operator's voucher stays booked even if
+  its replay is answered 409, 402 or nothing before time runs out. When the
+  extension is declared, an `exact` payment carries its own new id (never
+  the batch payment's), so a gateway that declares it `required` accepts
+  the exact fallback too. Without the extension nothing changes.
 - New option `batch.inDoubt.maxWaitMs` (default `300000`, exported as
   `DEFAULT_BATCH_IN_DOUBT`): how long one call keeps replaying a payment in
   doubt that carries a payment id, counted from its first answer in doubt,
