@@ -37,6 +37,7 @@ vi.mock("../../src/x402.js", async (importOriginal) => {
 
 const { signPollOwnership, pollAuthMessage, pollJobIdFromUrl } = await import("../../src/poll-ownership.js");
 const { SolanaLLMClient } = await import("../../src/solana-client.js");
+const { retryDisposition } = await import("../../src/types.js");
 
 const NETWORK = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
 const CHALLENGE = {
@@ -221,6 +222,32 @@ describe("Solana video: polls prove ownership, the finished video is paid once",
     expect(signed).toHaveLength(1);
     expect(calls.filter(hasPayment)).toHaveLength(1);
     expect(client.getSpending().calls).toBe(1);
+  });
+
+  it("a paid poll lost in transit is not abandoned: the next proof poll delivers it, one payment", async () => {
+    let paidSent = false;
+    const calls = stubFetch((call) => {
+      if (hasPayment(call)) { paidSent = true; throw new TypeError("fetch failed"); }
+      return paidSent
+        ? res(200, { status: "completed", data: [{ url: "u" }], payment: { status: "already_settled" } })
+        : res(402, { ...CHALLENGE, status: "completed" });
+    });
+    const client = new SolanaLLMClient({ privateKey: SOL_KEY });
+    const out = await follow(client)({ id: "v", poll_url: "/api/v1/videos/generations/v" }, 10_000, "video", 1);
+    expect(out.status).toBe("completed");
+    expect(signed).toHaveLength(1);
+    expect(calls.filter(hasPayment)).toHaveLength(1);
+    expect(client.getSpending().calls).toBe(1);
+  });
+
+  it("a paid media POST lost in transit is raised paid-or-in-doubt", async () => {
+    stubFetch((call) => {
+      if (hasPayment(call)) throw new TypeError("fetch failed");
+      return res(402, CHALLENGE);
+    });
+    const client = new SolanaLLMClient({ privateKey: SOL_KEY });
+    const err = await client.music("lofi").catch((e: unknown) => e);
+    expect(retryDisposition(err)).toBe("paid-or-in-doubt");
   });
 
   it("a payment refused at verification is raised, not re-signed", async () => {

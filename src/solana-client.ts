@@ -1354,10 +1354,30 @@ export class SolanaLLMClient {
       );
       if (kind === "video") videoCostUsd = costUsd;
 
-      const paid = await this.fetchWithTimeout(pollUrl, {
-        method: "GET",
-        headers: { "User-Agent": USER_AGENT, "PAYMENT-SIGNATURE": paymentPayload },
-      });
+      let paid: Response;
+      try {
+        paid = await this.fetchWithTimeout(pollUrl, {
+          method: "GET",
+          headers: { "User-Agent": USER_AGENT, "PAYMENT-SIGNATURE": paymentPayload },
+        });
+      } catch (error) {
+        // The payment may have reached the gateway and settled, with only the
+        // answer lost. Do not give up on a job that may be paid for: the next
+        // poll reads the job's settlement record (200 already_settled) or, if it
+        // never settled, asks again.
+        if (kind === "video" && lastStatus === "completed") settleAttempted = true;
+        if (--paidRefusalsLeft <= 0) {
+          throw withDisposition(
+            new PaymentError(
+              `Paid poll failed in transit (${error instanceof Error ? error.message : String(error)}). ` +
+                `The payment may have settled: resume the job by polling ${pollUrl} with the same wallet ` +
+                `before submitting again.`
+            ),
+            "paid-or-in-doubt"
+          );
+        }
+        continue;
+      }
 
       const data = await readJsonOrEmpty(paid);
       lastStatus = (data.status as string) || lastStatus;
@@ -1376,8 +1396,13 @@ export class SolanaLLMClient {
           );
         }
         // Settlement in progress on another poll, outcome unknown, or a stale
-        // blockhash at settle: the gateway holds the job so a later poll cannot
-        // charge twice. Wait as told, then poll again.
+        // blockhash at settle. Asking again (and signing a fresh payment if the
+        // job still reads unpaid) is the gateway's documented recovery and cannot
+        // charge twice: a per-job claim lets only one poll settle, a claim whose
+        // settle timed out is held with that authorization recorded, and the poll
+        // that takes it over checks on chain whether it landed before settling
+        // anything new (sol #398). A stale-blockhash settle can never land.
+        // Wait as told, then poll again.
         settleAttempted = true;
         if (--paidRefusalsLeft <= 0) {
           throw withDisposition(
@@ -1621,15 +1646,21 @@ export class SolanaLLMClient {
   ): Promise<Record<string, unknown>> {
     const { paymentPayload, costUsd } = await this.signPaymentFrom402(url, response, forceFreshBlockhash);
 
-    const retryResponse = await this.fetchWithTimeout(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": USER_AGENT,
-        "PAYMENT-SIGNATURE": paymentPayload,
-      },
-      body: JSON.stringify(body),
-    }, media.submitTimeoutMs);
+    let retryResponse: Response;
+    try {
+      retryResponse = await this.fetchWithTimeout(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": USER_AGENT,
+          "PAYMENT-SIGNATURE": paymentPayload,
+        },
+        body: JSON.stringify(body),
+      }, media.submitTimeoutMs);
+    } catch (error) {
+      // The signed transfer may have reached the gateway and settled.
+      throw withDisposition(error, "paid-or-in-doubt");
+    }
 
     await this.assertPaid(retryResponse);
 

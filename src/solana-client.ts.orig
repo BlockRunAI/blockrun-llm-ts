@@ -1,0 +1,1809 @@
+import { accountErrorDisposition, resolveApiKeyAuth, requireWallet, type ApiKeyAuth, type ApiKeyOptions } from "./api-key.js";
+/**
+ * BlockRun Solana LLM Client.
+ *
+ * Usage:
+ *   import { SolanaLLMClient } from '@blockrun/llm';
+ *
+ *   // SOLANA_WALLET_KEY env var (bs58-encoded Solana secret key)
+ *   const client = new SolanaLLMClient();
+ *
+ *   // Or pass key directly
+ *   const client = new SolanaLLMClient({ privateKey: 'your-bs58-key' });
+ *
+ *   const response = await client.chat('openai/gpt-5.2', 'gm Solana');
+ */
+import type {
+  ChatMessage,
+  ChatResponse,
+  ChatOptions,
+  ChatCompletionOptions,
+  Model,
+  RoutingDecision,
+  SmartChatCompletionOptions,
+  SmartChatCompletionResponse,
+  SmartChatOptions,
+  SmartChatResponse,
+  ImageResponse,
+  ImageEditOptions,
+  Spending,
+  SearchResult,
+  SearchOptions,
+  VideoResponse,
+  MusicResponse,
+} from "./types";
+import { APIError, PaymentError, withDisposition } from "./types";
+import {
+  SOLANA_MINIMUM_PAYMENT_USD,
+  errSummary,
+  isTransientError,
+  routeWithCatalog,
+  routingProfileForModel,
+  routingText,
+  type ModelPricing,
+} from "./router-adapter";
+import {
+  createSolanaPaymentPayload,
+  parsePaymentRequired,
+  extractPaymentDetails,
+  SOLANA_NETWORK,
+} from "./x402";
+import { solanaKeyToBytes, solanaPublicKey } from "./solana-wallet";
+import { pollJobIdFromUrl, signPollOwnership, type PollKind } from "./poll-ownership";
+import { BATCH_SCHEME, SolanaBatchPayer, type Rechallenge, type SolanaBatchOptions, type SolanaBatchStats } from "./solana-batch";
+import type { PaymentRequired } from "./types";
+import {
+  sanitizeErrorResponse,
+  validateApiUrl,
+  validateMaxTokens,
+  validateResourceUrl,
+} from "./validation";
+import { USER_AGENT } from "./version";
+import { readSseFrames } from "./sse";
+
+const SOLANA_API_URL = "https://sol.blockrun.ai/api";
+const DEFAULT_MAX_TOKENS = 1024;
+const DEFAULT_TIMEOUT = 60000;
+const STALE_BLOCKHASH_RETRY_BACKOFFS_MS = [500, 2000] as const;
+const MAX_PAYMENT_FAILURE_BYTES = 64 * 1024;
+const DEFAULT_VIDEO_MODEL = "xai/grok-imagine-video";
+const DEFAULT_MUSIC_MODEL = "minimax/music-2.5+";
+// Video renders take 1-3 min, but upstream status can lag completion by
+// several minutes; the job stays claimable for ~48h (same budget as VideoClient).
+const DEFAULT_VIDEO_BUDGET_MS = 900_000;
+const DEFAULT_MUSIC_BUDGET_MS = 300_000;
+const VIDEO_POLL_INTERVAL_MS = 5_000;
+// A paid video poll the gateway answers 402 without refusing the payment
+// (settlement held by another poll, outcome unknown, stale blockhash at settle)
+// is re-polled; this many in a row ends the call.
+const MAX_PAID_POLL_REFUSALS = 4;
+// Never wait longer than this on one Retry-After (the gateway asks for 90s at most).
+const MAX_RETRY_AFTER_MS = 120_000;
+// Per-request timeout for a paid music/video POST. sol answers a music POST
+// inline for up to 60s before detaching to 202 (Cloudflare's edge cuts at
+// ~100s); the client's 60s default would abort a POST it has already paid for.
+const MEDIA_SUBMIT_TIMEOUT_MS = 120_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readJsonOrEmpty(response: Response): Promise<Record<string, unknown>> {
+  try {
+    const parsed = (await response.json()) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/** A poll answer that means "not yet": 202 pending, or a transient 503/504. */
+function isPendingPollStatus(status: number): boolean {
+  return status === 202 || status === 503 || status === 504;
+}
+
+/** The poll's `Retry-After` in ms (delta-seconds only), or undefined. */
+function retryAfterMs(response: Response): number | undefined {
+  const raw = response.headers.get("retry-after");
+  if (!raw || !/^\d+$/.test(raw.trim())) return undefined;
+  return Math.min(Number(raw.trim()) * 1000, MAX_RETRY_AFTER_MS);
+}
+
+/** How a media POST is followed: total poll budget, and the paid POST's own timeout. */
+interface MediaJobOptions {
+  pollBudgetMs?: number;
+  submitTimeoutMs?: number;
+}
+
+/** Which job a media endpoint creates, for the poll proof's `<kind>`. */
+function pollKindFor(url: string): PollKind {
+  const path = new URL(url).pathname;
+  if (path.includes("/v1/videos")) return "video";
+  if (path.includes("/v1/audio/")) return "audio";
+  return "image";
+}
+
+class SafeStaleBlockhashError extends PaymentError {
+  constructor() {
+    super("Payment verification used an expired Solana blockhash; retrying with a fresh quote.");
+    this.name = "SafeStaleBlockhashError";
+  }
+}
+
+function normalizePaymentSignal(value: unknown): string {
+  return typeof value === "string"
+    ? value.toLowerCase().replace(/[_\-\s:]/g, "")
+    : "";
+}
+
+async function readPaymentFailureBody(response: Response): Promise<string | null> {
+  // The paid 402 is terminal or converted into an internal retry signal; it is
+  // never returned to callers, so consume the original body. Cloning would tee
+  // the stream, and cancelling one oversized tee branch can wait forever for
+  // the unread sibling branch.
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return text + decoder.decode();
+      total += value.byteLength;
+      if (total > MAX_PAYMENT_FAILURE_BYTES) {
+        void reader.cancel();
+        return null;
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Recognize only explicitly verification-phase stale-blockhash failures.
+ * Settlement may already have broadcast a transaction, so any settlement or
+ * phase-ambiguous 402 is terminal even when it mentions blockhash expiry.
+ * @internal Exported for the payment safety regression tests.
+ */
+export async function isSafeStaleBlockhashResponse(response: Response): Promise<boolean> {
+  const length = Number(response.headers.get("content-length") || "0");
+  if (Number.isFinite(length) && length > MAX_PAYMENT_FAILURE_BYTES) return false;
+
+  const text = await readPaymentFailureBody(response);
+  if (text === null) return false;
+
+  let body: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    body = parsed as Record<string, unknown>;
+  } catch {
+    return false;
+  }
+
+  const nested = body.error && typeof body.error === "object" && !Array.isArray(body.error)
+    ? body.error as Record<string, unknown>
+    : undefined;
+  const errorLabel = typeof body.error === "string" ? body.error : "";
+  const code = normalizePaymentSignal(body.code ?? nested?.code);
+  const reason = normalizePaymentSignal(body.reason);
+  const detail = normalizePaymentSignal(body.invalidMessage);
+  const message = normalizePaymentSignal(nested?.message ?? body.message);
+  const label = normalizePaymentSignal(errorLabel);
+
+  if (
+    code.includes("settlementfailed") ||
+    label.includes("settlementfailed") ||
+    message.includes("settlementfailed")
+  ) return false;
+
+  const verifyPhase =
+    code === "paymentinvalid" ||
+    label.includes("verificationfailed") ||
+    message.includes("verificationfailed");
+  if (!verifyPhase) return false;
+
+  return (
+    code === "paymentblockhashstale" ||
+    detail.includes("blockhashnotfound") ||
+    detail.includes("blockheightexceeded") ||
+    reason === "expiredsignature" ||
+    message.includes("expiredsignature")
+  );
+}
+
+async function waitForStaleRetry(attempt: number): Promise<void> {
+  await new Promise<void>((resolve) =>
+    setTimeout(resolve, STALE_BLOCKHASH_RETRY_BACKOFFS_MS[attempt])
+  );
+}
+
+/** A non-2xx, non-402 answer to a request that carried no payment, as an `"unpaid"` APIError. */
+async function unpaidApiError(response: Response): Promise<APIError> {
+  let errorBody: unknown;
+  try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
+  return withDisposition(
+    new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(errorBody)),
+    "unpaid"
+  );
+}
+
+/**
+ * Default Solana RPC URL — BlockRun's multi-region Tatum-backed JSON-RPC
+ * proxy. Free for SDK users (bundled into LLM inference fees you already
+ * pay) with method-aware server-side caching (`getLatestBlockhash` at 30s
+ * TTL) that collapses bursty signing traffic to a handful of upstream RPC
+ * calls. Public `api.mainnet-beta.solana.com` remains reachable via
+ * explicit config, but its ~10–40 RPS limit is too aggressive for any
+ * real concurrency. Override with `rpcUrl` / `SOLANA_RPC_URL` to bypass.
+ */
+const DEFAULT_SOLANA_RPC_URL = "https://sol.blockrun.ai/api/v1/solana/rpc";
+
+export interface SolanaLLMClientOptions extends ApiKeyOptions {
+  /** bs58-encoded Solana secret key (64 bytes). Optional if SOLANA_WALLET_KEY env var is set. */
+  privateKey?: string;
+  /** API endpoint URL (default: https://sol.blockrun.ai/api) */
+  apiUrl?: string;
+  /**
+   * Solana JSON-RPC URL. Defaults to BlockRun's own Tatum-backed proxy
+   * (`https://sol.blockrun.ai/api/v1/solana/rpc`), free for SDK users.
+   * Override to point at your own Helius / Tatum / QuickNode account, or
+   * fall back to the env vars `SOLANA_RPC_URL` /
+   * `SOLANA_RPC_API_KEY` / `SOLANA_RPC_HEADERS`.
+   */
+  rpcUrl?: string;
+  /**
+   * Optional headers forwarded to the Solana RPC endpoint. Use this for
+   * header-auth gateways (Tatum's `x-api-key`, some Triton tiers). Falls
+   * back to `SOLANA_RPC_HEADERS` (JSON dict) or `SOLANA_RPC_API_KEY`
+   * (shortcut for `{ "x-api-key": "..." }`) env vars when omitted.
+   */
+  rpcHeaders?: Record<string, string>;
+  /** Request timeout in milliseconds (default: 60000) */
+  timeout?: number;
+  /**
+   * Opt in to x402 batch-settlement (metered billing) for chat completions.
+   * Each call is charged what it actually cost, at most its quoted ceiling,
+   * from a deposit-backed payment channel instead of a per-call transfer.
+   * Needs the optional peers `@x402/core`, `@x402/svm` and `@solana/kit`.
+   * Ignored in API-key mode. See {@link SolanaBatchOptions}.
+   */
+  batch?: SolanaBatchOptions;
+}
+
+/**
+ * Resolve the effective Solana RPC URL + headers from explicit args, env
+ * vars, or defaults — in that priority order. Mirrors the Python SDK's
+ * `_resolve_rpc_config` (see blockrun-llm 0.23.0 / 0.24.0).
+ */
+function resolveRpcConfig(
+  rpcUrl: string | undefined,
+  rpcHeaders: Record<string, string> | undefined
+): { url: string; headers?: Record<string, string> } {
+  const env =
+    typeof process !== "undefined" && process.env ? process.env : ({} as NodeJS.ProcessEnv);
+
+  const url = rpcUrl || env.SOLANA_RPC_URL || DEFAULT_SOLANA_RPC_URL;
+
+  let headers: Record<string, string> | undefined;
+  if (rpcHeaders) {
+    headers = { ...rpcHeaders };
+  } else if (env.SOLANA_RPC_HEADERS) {
+    try {
+      const parsed = JSON.parse(env.SOLANA_RPC_HEADERS);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        headers = Object.fromEntries(
+          Object.entries(parsed as Record<string, unknown>).map(([k, v]) => [String(k), String(v)])
+        );
+      }
+    } catch {
+      /* ignore malformed env var */
+    }
+  } else if (env.SOLANA_RPC_API_KEY) {
+    headers = { "x-api-key": env.SOLANA_RPC_API_KEY };
+  }
+
+  return headers ? { url, headers } : { url };
+}
+
+export class SolanaLLMClient {
+  static readonly SOLANA_API_URL = SOLANA_API_URL;
+
+  private apiAuth?: ApiKeyAuth;
+  get authMode(): "api-key" | "wallet" { return this.apiAuth ? "api-key" : "wallet"; }
+  private _privateKey?: string;
+  private get privateKey(): string { return requireWallet(this._privateKey); }
+  private apiUrl: string;
+  private rpcUrl: string;
+  private rpcHeaders?: Record<string, string>;
+  private timeout: number;
+  private sessionTotalUsd = 0;
+  private sessionCalls = 0;
+  private addressCache: string | null = null;
+  private modelPricingCache: Map<string, ModelPricing> | null = null;
+  private modelPricingPromise: Promise<Map<string, ModelPricing>> | null = null;
+  private batchPayer?: SolanaBatchPayer;
+
+  constructor(options: SolanaLLMClientOptions = {}) {
+    this.apiAuth = resolveApiKeyAuth(options);
+    if (!this.apiAuth) {
+      const envKey = typeof process !== "undefined" && process.env
+        ? process.env.SOLANA_WALLET_KEY
+        : undefined;
+      const privateKey = options.privateKey || envKey;
+
+      if (!privateKey) {
+        throw new Error(
+          "Private key required. Pass privateKey in options or set SOLANA_WALLET_KEY environment variable."
+        );
+      }
+
+      this._privateKey = privateKey;
+
+    }
+    const apiUrl = this.apiAuth?.apiUrl || options.apiUrl || SOLANA_API_URL;
+    validateApiUrl(apiUrl);
+    this.apiUrl = apiUrl.replace(/\/$/, "");
+
+    const rpc = resolveRpcConfig(options.rpcUrl, options.rpcHeaders);
+    this.rpcUrl = rpc.url;
+    this.rpcHeaders = rpc.headers;
+    this.timeout = options.timeout || DEFAULT_TIMEOUT;
+
+    if (options.batch && !this.apiAuth) {
+      this.batchPayer = new SolanaBatchPayer({
+        options: options.batch,
+        secretKey: () => solanaKeyToBytes(this.privateKey),
+        address: () => this.getWalletAddress(),
+        rpcUrl: this.rpcUrl,
+        rpcHeaders: this.rpcHeaders,
+      });
+    }
+  }
+
+  /**
+   * Close this wallet's batch-settlement channel and return its unused escrow.
+   *
+   * Closes the channel for the operator the gateway's current 402 names; a
+   * channel opened with another trusted operator key (during a key rotation)
+   * keeps its record. The gateway closes it cooperatively when it can;
+   * otherwise this starts a payer-forced close and the escrow comes back
+   * after the channel's grace period. Only meaningful with the `batch`
+   * option.
+   *
+   * @throws BatchCloseDeferredError, closing nothing, while a chat call for
+   *   this wallet is still in flight (including one waiting out a 429, so a
+   *   retry can never reopen a channel you just closed), or while one of its
+   *   deposits is in doubt (until a `finalized` chain read shows it landed or
+   *   that it no longer can, usually a few minutes after it was sent). Call
+   *   it again later.
+   */
+  async closeBatchChannel(): Promise<unknown> {
+    if (!this.batchPayer) throw new Error("closeBatchChannel() requires the `batch` option in wallet mode");
+    return this.batchPayer.close(`${this.apiUrl}/v1/chat/completions`);
+  }
+
+  /**
+   * This client's batch-settlement counters: calls that fell back to `exact`
+   * (in total and by reason), 429 backoffs, batch retries, and recoveries.
+   * Every one of those is also logged to stderr and passed to `batch.onEvent`.
+   * Only meaningful with the `batch` option.
+   */
+  getBatchStats(): SolanaBatchStats {
+    if (!this.batchPayer) throw new Error("getBatchStats() requires the `batch` option in wallet mode");
+    return this.batchPayer.stats();
+  }
+
+  /** Get Solana wallet address (public key in base58). */
+  async getWalletAddress(): Promise<string> {
+    if (!this.addressCache) {
+      this.addressCache = await solanaPublicKey(this.privateKey);
+    }
+    return this.addressCache;
+  }
+
+  /** Simple 1-line chat. */
+  async chat(model: string, prompt: string, options?: ChatOptions): Promise<string> {
+    const messages: ChatMessage[] = [];
+    if (options?.system) messages.push({ role: "system", content: options.system });
+    messages.push({ role: "user", content: prompt });
+    const result = await this.chatCompletion(model, messages, {
+      maxTokens: options?.maxTokens,
+      temperature: options?.temperature,
+      topP: options?.topP,
+      search: options?.search,
+      searchParameters: options?.searchParameters,
+      responseFormat: options?.responseFormat,
+      stop: options?.stop,
+      fallbackModels: options?.fallbackModels,
+    });
+    return result.choices[0].message.content || "";
+  }
+
+  /** Full chat completion (OpenAI-compatible). */
+  async chatCompletion(
+    model: string,
+    messages: ChatMessage[],
+    options?: ChatCompletionOptions
+  ): Promise<ChatResponse> {
+    const routingProfile = routingProfileForModel(model);
+    if (routingProfile) {
+      return (
+        await this.smartChatCompletion(messages, {
+          ...options,
+          routingProfile,
+        })
+      ).response;
+    }
+    validateMaxTokens(options?.maxTokens);
+
+    const buildBody = (candidate: string): Record<string, unknown> => {
+      const body: Record<string, unknown> = {
+        model: candidate,
+        messages,
+        max_tokens: options?.maxTokens || DEFAULT_MAX_TOKENS,
+      };
+      if (options?.temperature !== undefined) body.temperature = options.temperature;
+      if (options?.topP !== undefined) body.top_p = options.topP;
+      if (options?.searchParameters !== undefined) body.search_parameters = options.searchParameters;
+      else if (options?.search === true) body.search_parameters = { mode: "on" };
+      if (options?.tools !== undefined) body.tools = options.tools;
+      if (options?.toolChoice !== undefined) body.tool_choice = options.toolChoice;
+      if (options?.responseFormat !== undefined) body.response_format = options.responseFormat;
+      if (options?.stop !== undefined) body.stop = options.stop;
+      return body;
+    };
+    const chain = [model, ...(options?.fallbackModels ?? [])];
+    let lastError: unknown;
+    for (let index = 0; index < chain.length; index += 1) {
+      const candidate = chain[index];
+      try {
+        return await this.requestWithPayment("/v1/chat/completions", buildBody(candidate));
+      } catch (error) {
+        lastError = error;
+        if (!isTransientError(error) || index === chain.length - 1) throw error;
+        // Same one-line hop visibility the Base client provides — a paid
+        // request must never switch models silently.
+        console.error(`[@blockrun/llm] ${candidate} -> ${chain[index + 1]} (${errSummary(error)})`);
+      }
+    }
+    throw lastError;
+  }
+
+  private async getModelPricing(): Promise<Map<string, ModelPricing>> {
+    if (this.modelPricingCache) return this.modelPricingCache;
+    if (this.modelPricingPromise) return this.modelPricingPromise;
+    this.modelPricingPromise = (async () => {
+      const models = await this.listModels();
+      const pricing = new Map<string, ModelPricing>();
+      for (const model of models) {
+        const raw = model as Model & {
+          input_price?: number;
+          output_price?: number;
+          flat_price?: number;
+          billing_mode?: string;
+          pricing?: { input?: number; output?: number; flat?: number };
+        };
+        // Skip catalog rows marked unavailable, and guard against malformed
+        // values: Number("abc") is NaN, which survives `?? 0` and would
+        // silently poison route scoring and cost metadata downstream.
+        if (model.available === false) continue;
+        const num = (value: unknown): number => {
+          const n = Number(value ?? 0);
+          return Number.isFinite(n) ? n : 0;
+        };
+        const inputPrice = num(model.inputPrice ?? raw.input_price ?? raw.pricing?.input);
+        const outputPrice = num(model.outputPrice ?? raw.output_price ?? raw.pricing?.output);
+        const flatPrice = num(model.flatPrice ?? raw.flat_price ?? raw.pricing?.flat);
+        pricing.set(model.id, {
+          inputPrice,
+          outputPrice,
+          ...((model.billingMode ?? raw.billing_mode) === "flat" && flatPrice > 0
+            ? { flatPrice }
+            : {}),
+        });
+      }
+      return pricing;
+    })();
+    try {
+      this.modelPricingCache = await this.modelPricingPromise;
+      return this.modelPricingCache;
+    } finally {
+      this.modelPricingPromise = null;
+    }
+  }
+
+  /** Inspect a Solana route without making or paying for a model call. */
+  async route(prompt: string, options?: SmartChatOptions): Promise<RoutingDecision> {
+    return routeWithCatalog(
+      prompt,
+      options?.system,
+      options?.maxOutputTokens ?? options?.maxTokens ?? DEFAULT_MAX_TOKENS,
+      await this.getModelPricing(),
+      {
+        routingProfile: options?.routingProfile,
+        requiresStructuredOutput: options?.responseFormat !== undefined,
+        minimumPaymentUsd: this.apiAuth ? 0 : SOLANA_MINIMUM_PAYMENT_USD,
+      },
+    );
+  }
+
+  /** Smart one-line chat paid on Solana. */
+  async smartChat(prompt: string, options?: SmartChatOptions): Promise<SmartChatResponse> {
+    const decision = await this.route(prompt, options);
+    const response = await this.chat(decision.model, prompt, {
+      ...options,
+      // An explicit caller-supplied chain wins over the routed one.
+      fallbackModels: options?.fallbackModels ?? decision.fallbacks,
+    });
+    return { response, model: decision.model, routing: decision };
+  }
+
+  /** Smart full message/tool completion paid on Solana. */
+  async smartChatCompletion(
+    messages: ChatMessage[],
+    options: SmartChatCompletionOptions = {},
+  ): Promise<SmartChatCompletionResponse> {
+    const { prompt, systemPrompt, conversationChars, hasVision } = routingText(messages);
+    const decision = routeWithCatalog(
+      prompt,
+      systemPrompt,
+      options.maxOutputTokens ?? options.maxTokens ?? DEFAULT_MAX_TOKENS,
+      await this.getModelPricing(),
+      {
+        routingProfile: options.routingProfile,
+        requiresStructuredOutput: options.responseFormat !== undefined,
+        tools: options.tools,
+        toolChoice: options.toolChoice,
+        conversationChars,
+        hasVision,
+        minimumPaymentUsd: this.apiAuth ? 0 : SOLANA_MINIMUM_PAYMENT_USD,
+      },
+    );
+    const response = await this.chatCompletion(decision.model, messages, {
+      maxTokens: options.maxTokens,
+      temperature: options.temperature,
+      topP: options.topP,
+      search: options.search,
+      searchParameters: options.searchParameters,
+      tools: options.tools,
+      toolChoice: options.toolChoice,
+      responseFormat: options.responseFormat,
+      stop: options.stop,
+      // An explicit caller-supplied chain wins over the routed one.
+      fallbackModels: options.fallbackModels ?? decision.fallbacks,
+    });
+    response.routing = decision;
+    return { response, model: decision.model, routing: decision };
+  }
+
+  /**
+   * Stream a Server-Sent Events endpoint, paid on Solana.
+   *
+   * The Solana counterpart to `BlockrunClient.stream`, and the reason it had to
+   * exist: a streaming harness cannot use this client at all without it, so
+   * "BlockRun supports Solana" stopped being true the moment a caller streamed.
+   * `chatCompletion` buffers the whole answer, which is the wrong shape for an
+   * agent loop and for anything that shows tokens as they arrive.
+   *
+   * The handshake is the one the non-streaming paths use — `402`, sign an SPL
+   * TransferChecked authorization locally, replay with `PAYMENT-SIGNATURE` —
+   * with the same verification-phase re-sign on a stale blockhash. What differs
+   * is that the paid response is not read as JSON: it is handed to the SSE
+   * reader with its body untouched.
+   *
+   * A `200` on the first request is returned as-is and settles nothing. That is
+   * the free tier (the gateway answers a `billing_mode: "free"` model without a
+   * 402 at all) and it is also API-key mode, where billing is on the account
+   * rather than on a wallet.
+   *
+   * Yields each `data:` frame parsed as JSON, and stops at `data: [DONE]`.
+   * Malformed frames are skipped rather than thrown — see {@link readSseFrames}.
+   *
+   * @example
+   * for await (const chunk of client.stream<ChatChunk>("/v1/chat/completions", {
+   *   model: "deepseek/deepseek-chat",
+   *   messages: [{ role: "user", content: "Hi" }],
+   *   stream: true,
+   * })) {
+   *   process.stdout.write(chunk.choices?.[0]?.delta?.content ?? "");
+   * }
+   *
+   * @param path - endpoint after the API root; a leading `/api` is tolerated.
+   * @param body - JSON request body. Set `stream: true` yourself — this method
+   *   does not inject it, because the gateway prices a streaming and a
+   *   non-streaming request the same and silently rewriting a caller's body is
+   *   how you end up debugging a request you did not send.
+   * @returns each decoded SSE frame, in order.
+   */
+  async *stream<T = unknown>(
+    path: string,
+    body?: Record<string, unknown>
+  ): AsyncGenerator<T, void, undefined> {
+    const url = this.buildUrl(path);
+    const response = await this.openPaidStream(url, JSON.stringify(body ?? {}));
+    yield* readSseFrames<T>(
+      response,
+      (status) => new APIError("Stream response has no body", status, {})
+    );
+  }
+
+  /**
+   * Get to a streaming response, paying for it if the gateway asks.
+   *
+   * Separate from {@link SolanaLLMClient.stream} because a generator cannot
+   * retry cleanly around a `yield`: the stale-blockhash re-sign has to finish
+   * before the first frame is handed out, and putting the loop here keeps the
+   * payment decision entirely ahead of any output the caller has seen.
+   *
+   * @param url - resolved endpoint URL.
+   * @param requestBody - the serialized body, reused verbatim on the paid retry
+   *   so the gateway prices and answers the same request it quoted for.
+   * @returns a response whose body has not been read.
+   */
+  private async openPaidStream(url: string, requestBody: string): Promise<Response> {
+    for (let staleRetries = 0; ; ) {
+      const response = await this.fetchWithTimeout(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
+        body: requestBody,
+      });
+
+      // Served without a payment: the free tier, or account billing under an
+      // API key. Nothing was quoted, so nothing is recorded as spent.
+      if (response.ok) return response;
+
+      if (response.status !== 402) {
+        let errorBody: unknown;
+        try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
+        throw new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(errorBody));
+      }
+
+      try {
+        const { paymentPayload, costUsd } = await this.signPaymentFrom402(
+          url,
+          response,
+          staleRetries > 0
+        );
+        const paid = await this.fetchWithTimeout(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
+            "PAYMENT-SIGNATURE": paymentPayload,
+          },
+          body: requestBody,
+        });
+        // Throws before the body is touched, so a refusal never reaches the SSE
+        // reader as an empty stream the caller would read as an empty answer.
+        await this.assertPaid(paid);
+        this.recordSettlement(costUsd);
+        return paid;
+      } catch (error) {
+        if (
+          !(error instanceof SafeStaleBlockhashError) ||
+          staleRetries >= STALE_BLOCKHASH_RETRY_BACKOFFS_MS.length
+        ) throw error;
+        await waitForStaleRetry(staleRetries++);
+        continue;
+      }
+    }
+  }
+
+  /**
+   * Resolve an endpoint path against this client's API root.
+   *
+   * A leading `/api` is stripped for the same reason `BlockrunClient` strips
+   * it: the documented paths are written `/api/v1/…` on the website and
+   * `/v1/…` in this SDK, and a caller who copies one into the other should get
+   * their request rather than a 404.
+   * @param path - endpoint path, with or without a leading slash.
+   * @returns the absolute URL to call.
+   */
+  private buildUrl(path: string): string {
+    let normalized = path.startsWith("/") ? path : `/${path}`;
+    if (normalized.startsWith("/api/")) normalized = normalized.slice(4);
+    return `${this.apiUrl}${normalized}`;
+  }
+
+  /** List available models. */
+  async listModels(): Promise<Model[]> {
+    const response = await this.fetchWithTimeout(`${this.apiUrl}/v1/models`, { method: "GET" });
+    if (!response.ok) {
+      throw new APIError(`Failed to list models: ${response.status}`, response.status);
+    }
+    const data = (await response.json()) as { data?: Model[] };
+    return data.data || [];
+  }
+
+  /**
+   * Get Solana USDC balance.
+   *
+   * @returns USDC balance as a float
+   */
+  async getBalance(): Promise<number> {
+    const usdc_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    const address = await this.getWalletAddress();
+
+    try {
+      const response = await fetch(this.rpcUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(this.rpcHeaders ?? {}) },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getTokenAccountsByOwner",
+          params: [address, { mint: usdc_mint }, { encoding: "jsonParsed" }],
+        }),
+      });
+      const data = (await response.json()) as { result?: { value?: Array<{ account?: { data?: { parsed?: { info?: { tokenAmount?: { uiAmount?: number } } } } } }> } };
+      const accounts = data.result?.value || [];
+      if (!accounts.length) return 0;
+      let total = 0;
+      for (const acct of accounts) {
+        total += acct.account?.data?.parsed?.info?.tokenAmount?.uiAmount || 0;
+      }
+      return total;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Edit an image using img2img (Solana payment). */
+  /**
+   * Generate an image on Solana.
+   *
+   * Slow models answer 202 `{ id, poll_url }`; `requestWithPaymentRaw` follows
+   * that to completion, re-signing per poll, and settles once at the end. Fast
+   * models answer 200 inline and settle there.
+   */
+  async image(
+    prompt: string,
+    options: { model?: string; size?: string; n?: number } & Record<string, unknown> = {}
+  ): Promise<ImageResponse> {
+    const body: Record<string, unknown> = { prompt, ...options };
+    const data = await this.requestWithPaymentRaw("/v1/images/generations", body);
+    return data as unknown as ImageResponse;
+  }
+
+  async imageEdit(
+    prompt: string,
+    image: string | string[],
+    options?: ImageEditOptions
+  ): Promise<ImageResponse> {
+    const body: Record<string, unknown> = {
+      model: options?.model || "openai/gpt-image-2",
+      prompt,
+      image,
+      size: options?.size || "1024x1024",
+      n: options?.n || 1,
+    };
+    if (options?.mask !== undefined) body.mask = options.mask;
+    const data = await this.requestWithPaymentRaw("/v1/images/image2image", body);
+    return data as unknown as ImageResponse;
+  }
+
+  /**
+   * Generate a short video on Solana.
+   *
+   * The POST is verified, not charged. The job is then polled with a wallet
+   * signature (no payment) until it finishes, and ONE payment is signed for
+   * the finished video; a failed job is never charged. If the gateway does not
+   * accept poll signatures for the job, it is polled with a payment per poll
+   * instead, which is likewise only charged on completion.
+   *
+   * @param prompt - text description of the video.
+   * @param options - `model` (default `xai/grok-imagine-video`), `budgetMs`
+   *   (total wait, default 15 min); any other keys are sent verbatim, so use
+   *   the gateway's snake_case names (`duration_seconds`, `image_url`,
+   *   `aspect_ratio`, `resolution`, …).
+   */
+  async video(
+    prompt: string,
+    options: { model?: string; budgetMs?: number } & Record<string, unknown> = {}
+  ): Promise<VideoResponse> {
+    const { model, budgetMs, ...rest } = options;
+    const body: Record<string, unknown> = { ...rest, model: model || DEFAULT_VIDEO_MODEL, prompt };
+    const data = await this.requestWithPaymentRaw(
+      "/v1/videos/generations",
+      body,
+      { pollBudgetMs: budgetMs ?? DEFAULT_VIDEO_BUDGET_MS, submitTimeoutMs: Math.max(this.timeout, MEDIA_SUBMIT_TIMEOUT_MS) }
+    );
+    return data as unknown as VideoResponse;
+  }
+
+  /**
+   * Generate a music track on Solana. Paid at the POST; a slow track is then
+   * polled with a wallet signature, never another payment.
+   *
+   * @param prompt - music style, mood, or description.
+   * @param options - `model` (default `minimax/music-2.5+`), `instrumental`
+   *   (default true), `lyrics` (requires `instrumental: false`), `budgetMs`
+   *   (total wait, default 5 min); other keys are sent verbatim.
+   */
+  async music(
+    prompt: string,
+    options: { model?: string; instrumental?: boolean; lyrics?: string; budgetMs?: number } & Record<string, unknown> = {}
+  ): Promise<MusicResponse> {
+    const { model, instrumental: instrumentalOption, lyrics: rawLyrics, budgetMs, ...rest } = options;
+    const instrumental = instrumentalOption ?? true;
+    const lyrics = rawLyrics?.trim();
+    if (instrumental && lyrics) throw new Error("Cannot specify lyrics when instrumental is true");
+    const body: Record<string, unknown> = { ...rest, model: model || DEFAULT_MUSIC_MODEL, prompt, instrumental };
+    if (lyrics) body.lyrics = lyrics;
+    const data = await this.requestWithPaymentRaw(
+      "/v1/audio/generations",
+      body,
+      { pollBudgetMs: budgetMs ?? DEFAULT_MUSIC_BUDGET_MS, submitTimeoutMs: Math.max(this.timeout, MEDIA_SUBMIT_TIMEOUT_MS) }
+    );
+    return data as unknown as MusicResponse;
+  }
+
+  /** Standalone search (Solana payment). */
+  async search(query: string, options?: SearchOptions): Promise<SearchResult> {
+    const body: Record<string, unknown> = { query, max_results: options?.maxResults || 10 };
+    if (options?.sources !== undefined) body.sources = options.sources;
+    if (options?.fromDate !== undefined) body.from_date = options.fromDate;
+    if (options?.toDate !== undefined) body.to_date = options.toDate;
+    const data = await this.requestWithPaymentRaw("/v1/search", body);
+    return data as unknown as SearchResult;
+  }
+
+  // ── Prediction Markets (Powered by Predexon) ────────────────────────────
+
+  async pm(path: string, params?: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.getWithPaymentRaw(`/v1/pm/${path}`, params);
+  }
+
+  async pmQuery(path: string, query: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestWithPaymentRaw(`/v1/pm/${path}`, query);
+  }
+
+  // ── Exa Web Search (Powered by Exa) ──────────────────────────────────────
+
+  /**
+   * Generic Exa endpoint proxy (POST, Solana payment). Powered by Exa.
+   *
+   * @param path - Exa endpoint: "search" | "find-similar" | "contents" | "answer"
+   * @param body - Request body (see Exa API docs)
+   *
+   * @example
+   * const results = await client.exa("search", { query: "latest AI research", numResults: 5 });
+   */
+  async exa(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestWithPaymentRaw(`/v1/exa/${path}`, body);
+  }
+
+  /**
+   * Neural and keyword web search via Exa (Solana payment).
+   *
+   * @example
+   * const results = await client.exaSearch("latest AI papers", { numResults: 5 });
+   */
+  async exaSearch(query: string, options?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestWithPaymentRaw("/v1/exa/search", { query, ...options });
+  }
+
+  /**
+   * Find pages semantically similar to a given URL via Exa (Solana payment).
+   *
+   * @example
+   * const results = await client.exaFindSimilar("https://openai.com/research/gpt-4", { numResults: 5 });
+   */
+  async exaFindSimilar(url: string, options?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestWithPaymentRaw("/v1/exa/find-similar", { url, ...options });
+  }
+
+  /**
+   * Extract full text content from URLs via Exa (Solana payment).
+   *
+   * @example
+   * const data = await client.exaContents(["https://arxiv.org/abs/2303.08774"]);
+   */
+  async exaContents(urls: string[], options?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestWithPaymentRaw("/v1/exa/contents", { urls, ...options });
+  }
+
+  /**
+   * AI-generated answer grounded in live web search via Exa (Solana payment).
+   *
+   * @example
+   * const answer = await client.exaAnswer("What is the current state of AI safety research?");
+   */
+  async exaAnswer(query: string, options?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestWithPaymentRaw("/v1/exa/answer", { query, ...options });
+  }
+
+  // ============================================================
+  // DefiLlama (DeFi protocols / TVL / yields / prices)
+  // ============================================================
+
+  /**
+   * Query DefiLlama DeFi data (GET passthrough). Powered by DefiLlama.
+   * for protocols / protocol/{slug} / chains / yields;
+   * for prices/{coins}.
+   *
+   * @param path - e.g. "protocols", "protocol/aave", "chains", "yields",
+   *               "prices/coingecko:bitcoin,base:0x..."
+   * @param params - Query parameters passed through to DefiLlama
+   */
+  async defi(path: string, params?: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.getWithPaymentRaw(`/v1/defillama/${path}`, params);
+  }
+
+  /** All DeFi protocols with TVL. */
+  async defiProtocols(): Promise<Record<string, unknown>> {
+    return this.defi("protocols");
+  }
+
+  /** Single protocol details + historical TVL. */
+  async defiProtocol(slug: string): Promise<Record<string, unknown>> {
+    return this.defi(`protocol/${slug}`);
+  }
+
+  /** Current TVL of every chain. */
+  async defiChains(): Promise<Record<string, unknown>> {
+    return this.defi("chains");
+  }
+
+  /** Yield pools with APY/TVL. */
+  async defiYields(params?: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.defi("yields", params);
+  }
+
+  /** Token price lookup. Coins like "coingecko:bitcoin" or "{chain}:{address}". */
+  async defiPrices(coins: string | string[]): Promise<Record<string, unknown>> {
+    const joined = Array.isArray(coins) ? coins.join(",") : coins;
+    return this.defi(`prices/${joined}`);
+  }
+
+  // ============================================================
+  // 0x DEX (swap quotes + gasless) — free passthrough
+  // ============================================================
+
+  /**
+   * Query the 0x Swap / Gasless APIs (free — no x402 payment; BlockRun
+   * takes an on-chain affiliate fee on executed swaps instead).
+   *
+   * @param path - "price", "quote", "gasless/price", "gasless/quote",
+   *               "gasless/submit" (POST), "gasless/status/{hash}",
+   *               "gasless/approval-tokens", "gasless/chains", "swap/chains"
+   * @param params - Query params (chainId, sellToken, buyToken, sellAmount, taker, ...)
+   * @param body - JSON body — pass to switch to POST (gasless/submit only)
+   */
+  async dex(
+    path: string,
+    params?: Record<string, string>,
+    body?: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    if (body) return this.requestWithPaymentRaw(`/v1/zerox/${path}`, body);
+    return this.getWithPaymentRaw(`/v1/zerox/${path}`, params);
+  }
+
+  /** Indicative Permit2 swap price — no commitment (free). */
+  async dexPrice(params: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.dex("price", params);
+  }
+
+  /** Firm Permit2 swap quote with permit2.eip712 + tx data (free). */
+  async dexQuote(params: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.dex("quote", params);
+  }
+
+  /** Gasless indicative price quote (free). */
+  async dexGaslessPrice(params: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.dex("gasless/price", params);
+  }
+
+  /** Gasless firm quote — returns trade.eip712 to sign (free). */
+  async dexGaslessQuote(params: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.dex("gasless/quote", params);
+  }
+
+  /** Submit a signed gasless trade; the 0x relayer pays gas (free). */
+  async dexGaslessSubmit(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.dex("gasless/submit", undefined, body);
+  }
+
+  /** Poll a gasless trade's status by tradeHash (free). */
+  async dexGaslessStatus(tradeHash: string): Promise<Record<string, unknown>> {
+    return this.dex(`gasless/status/${tradeHash}`);
+  }
+
+  /** Chains where the Swap API is supported (free). */
+  async dexChains(): Promise<Record<string, unknown>> {
+    return this.dex("swap/chains");
+  }
+
+  /** Chains where the Gasless API is supported (free). */
+  async dexGaslessChains(): Promise<Record<string, unknown>> {
+    return this.dex("gasless/chains");
+  }
+
+  // ============================================================
+  // Modal Sandbox (pay-per-call cloud compute)
+  // ============================================================
+
+  /**
+   * Call the Modal sandbox compute API (POST passthrough).
+   *
+   * @param path - "sandbox/create" (CPU / GPU tiers), "sandbox/exec",
+   *               "sandbox/status", "sandbox/terminate"
+   * @param body - JSON body for the endpoint
+   */
+  async modal(path: string, body?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestWithPaymentRaw(`/v1/modal/${path}`, body ?? {});
+  }
+
+  /** Create a sandboxed compute environment (CPU / GPU tiers). */
+  async modalSandboxCreate(body?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.modal("sandbox/create", body);
+  }
+
+  /** Execute a command in a sandbox; returns stdout/stderr. */
+  async modalSandboxExec(
+    sandboxId: string,
+    command: string[],
+    extra?: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    return this.modal("sandbox/exec", { sandbox_id: sandboxId, command, ...extra });
+  }
+
+  /** Check a sandbox's status. */
+  async modalSandboxStatus(sandboxId: string): Promise<Record<string, unknown>> {
+    return this.modal("sandbox/status", { sandbox_id: sandboxId });
+  }
+
+  /** Terminate a sandbox. */
+  async modalSandboxTerminate(sandboxId: string): Promise<Record<string, unknown>> {
+    return this.modal("sandbox/terminate", { sandbox_id: sandboxId });
+  }
+
+  /** Get session spending. */
+  getSpending(): Spending {
+    if (this.apiAuth) throw new Error("Account usage is available at https://user.blockrun.ai/dashboard; getSpending() tracks x402 settlements only.");
+    return { totalUsd: this.sessionTotalUsd, calls: this.sessionCalls };
+  }
+
+  /** True if using sol.blockrun.ai. */
+  isSolana(): boolean {
+    return this.apiUrl.includes("sol.blockrun.ai");
+  }
+
+  /**
+   * Chat request with automatic x402 payment.
+   *
+   * Every error it throws carries a {@link RetryDisposition}, which is what
+   * {@link SolanaLLMClient.chatCompletion}'s fallback walk honours: errors of
+   * the unpaid first request, its 402 challenge and the signing step are
+   * `"unpaid"`; anything after a payment was sent (exact or batch) is
+   * `"paid-or-in-doubt"`, and so is any error with an API key once the billed
+   * request was sent, except the account API's explicit 4xx refusal.
+   */
+  private async requestWithPayment(
+    endpoint: string,
+    body: Record<string, unknown>
+  ): Promise<ChatResponse> {
+    const url = `${this.apiUrl}${endpoint}`;
+    // Taken before the first request: a channel close that completes while
+    // this call waits for its 402 keeps it from opening a new channel.
+    const closesAtStart = await this.batchPayer?.closeFence();
+    for (let staleRetries = 0; ; ) {
+      const response = await this.sendUnpaid(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
+        body: JSON.stringify(body),
+      });
+
+      if (response.status === 402) {
+        try {
+          let paymentRequired: PaymentRequired;
+          try {
+            paymentRequired = await this.readPaymentRequired(response);
+          } catch (error) {
+            throw withDisposition(error, "unpaid");
+          }
+          let exactRequired = paymentRequired;
+          if (this.batchPayer && staleRetries === 0) {
+            const batch = await this.batchPayer.pay(
+              paymentRequired,
+              (paymentHeaders) =>
+                this.fetchWithTimeout(url, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT, ...paymentHeaders },
+                  body: JSON.stringify(body),
+                }),
+              // A fresh, unpaid challenge after a 429 wait: the request itself,
+              // sent again without a payment. Every error it throws is unpaid.
+              async (): Promise<Rechallenge> => {
+                const challenge = await this.sendUnpaid(url, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
+                  body: JSON.stringify(body),
+                });
+                if (challenge.status === 402) {
+                  try {
+                    return { kind: "challenge", paymentRequired: await this.readPaymentRequired(challenge) };
+                  } catch (error) {
+                    throw withDisposition(error, "unpaid");
+                  }
+                }
+                if (challenge.ok) return { kind: "served", response: challenge };
+                throw await unpaidApiError(challenge);
+              },
+              closesAtStart
+            );
+            // Paid; served by the fresh unpaid challenge; failed before any
+            // payment (an "unpaid" error); or proven not charged (fallback).
+            // A batch payment in doubt throws BatchPaymentUnresolvedError
+            // ("paid-or-in-doubt").
+            if (batch.kind === "paid") {
+              this.recordSettlement(batch.chargedUsd);
+              return await this.readPaidJson<ChatResponse>(batch.response);
+            }
+            if (batch.kind === "served") return await this.readUnpaidJson<ChatResponse>(batch.response);
+            if (batch.kind === "failed") throw batch.error;
+            exactRequired = batch.paymentRequired ?? paymentRequired;
+          }
+          return await this.handlePaymentAndRetry(url, body, exactRequired, staleRetries > 0);
+        } catch (error) {
+          if (
+            !(error instanceof SafeStaleBlockhashError) ||
+            staleRetries >= STALE_BLOCKHASH_RETRY_BACKOFFS_MS.length
+          ) throw error;
+          await waitForStaleRetry(staleRetries++);
+          continue;
+        }
+      }
+
+      if (!response.ok) throw await unpaidApiError(response);
+
+      // Served without a payment: the free tier, or account billing, where
+      // this very request was the billed one.
+      return await this.readUnpaidJson<ChatResponse>(response);
+    }
+  }
+
+  /**
+   * Read the JSON body of a 2xx served without a payment: the free tier, or
+   * with an API key, where this very request was the billed one.
+   */
+  private async readUnpaidJson<T>(response: Response): Promise<T> {
+    try {
+      return (await response.json()) as T;
+    } catch (error) {
+      throw withDisposition(error, this.apiAuth ? "paid-or-in-doubt" : "unpaid");
+    }
+  }
+
+  /**
+   * Send a request that carries no payment, marking what it throws with its
+   * {@link RetryDisposition}: `"unpaid"` with a wallet; with an API key, see
+   * {@link accountErrorDisposition} (the request itself is billed).
+   */
+  private async sendUnpaid(url: string, init: RequestInit): Promise<Response> {
+    try {
+      return await this.fetchWithTimeout(url, init);
+    } catch (error) {
+      throw withDisposition(error, this.apiAuth ? accountErrorDisposition(error) : "unpaid");
+    }
+  }
+
+  /** Read a paid 2xx response's JSON body. The call was charged, so a failure here is never retried. */
+  private async readPaidJson<T>(response: Response): Promise<T> {
+    try {
+      return (await response.json()) as T;
+    } catch (error) {
+      throw withDisposition(error, "paid-or-in-doubt");
+    }
+  }
+
+  /**
+   * Follow a 202 `{ id, poll_url }` to completion on a Solana media route
+   * (image, music, video).
+   *
+   * **Polls prove ownership, they do not pay.** A Solana payment is a
+   * transaction pinned to a recent blockhash (~60s), so paying every poll of a
+   * multi-minute job meant signing a fresh transaction every few seconds. Each
+   * poll here instead carries the `x-poll-*` headers: the submitting wallet's
+   * ed25519 signature over `blockrun-poll:v1:<kind>:<job id>:<unix seconds>`
+   * (see `poll-ownership.ts`). That proof never charges.
+   *
+   * **Who pays when:**
+   * - image / music: the POST already settled (sol settles at submit because the
+   *   signed transaction would be dead by completion). The caller recorded the
+   *   cost at POST; this loop only fetches the result and never signs a payment.
+   *   A batch-billed image job still answers its proof poll with 402: that job
+   *   falls back to the per-poll payment below.
+   * - video: settles on completion, and a failed job is never charged. A
+   *   finished, unpaid job answers the proof poll with 402 `{status:"completed"}`
+   *   and a normal x402 challenge; ONE payment is signed from that challenge and
+   *   the same poll is re-sent with it. The cost is recorded here, on delivery.
+   *   A paid poll the gateway answers 402 (settlement in progress on another
+   *   poll, outcome unknown, stale blockhash) is re-polled after its
+   *   Retry-After — the gateway's per-job settlement claim makes a later fresh
+   *   payment safe — up to `MAX_PAID_POLL_REFUSALS` times.
+   *
+   * **Fallback, once per job:** if the gateway refuses the proof with its "no
+   * such job" answer (video 400, image/music 404) or answers it with a plain
+   * payment challenge (a gateway or job that predates poll proofs), the rest of
+   * this job is polled the old way — an x-payment signed per poll, which the
+   * gateway verifies against the job's payer and does not charge until a video
+   * completes. Logged to stderr; never switches back.
+   */
+  private async followSolanaJob(
+    submitBody: Record<string, unknown>,
+    budgetMs: number,
+    kind: PollKind,
+    intervalMs = kind === "video" ? VIDEO_POLL_INTERVAL_MS : 2_000
+  ): Promise<Record<string, unknown>> {
+    const id = submitBody.id as string | undefined;
+    const pollPath = submitBody.poll_url as string | undefined;
+    if (!id || !pollPath) return submitBody;
+
+    const pollUrl = this.resolvePollUrl(pollPath);
+    const jobId = pollJobIdFromUrl(pollUrl);
+
+    const deadline = Date.now() + budgetMs;
+    let lastStatus = (submitBody.status as string) || "queued";
+    let ownershipPolls = true;
+    let waitMs = intervalMs;
+    let paidRefusalsLeft = MAX_PAID_POLL_REFUSALS;
+    // Video only: the cost of the payment last sent on a poll of this job, booked once on delivery.
+    let videoCostUsd: number | undefined;
+    // Video only: a payment for the FINISHED job reached the gateway (pending-poll payments are only verified).
+    let settleAttempted = false;
+
+    const fallBack = (why: string): void => {
+      ownershipPolls = false;
+      waitMs = 0;
+      console.warn(
+        `[@blockrun/llm] ${kind} job ${id}: ${why}; falling back to x-payment polling for this job`
+      );
+    };
+    const deliver = (data: Record<string, unknown>, response: Response): Record<string, unknown> => {
+      if (kind === "video") {
+        if (videoCostUsd !== undefined) this.recordSettlement(videoCostUsd);
+        const txHash = response.headers.get("x-payment-receipt");
+        if (txHash) data.txHash = txHash;
+      }
+      return data;
+    };
+    const failIfFailed = (data: Record<string, unknown>, status: number): void => {
+      if (lastStatus === "failed") {
+        throw new APIError(
+          `Upstream job failed: ${(data.error as string) || "unknown"}`,
+          status,
+          sanitizeErrorResponse(data)
+        );
+      }
+    };
+
+    while (Date.now() < deadline) {
+      if (waitMs > 0) await sleep(Math.min(waitMs, Math.max(0, deadline - Date.now())));
+      waitMs = intervalMs;
+
+      // The 402 this poll will be paid against, when it is paid at all.
+      let challenge: Response | undefined;
+
+      if (ownershipPolls) {
+        const proof = signPollOwnership(await solanaKeyToBytes(this.privateKey), kind, jobId);
+        const polled = await this.fetchWithTimeout(pollUrl, {
+          method: "GET",
+          headers: { "User-Agent": USER_AGENT, ...proof },
+        });
+        const data = await readJsonOrEmpty(polled);
+
+        if (polled.status === 402) {
+          if (kind === "video" && data.status === "completed") {
+            // Finished and unpaid: this challenge is the one payment for the job.
+            lastStatus = "completed";
+            settleAttempted = true;
+            challenge = new Response(JSON.stringify(data), { status: 402, headers: polled.headers });
+          } else {
+            fallBack(
+              kind === "image"
+                ? "the gateway asks for a payment on this poll (a batch-billed job, or a gateway without poll proofs)"
+                : "the gateway answered the poll proof with a payment challenge (a gateway without poll proofs)"
+            );
+            continue;
+          }
+        } else if (polled.status === (kind === "video" ? 400 : 404)) {
+          fallBack(`the gateway refused the poll proof (HTTP ${polled.status})`);
+          continue;
+        } else {
+          lastStatus = (data.status as string) || lastStatus;
+          failIfFailed(data, polled.status);
+          if (polled.status === 200 && lastStatus === "completed") return deliver(data, polled);
+          if (!isPendingPollStatus(polled.status)) {
+            throw new APIError(`Poll failed: ${polled.status}`, polled.status, sanitizeErrorResponse(data));
+          }
+          waitMs = retryAfterMs(polled) ?? intervalMs;
+          continue;
+        }
+      }
+
+      if (!challenge) {
+        // x-payment polling: an unpaid GET for a 402 carrying a fresh blockhash.
+        const unpaid = await this.fetchWithTimeout(pollUrl, {
+          method: "GET",
+          headers: { "User-Agent": USER_AGENT },
+        });
+        if (unpaid.status === 200) {
+          // already settled on an earlier poll: URLs come back idempotently
+          return deliver((await unpaid.json()) as Record<string, unknown>, unpaid);
+        }
+        if (unpaid.status !== 402) {
+          let errorBody: unknown;
+          try { errorBody = await unpaid.json(); } catch { errorBody = { error: "Poll failed" }; }
+          throw new APIError(`Poll failed: ${unpaid.status}`, unpaid.status, sanitizeErrorResponse(errorBody));
+        }
+        challenge = unpaid;
+      }
+
+      const { paymentPayload, costUsd } = await this.signPaymentFrom402(
+        pollUrl,
+        challenge,
+        true,             // always a fresh blockhash; the last one is stale by now
+        pollUrl
+      );
+      if (kind === "video") videoCostUsd = costUsd;
+
+      let paid: Response;
+      try {
+        paid = await this.fetchWithTimeout(pollUrl, {
+          method: "GET",
+          headers: { "User-Agent": USER_AGENT, "PAYMENT-SIGNATURE": paymentPayload },
+        });
+      } catch (error) {
+        // The payment may have reached the gateway and settled, with only the
+        // answer lost. Do not give up on a job that may be paid for: the next
+        // poll reads the job's settlement record (200 already_settled) or, if it
+        // never settled, asks again.
+        if (kind === "video" && lastStatus === "completed") settleAttempted = true;
+        if (--paidRefusalsLeft <= 0) {
+          throw withDisposition(
+            new PaymentError(
+              `Paid poll failed in transit (${error instanceof Error ? error.message : String(error)}). ` +
+                `The payment may have settled: resume the job by polling ${pollUrl} with the same wallet ` +
+                `before submitting again.`
+            ),
+            "paid-or-in-doubt"
+          );
+        }
+        continue;
+      }
+
+      const data = await readJsonOrEmpty(paid);
+      lastStatus = (data.status as string) || lastStatus;
+      failIfFailed(data, paid.status);
+      if (paid.status === 200 && lastStatus === "completed") return deliver(data, paid);
+
+      if (paid.status === 402 && kind === "video") {
+        if (
+          data.error === "Payment verification failed" &&
+          !(await isSafeStaleBlockhashResponse(new Response(JSON.stringify(data), { status: 402 })))
+        ) {
+          // Refused at verification: settlement never ran, nothing was charged.
+          throw new PaymentError(
+            "Payment for the finished video was rejected. Check your Solana USDC balance, then " +
+              `resume the job by polling ${pollUrl} with the same wallet.`
+          );
+        }
+        // Settlement in progress on another poll, outcome unknown, or a stale
+        // blockhash at settle. Asking again (and signing a fresh payment if the
+        // job still reads unpaid) is the gateway's documented recovery and cannot
+        // charge twice: a per-job claim lets only one poll settle, a claim whose
+        // settle timed out is held with that authorization recorded, and the poll
+        // that takes it over checks on chain whether it landed before settling
+        // anything new (sol #398). A stale-blockhash settle can never land.
+        // Wait as told, then poll again.
+        settleAttempted = true;
+        if (--paidRefusalsLeft <= 0) {
+          throw withDisposition(
+            new PaymentError(
+              `Payment for the finished video did not settle after ${MAX_PAID_POLL_REFUSALS} attempts ` +
+                `(last: ${(data.error as string) || "HTTP 402"}). It may still settle: resume the job by ` +
+                `polling ${pollUrl} with the same wallet before submitting again.`
+            ),
+            "paid-or-in-doubt"
+          );
+        }
+        waitMs = retryAfterMs(paid) ?? intervalMs;
+        continue;
+      }
+
+      // 202 queued / in_progress, or a transient 503/504: keep going. A pending
+      // poll is never charged, so retrying is free.
+      if (!isPendingPollStatus(paid.status) && paid.status !== 200) {
+        throw new APIError(`Poll failed: ${paid.status}`, paid.status, sanitizeErrorResponse(data));
+      }
+      waitMs = retryAfterMs(paid) ?? intervalMs;
+    }
+
+    const billing = kind === "video"
+      ? settleAttempted
+        ? "A payment for the finished video was sent and may still settle."
+        : "Nothing was charged: a video is charged only when a completed poll is paid."
+      : "The submit was already paid.";
+    throw new APIError(
+      `Job did not complete within ${Math.round(budgetMs / 1000)}s (last status: ${lastStatus}). ` +
+        `${billing} Resume by polling the same poll_url with the same wallet before submitting again.`,
+      504,
+      { id, last_status: lastStatus, poll_url: pollUrl }
+    );
+  }
+
+  /**
+   * Absolute URL for a job's `poll_url`. The gateway returns `/api/v1/...`;
+   * {@link buildUrl} drops the `/api` that `apiUrl` already ends with. An
+   * absolute poll_url must be on the gateway's own origin: the poll carries a
+   * wallet signature (and, for a finished video, a payment).
+   */
+  private resolvePollUrl(pollPath: string): string {
+    if (!/^https?:\/\//i.test(pollPath)) return this.buildUrl(pollPath);
+    if (new URL(pollPath).origin !== new URL(this.apiUrl).origin) {
+      throw new APIError(`poll_url is not on the gateway origin: ${pollPath}`, 502, { poll_url: pollPath });
+    }
+    return pollPath;
+  }
+
+  /**
+   * Turn a `402` into a signed Solana payment payload.
+   *
+   * Extracted because four call sites need it — chat, the raw POST helpers, the
+   * raw GET helper, and {@link SolanaLLMClient.stream} — and it had been
+   * written out three times before this. That mattered more than ordinary
+   * duplication: this is the code that signs a transfer of the caller's USDC,
+   * so three copies meant every fix to it had to be applied three times or
+   * quietly apply to two thirds of the paths.
+   *
+   * @param url - the request being paid for.
+   * @param response - the gateway's `402`, not yet consumed.
+   * @param forceFreshBlockhash - set on a re-sign after a stale-blockhash
+   *   rejection, so the retry cannot produce byte-identical transaction bytes.
+   * @param resourceFallback - resource URL to claim when the 402 states none.
+   * @returns the header value to replay with, and what it will settle for.
+   * @throws PaymentError when the 402 carries no usable Solana requirements.
+   */
+  private async signPaymentFrom402(
+    url: string,
+    response: Response,
+    forceFreshBlockhash: boolean,
+    resourceFallback = url
+  ): Promise<{ paymentPayload: string; costUsd: number }> {
+    return this.signExactPayment(
+      url,
+      await this.readPaymentRequired(response),
+      forceFreshBlockhash,
+      resourceFallback
+    );
+  }
+
+  /** Read a `402`'s payment requirements from its header, or its JSON body. */
+  private async readPaymentRequired(response: Response): Promise<PaymentRequired> {
+    let paymentHeader = response.headers.get("payment-required");
+
+    if (!paymentHeader) {
+      try {
+        const respBody = await response.json() as Record<string, unknown>;
+        if (respBody.accepts || respBody.x402Version) {
+          paymentHeader = btoa(JSON.stringify(respBody));
+        }
+      } catch { /* ignore */ }
+    }
+
+    if (!paymentHeader) {
+      throw new PaymentError("402 response but no payment requirements found");
+    }
+
+    return parsePaymentRequired(paymentHeader);
+  }
+
+  /** Sign the `exact` accept of a 402 as an SPL TransferChecked payment. */
+  private async signExactPayment(
+    url: string,
+    paymentRequired: PaymentRequired,
+    forceFreshBlockhash: boolean,
+    resourceFallback = url
+  ): Promise<{ paymentPayload: string; costUsd: number }> {
+    // A batch-settlement accept is a channel authorization, not a transfer.
+    // The gateway lists it after exact, but never sign a transfer against one.
+    const details = extractPaymentDetails(
+      { ...paymentRequired, accepts: paymentRequired.accepts.filter((accept) => accept.scheme !== BATCH_SCHEME) },
+      SOLANA_NETWORK
+    );
+
+    if (!details.network?.startsWith("solana:")) {
+      throw new PaymentError(
+        `Expected Solana payment network, got: ${details.network}. Use LLMClient for Base payments.`
+      );
+    }
+
+    const feePayer = (details.extra as { feePayer?: string })?.feePayer;
+    if (!feePayer) throw new PaymentError("Missing feePayer in 402 extra field");
+
+    const fromAddress = await this.getWalletAddress();
+    const secretKey = await solanaKeyToBytes(this.privateKey);
+    const extensions = ((paymentRequired as unknown) as Record<string, unknown>).extensions as Record<string, unknown> | undefined;
+
+    const paymentPayload = await createSolanaPaymentPayload(
+      secretKey,
+      fromAddress,
+      details.recipient,
+      details.amount,
+      feePayer,
+      {
+        resourceUrl: validateResourceUrl(
+          details.resource?.url || resourceFallback,
+          this.apiUrl
+        ),
+        resourceDescription: details.resource?.description || "BlockRun Solana AI API call",
+        maxTimeoutSeconds: details.maxTimeoutSeconds || 300,
+        extra: details.extra as Record<string, unknown>,
+        extensions,
+        rpcUrl: this.rpcUrl,
+        rpcHeaders: this.rpcHeaders,
+        forceFreshBlockhash,
+      }
+    );
+
+    return { paymentPayload, costUsd: parseFloat(details.amount) / 1e6 };
+  }
+
+  private async handlePaymentAndRetry(
+    url: string,
+    body: Record<string, unknown>,
+    paymentRequired: PaymentRequired,
+    forceFreshBlockhash = false
+  ): Promise<ChatResponse> {
+    let signed: { paymentPayload: string; costUsd: number };
+    try {
+      signed = await this.signExactPayment(url, paymentRequired, forceFreshBlockhash, `${this.apiUrl}/v1/chat/completions`);
+    } catch (error) {
+      // Nothing was sent: building the payment failed.
+      throw withDisposition(error, "unpaid");
+    }
+    const { paymentPayload, costUsd } = signed;
+
+    let retryResponse: Response;
+    try {
+      retryResponse = await this.fetchWithTimeout(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": USER_AGENT,
+          "PAYMENT-SIGNATURE": paymentPayload,
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (error) {
+      // The signed transfer may have reached the gateway and settled.
+      throw withDisposition(error, "paid-or-in-doubt");
+    }
+
+    await this.assertPaid(retryResponse);
+    this.recordSettlement(costUsd);
+
+    return this.readPaidJson<ChatResponse>(retryResponse);
+  }
+
+  private async requestWithPaymentRaw(
+    endpoint: string,
+    body: Record<string, unknown>,
+    media: MediaJobOptions = {}
+  ): Promise<Record<string, unknown>> {
+    const url = `${this.apiUrl}${endpoint}`;
+    const pollBudgetMs = media.pollBudgetMs ?? this.timeout;
+    for (let staleRetries = 0; ; ) {
+      const response = await this.fetchWithTimeout(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
+        body: JSON.stringify(body),
+      }, media.submitTimeoutMs);
+
+      if (response.status === 402) {
+        try {
+          return await this.handlePaymentAndRetryRaw(url, body, response, staleRetries > 0, media);
+        } catch (error) {
+          if (
+            !(error instanceof SafeStaleBlockhashError) ||
+            staleRetries >= STALE_BLOCKHASH_RETRY_BACKOFFS_MS.length
+          ) throw error;
+          await waitForStaleRetry(staleRetries++);
+          continue;
+        }
+      }
+
+      if (!response.ok) {
+        let errorBody: unknown;
+        try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
+        throw new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(errorBody));
+      }
+
+      if (this.apiAuth && /^\/v1\/(images|videos|audio)\//.test(endpoint)) {
+        return this.apiAuth.poll<Record<string, unknown>>(
+          response,
+          pollBudgetMs,
+          endpoint.startsWith("/v1/videos/") ? VIDEO_POLL_INTERVAL_MS : 2_000
+        );
+      }
+      return response.json() as Promise<Record<string, unknown>>;
+    }
+  }
+
+  private async handlePaymentAndRetryRaw(
+    url: string,
+    body: Record<string, unknown>,
+    response: Response,
+    forceFreshBlockhash = false,
+    media: MediaJobOptions = {}
+  ): Promise<Record<string, unknown>> {
+    const { paymentPayload, costUsd } = await this.signPaymentFrom402(url, response, forceFreshBlockhash);
+
+    let retryResponse: Response;
+    try {
+      retryResponse = await this.fetchWithTimeout(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": USER_AGENT,
+          "PAYMENT-SIGNATURE": paymentPayload,
+        },
+        body: JSON.stringify(body),
+      }, media.submitTimeoutMs);
+    } catch (error) {
+      // The signed transfer may have reached the gateway and settled.
+      throw withDisposition(error, "paid-or-in-doubt");
+    }
+
+    await this.assertPaid(retryResponse);
+
+    // A slow model answers 202 { id, poll_url } instead of the media. Returning
+    // that envelope as the result is the bug this branch exists to prevent: the
+    // caller would get a job id where it expected an image, and nothing would
+    // ever settle.
+    if (retryResponse.status === 202) {
+      const kind = pollKindFor(url);
+      // Solana image and music routes settle at POST, so the charge has ALREADY
+      // happened — record it here, before following the job. Recording on
+      // completion instead would drop the cost whenever a paid job later fails
+      // or times out. A video POST is only verified: followSolanaJob records
+      // the video's cost when the finished job is paid for.
+      if (kind !== "video") this.recordSettlement(costUsd);
+      const submitted = (await retryResponse.json()) as Record<string, unknown>;
+      return this.followSolanaJob(submitted, media.pollBudgetMs ?? this.timeout, kind);
+    }
+
+    this.recordSettlement(costUsd);
+    return retryResponse.json() as Promise<Record<string, unknown>>;
+  }
+
+  private async getWithPaymentRaw(
+    endpoint: string,
+    params?: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    const query = params ? "?" + new URLSearchParams(params).toString() : "";
+    const url = `${this.apiUrl}${endpoint}${query}`;
+
+    for (let staleRetries = 0; ; ) {
+      const response = await this.fetchWithTimeout(url, {
+        method: "GET",
+        headers: { "User-Agent": USER_AGENT },
+      });
+
+      if (response.status === 402) {
+        try {
+          return await this.handleGetPaymentAndRetryRaw(url, endpoint, params, response, staleRetries > 0);
+        } catch (error) {
+          if (
+            !(error instanceof SafeStaleBlockhashError) ||
+            staleRetries >= STALE_BLOCKHASH_RETRY_BACKOFFS_MS.length
+          ) throw error;
+          await waitForStaleRetry(staleRetries++);
+          continue;
+        }
+      }
+
+      if (!response.ok) {
+        let errorBody: unknown;
+        try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
+        throw new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(errorBody));
+      }
+
+      return response.json() as Promise<Record<string, unknown>>;
+    }
+  }
+
+  private async handleGetPaymentAndRetryRaw(
+    url: string,
+    endpoint: string,
+    params: Record<string, string> | undefined,
+    response: Response,
+    forceFreshBlockhash = false
+  ): Promise<Record<string, unknown>> {
+    const { paymentPayload, costUsd } = await this.signPaymentFrom402(url, response, forceFreshBlockhash);
+
+    const query = params ? "?" + new URLSearchParams(params).toString() : "";
+    const retryUrl = `${this.apiUrl}${endpoint}${query}`;
+    const retryResponse = await this.fetchWithTimeout(retryUrl, {
+      method: "GET",
+      headers: {
+        "User-Agent": USER_AGENT,
+        "PAYMENT-SIGNATURE": paymentPayload,
+      },
+    });
+
+    await this.assertPaid(retryResponse);
+    this.recordSettlement(costUsd);
+
+    return retryResponse.json() as Promise<Record<string, unknown>>;
+  }
+
+  /**
+   * Fail a post-payment response, telling a re-signable rejection from a real one.
+   *
+   * A `402` here is not "pay again": it is the gateway refusing the payment we
+   * just signed. Only a rejection the gateway attributes to the VERIFICATION
+   * phase is safe to re-sign — anything settled, or ambiguous about which
+   * phase it failed in, could already have moved USDC, and re-signing it would
+   * pay twice. {@link isSafeStaleBlockhashResponse} is where that judgement
+   * lives.
+   * @param response - the reply to the paid request.
+   * @throws SafeStaleBlockhashError when the caller should re-sign, PaymentError
+   *   when it should not, APIError for any other failure. Every one but the
+   *   first is marked `"paid-or-in-doubt"`: the payment may have settled.
+   */
+  private async assertPaid(response: Response): Promise<void> {
+    if (response.status === 402) {
+      if (await isSafeStaleBlockhashResponse(response)) {
+        // Rejected at verification: nothing settled.
+        throw withDisposition(new SafeStaleBlockhashError(), "unpaid");
+      }
+      throw withDisposition(new PaymentError("Payment was rejected. Check your Solana USDC balance."), "paid-or-in-doubt");
+    }
+
+    if (!response.ok) {
+      let errorBody: unknown;
+      try { errorBody = await response.json(); } catch { errorBody = { error: "Request failed" }; }
+      // sol.blockrun.ai answers 503 PAYMENT_VERIFICATION_UNAVAILABLE only from a
+      // failed VERIFICATION (its verifier is down): settlement never ran and the
+      // signed transaction was never broadcast. The batch path already trusts this
+      // code as "nothing charged" (BATCH_REFUSALS); exact now does the same.
+      const unverified = response.status === 503
+        && (errorBody as { code?: unknown } | null)?.code === "PAYMENT_VERIFICATION_UNAVAILABLE";
+      throw withDisposition(
+        new APIError(`API error after payment: ${response.status}`, response.status, sanitizeErrorResponse(errorBody)),
+        unverified ? "unpaid" : "paid-or-in-doubt"
+      );
+    }
+  }
+
+  /** Count one settled x402 payment against the session total. */
+  private recordSettlement(costUsd: number): void {
+    this.sessionCalls += 1;
+    this.sessionTotalUsd += costUsd;
+  }
+
+  private async fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number = this.timeout): Promise<Response> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await (this.apiAuth ? this.apiAuth.fetch.bind(this.apiAuth) : fetch)(url, { ...options, signal: controller.signal });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
+/**
+ * Convenience function: create SolanaLLMClient for sol.blockrun.ai.
+ */
+export function solanaClient(options: SolanaLLMClientOptions = {}): SolanaLLMClient {
+  return new SolanaLLMClient({ ...options, apiUrl: SOLANA_API_URL });
+}
