@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { LLMClient } from "../../src/client";
-import { APIError } from "../../src/types";
+import { APIError, withDisposition } from "../../src/types";
 import { routingText, routeWithCatalog } from "../../src/router-adapter";
 import { DEFAULT_MODEL_CAPABILITIES } from "@blockrun/router-core";
 import { TEST_PRIVATE_KEY, buildChatResponse } from "../helpers/testHelpers";
@@ -231,14 +231,15 @@ describe("routingText", () => {
 });
 
 describe("chatCompletion fallback walk", () => {
-  it("falls over to the next model on 429 (saturated upstream)", async () => {
+  it("falls over to the next model on an unpaid 429 (saturated upstream)", async () => {
     const client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
     const reqSpy = vi
       .spyOn(
         client as unknown as { requestWithPayment: (...a: unknown[]) => unknown },
         "requestWithPayment",
       )
-      .mockRejectedValueOnce(new APIError("rate limited", 429))
+      // requestWithPayment marks a 429 to its unpaid first request "unpaid".
+      .mockRejectedValueOnce(withDisposition(new APIError("rate limited", 429), "unpaid"))
       .mockResolvedValueOnce(buildChatResponse({ content: "recovered" }));
 
     const result = await client.chatCompletion(
@@ -251,6 +252,26 @@ describe("chatCompletion fallback walk", () => {
     expect(reqSpy).toHaveBeenCalledTimes(2);
     const secondBody = reqSpy.mock.calls[1][1] as { model: string };
     expect(secondBody.model).toBe("google/gemini-2.5-flash");
+  });
+
+  it.each([
+    ["after the payment was sent", (err: APIError) => withDisposition(err, "paid-or-in-doubt")],
+    ["when the error carries no disposition", (err: APIError) => err],
+  ])("does not walk the chain on a 429 %s", async (_label, mark) => {
+    const client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
+    const reqSpy = vi
+      .spyOn(
+        client as unknown as { requestWithPayment: (...a: unknown[]) => unknown },
+        "requestWithPayment",
+      )
+      .mockRejectedValueOnce(mark(new APIError("rate limited", 429)));
+
+    await expect(
+      client.chatCompletion("openai/gpt-4o", [{ role: "user", content: "hi" }], {
+        fallbackModels: ["google/gemini-2.5-flash"],
+      }),
+    ).rejects.toThrow("rate limited");
+    expect(reqSpy).toHaveBeenCalledTimes(1);
   });
 
   it("does not walk the chain on non-transient 4xx", async () => {

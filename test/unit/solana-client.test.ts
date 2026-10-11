@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { SolanaLLMClient } from "../../src/solana-client";
-import { APIError } from "../../src/types";
+import { APIError, withDisposition } from "../../src/types";
 import { buildChatResponse } from "../helpers/testHelpers";
 
 const TEST_BS58_KEY = "5MaiiCavjCmn9Hs1o3eznqDEhRwxo7pXiAYez7keQUviQeRjpzKCY8trDwpvBMTKTpNFbCJsBZthJ4tCs6o62rr";
@@ -44,11 +44,12 @@ describe("SolanaLLMClient", () => {
     expect(requestBody.model).toBe(response.routing?.model);
   });
 
-  it("walks the ordered fallback chain after a transient Solana error", async () => {
+  it("walks the ordered fallback chain after a transient, unpaid Solana error", async () => {
     const client = new SolanaLLMClient({ privateKey: TEST_BS58_KEY });
     const requestSpy = vi
       .spyOn(client as any, "requestWithPayment")
-      .mockRejectedValueOnce(new APIError("upstream unavailable", 503))
+      // requestWithPayment marks a 503 to its unpaid first request "unpaid".
+      .mockRejectedValueOnce(withDisposition(new APIError("upstream unavailable", 503), "unpaid"))
       .mockResolvedValueOnce(buildChatResponse({ model: "fallback/model" }));
 
     const response = await client.chatCompletion(

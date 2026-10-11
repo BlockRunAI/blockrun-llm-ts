@@ -172,6 +172,9 @@ export {
   PaymentError,
   RetiredEndpointError,
   APIError,
+  // Whether a failed request may be retried without paying twice
+  retryDisposition,
+  type RetryDisposition,
 } from "./types";
 export {
   BASE_CHAIN_ID,
@@ -212,7 +215,17 @@ export {
 
 // Solana client
 export { SolanaLLMClient, solanaClient, type SolanaLLMClientOptions } from "./solana-client";
-export { BLOCKRUN_SOL_OPERATOR, type SolanaBatchOptions } from "./solana-batch";
+export {
+  BLOCKRUN_SOL_OPERATOR,
+  DEFAULT_BATCH_RATE_LIMIT,
+  BatchPaymentUnresolvedError,
+  BatchCloseDeferredError,
+  type BatchUnresolvedReason,
+  type BatchPayloadKind,
+  type SolanaBatchOptions,
+  type SolanaBatchEvent,
+  type SolanaBatchStats,
+} from "./solana-batch";
 
 // Solana wallet utilities
 export {

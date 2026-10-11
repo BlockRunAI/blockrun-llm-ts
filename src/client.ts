@@ -1,6 +1,6 @@
 import { toWireSearchParameters, toWireTools } from "./search-wire";
 import { withCost } from "./receipt";
-import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js";
+import { accountErrorDisposition, resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js";
 /**
  * BlockRun LLM Client - Main SDK entry point.
  *
@@ -47,6 +47,7 @@ import {
   APIError,
   PaymentError,
   RetiredEndpointError,
+  withDisposition,
 } from "./types";
 import {
   BASE_MINIMUM_PAYMENT_USD,
@@ -435,10 +436,13 @@ export class LLMClient {
    * Full chat completion interface (OpenAI-compatible).
    *
    * When `fallbackModels` is set, transient failures (timeouts, network
-   * errors, 5xx) on the primary model trigger a retry against the next
-   * model in the list before raising. 4xx errors and PaymentError
-   * propagate immediately — those aren't "swap upstream and retry"
-   * situations. Each fallback hop logs one stderr line.
+   * errors, 429, 5xx) on the primary model trigger a retry against the next
+   * model in the list before raising, but only while no payment has been
+   * sent for it (the error's {@link RetryDisposition} is `"unpaid"`). Once a
+   * payment was sent, any failure propagates: the next model would be a
+   * second charge. 4xx errors and PaymentError also propagate immediately —
+   * those aren't "swap upstream and retry" situations. Each fallback hop
+   * logs one stderr line.
    *
    * @param model - Primary model ID
    * @param messages - Array of messages with role and content
@@ -552,36 +556,43 @@ export class LLMClient {
 
   /**
    * Make a request with automatic x402 payment handling.
+   *
+   * Every error it throws carries a {@link RetryDisposition}, which is what
+   * {@link LLMClient.chatCompletion}'s fallback walk honours: errors of the
+   * unpaid first request (and its one 502/503 retry), of the 402 challenge
+   * and of signing are `"unpaid"`; anything after the signed payment was sent
+   * is `"paid-or-in-doubt"`. With an API key the request itself is billed, so
+   * only the account API's explicit 4xx refusal is `"unpaid"`.
    */
   private async requestWithPayment(
     endpoint: string,
     body: Record<string, unknown>
   ): Promise<ChatResponse> {
     const url = `${this.apiUrl}${endpoint}`;
-
-    // First attempt (will likely return 402)
-    const response = await this.fetchWithTimeout(url, {
+    const unpaid: RequestInit = {
       method: "POST",
       headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
       body: JSON.stringify(body),
-    });
+    };
 
-    // Auto-retry on transient server errors (502/503)
+    // First attempt (will likely return 402)
+    const response = await this.sendUnpaid(url, unpaid);
+
+    // Auto-retry on transient server errors (502/503). Nothing is paid yet.
     if (response.status === 502 || response.status === 503) {
       await new Promise(r => setTimeout(r, 1000));
-      const retryResp = await this.fetchWithTimeout(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
-        body: JSON.stringify(body),
-      });
+      const retryResp = await this.sendUnpaid(url, unpaid);
       if (retryResp.status !== 502 && retryResp.status !== 503) {
         if (retryResp.status === 402) return this.handlePaymentAndRetry(url, body, retryResp);
         if (!retryResp.ok) {
           let errorBody: unknown;
           try { errorBody = await retryResp.json(); } catch { errorBody = { error: "Request failed" }; }
-          throw new APIError(`API error: ${retryResp.status}`, retryResp.status, sanitizeErrorResponse(errorBody));
+          throw withDisposition(
+            new APIError(`API error: ${retryResp.status}`, retryResp.status, sanitizeErrorResponse(errorBody)),
+            "unpaid"
+          );
         }
-        return this.parseChatResponse(retryResp);
+        return this.parseUnpaidChatResponse(retryResp);
       }
     }
 
@@ -598,24 +609,73 @@ export class LLMClient {
       } catch {
         errorBody = { error: "Request failed" };
       }
-      throw new APIError(
-        `API error: ${response.status}`,
-        response.status,
-        sanitizeErrorResponse(errorBody)
+      throw withDisposition(
+        new APIError(
+          `API error: ${response.status}`,
+          response.status,
+          sanitizeErrorResponse(errorBody)
+        ),
+        "unpaid"
       );
     }
 
-    return this.parseChatResponse(response);
+    return this.parseUnpaidChatResponse(response);
+  }
+
+  /**
+   * Send a request that carries no payment, marking what it throws with its
+   * {@link RetryDisposition}: `"unpaid"` with a wallet; with an API key, see
+   * {@link accountErrorDisposition} (the request itself is billed).
+   */
+  private async sendUnpaid(url: string, init: RequestInit): Promise<Response> {
+    try {
+      return await this.fetchWithTimeout(url, init);
+    } catch (err) {
+      throw withDisposition(err, this.apiAuth ? accountErrorDisposition(err) : "unpaid");
+    }
+  }
+
+  /**
+   * Parse a response to a request that carried no payment: the free tier,
+   * or, with an API key, the billed request itself.
+   */
+  private async parseUnpaidChatResponse(response: Response): Promise<ChatResponse> {
+    try {
+      return await this.parseChatResponse(response);
+    } catch (err) {
+      throw withDisposition(err, this.apiAuth ? "paid-or-in-doubt" : "unpaid");
+    }
   }
 
   /**
    * Handle 402 response: parse requirements, sign payment, retry.
+   *
+   * Anything thrown before the signed payment is sent is `"unpaid"`; anything
+   * after it, `"paid-or-in-doubt"` (see {@link RetryDisposition}).
    */
   private async handlePaymentAndRetry(
     url: string,
     body: Record<string, unknown>,
     response: Response
   ): Promise<ChatResponse> {
+    let signed: { paymentPayload: string; details: ReturnType<typeof extractPaymentDetails> };
+    try {
+      signed = await this.signFrom402(url, response);
+    } catch (err) {
+      throw withDisposition(err, "unpaid");
+    }
+    try {
+      return await this.sendPaid(url, body, signed.paymentPayload, signed.details);
+    } catch (err) {
+      throw withDisposition(err, "paid-or-in-doubt");
+    }
+  }
+
+  /** Read a 402's requirements and sign the exact payment for them. Sends nothing. */
+  private async signFrom402(
+    url: string,
+    response: Response
+  ): Promise<{ paymentPayload: string; details: ReturnType<typeof extractPaymentDetails> }> {
     // Get payment required header (x402 library uses lowercase)
     let paymentHeader = response.headers.get("payment-required");
 
@@ -663,7 +723,16 @@ export class LLMClient {
         extensions,
       }
     );
+    return { paymentPayload, details };
+  }
 
+  /** Send the signed payment and read the answer. The payment may settle from here on. */
+  private async sendPaid(
+    url: string,
+    body: Record<string, unknown>,
+    paymentPayload: string,
+    details: ReturnType<typeof extractPaymentDetails>
+  ): Promise<ChatResponse> {
     // Retry with payment (x402 library expects PAYMENT-SIGNATURE header)
     const retryResponse = await this.fetchWithTimeout(url, {
       method: "POST",
@@ -675,7 +744,9 @@ export class LLMClient {
       body: JSON.stringify(body),
     });
 
-    // Auto-retry on transient server errors (502/503) after payment
+    // Auto-retry on transient server errors (502/503) after payment. This
+    // re-sends the SAME signed authorization (one EIP-3009 nonce), which can
+    // settle at most once: it is not a second payment.
     if (retryResponse.status === 502 || retryResponse.status === 503) {
       await new Promise(r => setTimeout(r, 1000));
       const retryResp2 = await this.fetchWithTimeout(url, {
@@ -815,27 +886,51 @@ export class LLMClient {
     const now = Date.now();
 
     // --- Try pre-auth (skip 402 round-trip) ---
+    // Once the signed payment is SENT, only a 402 (the payment was refused at
+    // verification, e.g. the price changed) may fall through to the normal flow,
+    // which signs and sends a second payment. Any other answer, or no answer
+    // (timeout, network error), cannot be told apart from a call that settled:
+    // the gateway verified the payment and may have served and settled it (a
+    // proxy's 502/504 or our own timeout says nothing about the handler behind
+    // it). Paying again there could charge the call twice.
     if (cached && now - cached.cachedAt < LLMClient.PRE_AUTH_TTL_MS) {
+      let signed: { paymentPayload: string; costUsd: number } | undefined;
       try {
-        const { paymentPayload, costUsd } = await this.signPayment(cached.paymentHeader);
-        const preAuthResp = await this.fetchWithTimeout(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "User-Agent": USER_AGENT,
-            "PAYMENT-SIGNATURE": paymentPayload,
-          },
-          body: JSON.stringify(body),
-        });
-        if (preAuthResp.status !== 402 && preAuthResp.ok) {
+        signed = await this.signPayment(cached.paymentHeader);
+      } catch {
+        this.preAuthCache.delete(cacheKey); // nothing was sent: the normal flow pays once
+      }
+      if (signed) {
+        let preAuthResp: Response;
+        try {
+          preAuthResp = await this.fetchWithTimeout(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "User-Agent": USER_AGENT,
+              "PAYMENT-SIGNATURE": signed.paymentPayload,
+            },
+            body: JSON.stringify(body),
+          });
+        } catch (err) {
+          this.preAuthCache.delete(cacheKey);
+          throw withDisposition(err, "paid-or-in-doubt");
+        }
+        if (preAuthResp.ok) {
           this.sessionCalls += 1;
-          this.sessionTotalUsd += costUsd;
+          this.sessionTotalUsd += signed.costUsd;
           return preAuthResp; // Pre-auth hit — no 402 round-trip
         }
-        // Pre-auth rejected (price changed?) — evict and fall through
         this.preAuthCache.delete(cacheKey);
-      } catch {
-        this.preAuthCache.delete(cacheKey);
+        if (preAuthResp.status !== 402) {
+          let errorBody: unknown;
+          try { errorBody = await preAuthResp.json(); } catch { errorBody = { error: "Request failed" }; }
+          throw withDisposition(
+            new APIError(`API error after payment: ${preAuthResp.status}`, preAuthResp.status, sanitizeErrorResponse(errorBody)),
+            "paid-or-in-doubt",
+          );
+        }
+        // 402: the cached terms were refused (price changed?) — fall through and pay once.
       }
     }
 

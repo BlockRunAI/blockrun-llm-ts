@@ -1,4 +1,4 @@
-import { APIError } from "./types.js";
+import { APIError, type RetryDisposition } from "./types.js";
 import { sanitizeErrorResponse, validateApiUrl } from "./validation.js";
 
 /** Account billing is independent of the wallet payment chain. */
@@ -49,6 +49,34 @@ export function resolveApiKeyAuth(
   const base = options.apiUrl ?? (typeof process !== "undefined"
     ? process.env?.BLOCKRUN_API_BASE_URL : undefined) ?? API_KEY_URL;
   return new ApiKeyAuth(key.trim(), base);
+}
+
+/**
+ * The {@link RetryDisposition} of an error from an account-mode chat request.
+ *
+ * With an API key the request itself is the billed one (which is why
+ * {@link ApiKeyAuth.fetch} never replays a POST), so a request that was sent
+ * may have been charged. The account API's explicit answers are refusals that
+ * charged nothing: a 4xx (a 429 rate limit, a 402 for credits, a 400 or 401),
+ * and a 5xx that carries its JSON error envelope. api.blockrun.ai holds credit
+ * at verification and debits only an accepted 2xx; any other answer of a chat
+ * request releases the hold at $0. A 5xx WITHOUT that envelope (an HTML or
+ * empty 502/504 from a proxy or load balancer in front of it), a timeout, an
+ * abort or a network error proves nothing and stays in doubt.
+ *
+ * Used only on chat requests, the ones `fallbackModels` re-sends.
+ */
+export function accountErrorDisposition(err: unknown): RetryDisposition {
+  if (!(err instanceof APIError)) return "paid-or-in-doubt";
+  if (err.statusCode >= 400 && err.statusCode < 500) return "unpaid";
+  if (err.statusCode >= 500 && hasGatewayErrorEnvelope(err.response)) return "unpaid";
+  return "paid-or-in-doubt";
+}
+
+/** The account API's own error body: {@link ApiKeyAuth.fetch} keeps its string `message`. */
+function hasGatewayErrorEnvelope(response: unknown): boolean {
+  return !!response && typeof response === "object" && typeof (response as { message?: unknown }).message === "string"
+    && (response as { message: string }).message.length > 0;
 }
 
 /** Throws for wallet-only operations instead of inventing a wallet identity. */
