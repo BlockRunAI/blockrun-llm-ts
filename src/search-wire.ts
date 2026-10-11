@@ -40,12 +40,18 @@ function sourceToWire(source: SearchSource): Wire {
       put(out, "enable_video_understanding", source.enableVideoUnderstanding);
       break;
     case "web":
-    case "news":
       put(out, "country", source.country);
       put(out, "allowed_websites", source.allowedWebsites);
       put(out, "excluded_websites", source.excludedWebsites);
       put(out, "safe_search", source.safeSearch);
       put(out, "enable_image_understanding", source.enableImageUnderstanding);
+      break;
+    case "news":
+      // The gateway's news source has no image-understanding flag.
+      put(out, "country", source.country);
+      put(out, "allowed_websites", source.allowedWebsites);
+      put(out, "excluded_websites", source.excludedWebsites);
+      put(out, "safe_search", source.safeSearch);
       break;
     case "rss":
       put(out, "links", source.links);

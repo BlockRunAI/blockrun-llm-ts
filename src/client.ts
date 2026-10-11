@@ -263,6 +263,8 @@ export class LLMClient {
       requiresStructuredOutput?: boolean;
       tools?: ChatCompletionOptions["tools"];
       toolChoice?: ChatCompletionOptions["toolChoice"];
+      search?: boolean;
+      searchParameters?: ChatCompletionOptions["searchParameters"];
       conversationChars?: number;
       hasVision?: boolean;
     } = {},
@@ -288,6 +290,8 @@ export class LLMClient {
       {
         routingProfile: options?.routingProfile,
         requiresStructuredOutput: options?.responseFormat !== undefined,
+        search: options?.search,
+        searchParameters: options?.searchParameters,
       },
     );
   }
@@ -363,6 +367,8 @@ export class LLMClient {
         requiresStructuredOutput: options.responseFormat !== undefined,
         tools: options.tools,
         toolChoice: options.toolChoice,
+        search: options.search,
+        searchParameters: options.searchParameters,
         conversationChars,
         hasVision,
       },
@@ -377,6 +383,7 @@ export class LLMClient {
       toolChoice: options.toolChoice,
       responseFormat: options.responseFormat,
       stop: options.stop,
+      timeout: options.timeout,
       // An explicit caller-supplied chain wins over the routed one.
       fallbackModels: options.fallbackModels ?? decision.fallbacks,
     });
@@ -491,7 +498,7 @@ export class LLMClient {
     for (let i = 0; i < chain.length; i++) {
       const candidate = chain[i];
       try {
-        return await this.requestWithPayment("/v1/chat/completions", buildBody(candidate));
+        return await this.requestWithPayment("/v1/chat/completions", buildBody(candidate), options?.timeout);
       } catch (err) {
         lastErr = err;
         const next = chain[i + 1];
@@ -566,7 +573,8 @@ export class LLMClient {
    */
   private async requestWithPayment(
     endpoint: string,
-    body: Record<string, unknown>
+    body: Record<string, unknown>,
+    timeoutMs?: number
   ): Promise<ChatResponse> {
     const url = `${this.apiUrl}${endpoint}`;
     const unpaid: RequestInit = {
@@ -576,14 +584,14 @@ export class LLMClient {
     };
 
     // First attempt (will likely return 402)
-    const response = await this.sendUnpaid(url, unpaid);
+    const response = await this.sendUnpaid(url, unpaid, timeoutMs);
 
     // Auto-retry on transient server errors (502/503). Nothing is paid yet.
     if (response.status === 502 || response.status === 503) {
       await new Promise(r => setTimeout(r, 1000));
-      const retryResp = await this.sendUnpaid(url, unpaid);
+      const retryResp = await this.sendUnpaid(url, unpaid, timeoutMs);
       if (retryResp.status !== 502 && retryResp.status !== 503) {
-        if (retryResp.status === 402) return this.handlePaymentAndRetry(url, body, retryResp);
+        if (retryResp.status === 402) return this.handlePaymentAndRetry(url, body, retryResp, timeoutMs);
         if (!retryResp.ok) {
           let errorBody: unknown;
           try { errorBody = await retryResp.json(); } catch { errorBody = { error: "Request failed" }; }
@@ -598,7 +606,7 @@ export class LLMClient {
 
     // Handle 402 Payment Required
     if (response.status === 402) {
-      return this.handlePaymentAndRetry(url, body, response);
+      return this.handlePaymentAndRetry(url, body, response, timeoutMs);
     }
 
     // Handle other errors
@@ -627,9 +635,9 @@ export class LLMClient {
    * {@link RetryDisposition}: `"unpaid"` with a wallet; with an API key, see
    * {@link accountErrorDisposition} (the request itself is billed).
    */
-  private async sendUnpaid(url: string, init: RequestInit): Promise<Response> {
+  private async sendUnpaid(url: string, init: RequestInit, timeoutMs?: number): Promise<Response> {
     try {
-      return await this.fetchWithTimeout(url, init);
+      return await this.fetchWithTimeout(url, init, timeoutMs);
     } catch (err) {
       throw withDisposition(err, this.apiAuth ? accountErrorDisposition(err) : "unpaid");
     }
@@ -638,13 +646,22 @@ export class LLMClient {
   /**
    * Parse a response to a request that carried no payment: the free tier,
    * or, with an API key, the billed request itself.
+   *
+   * With a wallet nothing was paid, so `costUsd` is 0 (a free model). With an
+   * API key the call is billed to the account and `costUsd` stays undefined.
    */
   private async parseUnpaidChatResponse(response: Response): Promise<ChatResponse> {
+    let served: ChatResponse;
     try {
-      return await this.parseChatResponse(response);
+      served = await this.parseChatResponse(response);
     } catch (err) {
       throw withDisposition(err, this.apiAuth ? "paid-or-in-doubt" : "unpaid");
     }
+    if (!this.apiAuth) {
+      served.costUsd = 0;
+      served.settlement = { scheme: "free", quotedUsd: 0 };
+    }
+    return served;
   }
 
   /**
@@ -656,7 +673,8 @@ export class LLMClient {
   private async handlePaymentAndRetry(
     url: string,
     body: Record<string, unknown>,
-    response: Response
+    response: Response,
+    timeoutMs?: number
   ): Promise<ChatResponse> {
     let signed: { paymentPayload: string; details: ReturnType<typeof extractPaymentDetails> };
     try {
@@ -665,7 +683,7 @@ export class LLMClient {
       throw withDisposition(err, "unpaid");
     }
     try {
-      return await this.sendPaid(url, body, signed.paymentPayload, signed.details);
+      return await this.sendPaid(url, body, signed.paymentPayload, signed.details, timeoutMs);
     } catch (err) {
       throw withDisposition(err, "paid-or-in-doubt");
     }
@@ -731,7 +749,8 @@ export class LLMClient {
     url: string,
     body: Record<string, unknown>,
     paymentPayload: string,
-    details: ReturnType<typeof extractPaymentDetails>
+    details: ReturnType<typeof extractPaymentDetails>,
+    timeoutMs?: number
   ): Promise<ChatResponse> {
     // Retry with payment (x402 library expects PAYMENT-SIGNATURE header)
     const retryResponse = await this.fetchWithTimeout(url, {
@@ -742,7 +761,7 @@ export class LLMClient {
         "PAYMENT-SIGNATURE": paymentPayload,
       },
       body: JSON.stringify(body),
-    });
+    }, timeoutMs);
 
     // Auto-retry on transient server errors (502/503) after payment. This
     // re-sends the SAME signed authorization (one EIP-3009 nonce), which can
@@ -757,7 +776,7 @@ export class LLMClient {
           "PAYMENT-SIGNATURE": paymentPayload,
         },
         body: JSON.stringify(body),
-      });
+      }, timeoutMs);
       if (retryResp2.status !== 502 && retryResp2.status !== 503) {
         if (retryResp2.status === 402) throw new PaymentError("Payment was rejected. Check your wallet balance.");
         if (!retryResp2.ok) {
@@ -1321,14 +1340,15 @@ export class LLMClient {
   }
 
   /**
-   * Fetch with timeout.
+   * Fetch with timeout: `timeoutMs` (a per-call override), else the client's `timeout`.
    */
   private async fetchWithTimeout(
     url: string,
-    options: RequestInit
+    options: RequestInit,
+    timeoutMs: number = this.timeout
   ): Promise<Response> {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const response = await (this.apiAuth ? this.apiAuth.fetch.bind(this.apiAuth) : fetch)(url, {

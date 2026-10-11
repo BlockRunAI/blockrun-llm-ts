@@ -531,6 +531,8 @@ export class SolanaLLMClient {
       {
         routingProfile: options?.routingProfile,
         requiresStructuredOutput: options?.responseFormat !== undefined,
+        search: options?.search,
+        searchParameters: options?.searchParameters,
         minimumPaymentUsd: this.apiAuth ? 0 : SOLANA_MINIMUM_PAYMENT_USD,
       },
     );
@@ -563,6 +565,8 @@ export class SolanaLLMClient {
         requiresStructuredOutput: options.responseFormat !== undefined,
         tools: options.tools,
         toolChoice: options.toolChoice,
+        search: options.search,
+        searchParameters: options.searchParameters,
         conversationChars,
         hasVision,
         minimumPaymentUsd: this.apiAuth ? 0 : SOLANA_MINIMUM_PAYMENT_USD,
@@ -578,6 +582,7 @@ export class SolanaLLMClient {
       toolChoice: options.toolChoice,
       responseFormat: options.responseFormat,
       stop: options.stop,
+      timeout: options.timeout,
       // An explicit caller-supplied chain wins over the routed one.
       fallbackModels: options.fallbackModels ?? decision.fallbacks,
     });

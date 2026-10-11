@@ -271,7 +271,6 @@ export interface NewsSearchSource {
   excludedWebsites?: string[];
   allowedWebsites?: string[];
   safeSearch?: boolean;
-  enableImageUnderstanding?: boolean;
 }
 
 export interface RssSearchSource {
@@ -441,8 +440,9 @@ export interface ChatCompletionOptions {
    */
   fallbackModels?: string[];
   /**
-   * Per-call timeout in ms, overriding the client's `timeout` (Solana client).
-   * Search and long reasoning calls can need more than the 60 s default.
+   * Per-call timeout in ms, overriding the client's `timeout` for every request
+   * of this call (both `LLMClient` and `SolanaLLMClient`). Search and long
+   * reasoning calls can need more than the 60 s default.
    */
   timeout?: number;
 }

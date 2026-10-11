@@ -12,6 +12,7 @@ import type {
   ChatMessage,
   RoutingDecision,
   RoutingProfile,
+  SearchParameters,
   Tool,
 } from "./types";
 import { APIError, PaymentError, retryDisposition } from "./types";
@@ -69,6 +70,24 @@ export function errSummary(err: unknown): string {
   return String(err).slice(0, 100);
 }
 
+/**
+ * Whether a call asks for xAI search: an `x_search` / `web_search` tool, or
+ * search parameters that are not `mode: "off"` (or the `search: true`
+ * shortcut, used only when no `searchParameters` are given — the same
+ * precedence the request body follows). The gateway serves search on `xai/*`
+ * models only and answers any other model with a non-transient 400
+ * `SEARCH_UNSUPPORTED_MODEL`, so routing must stay on `xai/*`.
+ */
+export function requestsSearch(options: {
+  search?: boolean;
+  searchParameters?: SearchParameters;
+  tools?: ChatCompletionOptions["tools"];
+}): boolean {
+  if (options.tools?.some((tool) => tool.type === "x_search" || tool.type === "web_search")) return true;
+  if (options.searchParameters !== undefined) return options.searchParameters.mode !== "off";
+  return options.search === true;
+}
+
 export function routingProfileForModel(model: string): RoutingProfile | undefined {
   return AUTO_ROUTING_PROFILES[model.toLowerCase()];
 }
@@ -123,6 +142,9 @@ export function routeWithCatalog(
     requiresStructuredOutput?: boolean;
     tools?: ChatCompletionOptions["tools"];
     toolChoice?: ChatCompletionOptions["toolChoice"];
+    /** Live Search shortcut / parameters: when they ask for search, only `xai/*` candidates are kept. */
+    search?: boolean;
+    searchParameters?: SearchParameters;
     minimumPaymentUsd?: number;
     /** Full-conversation size for capacity filtering; defaults to the
      * routing prompt when the call has no wider transcript. */
@@ -170,6 +192,23 @@ export function routeWithCatalog(
         ? `nvidia/${id.slice(5)}`
         : null;
     if (resolved && !callable.includes(resolved)) callable.push(resolved);
+  }
+
+  // Search runs on xai/* only: the gateway refuses any other model with a
+  // non-transient 400, so a non-xai pick (or fallback) would fail outright.
+  // Keep the router's order among the xai/* candidates; with none, fail here,
+  // before any request is sent or paid. Nothing else about the candidate
+  // policy changes.
+  if (requestsSearch(options)) {
+    const searchable = callable.filter((id) => id.startsWith("xai/"));
+    if (searchable.length === 0) {
+      throw new Error(
+        `Search (x_search / web_search tools or searchParameters) runs on xai/* models only, and the ` +
+          `${options.routingProfile ?? "auto"} route has no xai/* candidate for this request. ` +
+          `Call an xai/* model directly (e.g. xai/grok-4.3) or drop the search options.`,
+      );
+    }
+    callable.splice(0, callable.length, ...searchable);
   }
 
   // Capacity check against the FULL conversation, not just the routing
