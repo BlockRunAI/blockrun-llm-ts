@@ -441,6 +441,14 @@ picked:
 | `reasoning` | Human-readable explanation of the decision |
 | `tierConfigs` | The tier → primary/fallback map the decision was made against |
 
+**Search and routing.** xAI search (`x_search` / `web_search` tools, or
+`search` / `searchParameters` not set to `mode: 'off'`) runs on `xai/*` models
+only. When a routed call asks for search, the candidate chain is narrowed to
+its `xai/*` models in the router's order; when the route has none, `route()` /
+`smartChat()` / `smartChatCompletion()` throw before anything is sent or paid.
+For search, calling an `xai/*` model directly (e.g. `xai/grok-4.3`) is the
+dependable path.
+
 ### TypeScript Types
 
 `RoutingDecision`, `RoutingProfile`, `RoutingTier`, `RoutingTaskType`,
@@ -480,7 +488,25 @@ console.log(response);
 
 // Live Search with Grok (Solana payment)
 const tweet = await client.chat('xai/grok-4.5', 'What is trending on X?', { search: true });
+
+// xAI x_search on chosen accounts, structured output, real cost per call
+const res = await client.chatCompletion('xai/grok-4.3', [
+  { role: 'user', content: 'Which new models did these labs announce today? Return JSON.' },
+], {
+  tools: [{ type: 'x_search', allowedXHandles: ['OpenAI', 'AnthropicAI', 'xai'], fromDate: '2026-10-04' }],
+  searchParameters: { maxTurns: 2 },          // bounds xAI's per-post search bill
+  responseFormat: { type: 'json_object' },
+  timeout: 180_000,
+});
+console.log(res.choices[0].message.annotations); // url_citation with positions
+console.log(res.usage?.server_side_tool_usage);  // { x_posts_fetched, ... }
+console.log(res.costUsd, res.settlement);        // what you paid, and the tx
 ```
+
+`costUsd`, `settlement` and the per-call `timeout` work the same on `LLMClient`
+(Base / Arc). `costUsd` is what the call added to `getSpending()`: the signed
+price under `exact`, the metered `extra.chargedAmount` under batch settlement,
+`0` for a free model; it is undefined in API-key mode (billed to the account).
 
 **Setup:**
 1. Export your Solana wallet key: `export SOLANA_WALLET_KEY="your-bs58-key"`

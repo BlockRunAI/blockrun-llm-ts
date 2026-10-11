@@ -64,6 +64,7 @@ import { paths as corePaths } from "@blockrun/core";
 import { APIError, BlockrunError, PaymentError, withDisposition, type PaymentRequired, type PaymentRequirement } from "./types";
 import { sanitizeErrorResponse } from "./validation";
 import { parsePaymentRequired } from "./x402";
+import { receiptChargedUsd } from "./receipt";
 
 export const BATCH_SCHEME = "batch-settlement";
 
@@ -1509,11 +1510,6 @@ function trustedBatchAccept(paymentRequired: PaymentRequired, operators: string[
   return trustedBatchAccepts(paymentRequired, operators)[0];
 }
 
-/** Atomic USDC string to USD. */
-function atomicToUsd(amount: unknown): number | undefined {
-  return typeof amount === "string" && /^\d+$/.test(amount) ? Number(amount) / 1e6 : undefined;
-}
-
 /**
  * What one served call was charged, in USD, read from its PAYMENT-RESPONSE.
  *
@@ -1533,7 +1529,7 @@ function chargedUsd(getReceipt: () => SettleResponseLike): number {
   } catch {
     return 0;
   }
-  return atomicToUsd(receipt?.extra?.chargedAmount) ?? atomicToUsd(receipt?.amount) ?? 0;
+  return receiptChargedUsd(receipt) ?? 0;
 }
 
 /**
