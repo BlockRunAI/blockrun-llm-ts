@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Fixed — every PayAI admission refusal of a batch deposit is read as "nothing broadcast", and parks batch briefly
+
+- PayAI refuses a deposit before broadcasting it with 16 `batch_*` codes
+  (capacity, rate, signer funding headroom, new channels disabled, account
+  paused, fee-payer lane, deposit amount / asset / withdraw delay), always
+  with an empty transaction; sol.blockrun.ai answers each as a 402 carrying
+  that failed receipt. The SDK already paid `exact` for the call, but forgot
+  the deposit at once only for the three capacity / rate codes and re-read
+  the other 13 from the chain for about 300 blocks. It now forgets all 16.
+- Most of these do not clear by the next call, so after one the wallet's
+  calls (every client of the wallet in the process) pay `exact` at once
+  without signing a deposit to be refused again: a `fallback` event with
+  reason `admission_refused`, naming the code as `errorReason` and the time
+  left as `retryAfterMs`. The pause is `Retry-After` when the gateway sends
+  one (at most 15 min), else 60s, or 10 min for a refusal of the deposit's
+  own amount, asset or withdraw delay. Nothing waits for it, unlike a 429's
+  cooldown. A refusal that arrives as a 429 still backs off and retries as
+  before.
+
 ## [3.20.1] - 2026-10-05
 
 ### Fixed — an API key's chat call fails over again when the gateway itself answers 5xx

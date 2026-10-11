@@ -2833,7 +2833,9 @@ describe("SolanaLLMClient batch-settlement", () => {
       expect(events.some((e) => e.type === "fallback")).toBe(true);
 
       // The receipt proved nothing was broadcast: the deposit is forgotten at
-      // once, so the next call opens batch again instead of resyncing on exact.
+      // once, so once the refusal cooldown (60s) is over the next call opens
+      // batch again instead of resyncing on exact for ~300 blocks.
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_001);
       gateway.push(
         () => quote402([exactAccept(), batchAccept(operator.address)]),
         async (_url, init) => {
@@ -2847,7 +2849,32 @@ describe("SolanaLLMClient batch-settlement", () => {
       expect(events.some((e) => e.type === "resync")).toBe(false);
     });
 
+    /** The 402 sol.blockrun.ai sends for a PayAI admission refusal of a deposit (blockrun-sol #427). */
+    function admissionRefused(reason: string, headers: Record<string, string> = {}): Response {
+      return new Response(JSON.stringify({ error: reason }), {
+        status: 402,
+        headers: { "content-type": "application/json", ...preBroadcast(reason), ...headers },
+      });
+    }
+
+    /** A gateway step that asserts the call was paid with exact, not batch, and serves it. */
+    function paidExact(): (url: string, init?: RequestInit) => Response {
+      return (_url, init) => {
+        expect((init?.headers as Record<string, string>)["PAYMENT-SIGNATURE"]).toBe("exact-payload");
+        return new Response(JSON.stringify(CHAT_OK), { status: 200 });
+      };
+    }
+
+    const CONFIG_REFUSALS = new Set([
+      "batch_initial_deposit_out_of_range",
+      "batch_deposit_asset_not_supported",
+      "batch_withdraw_delay_out_of_range",
+    ]);
+
     it.each([
+      "batch_account_channel_capacity_exhausted",
+      "batch_channel_capacity_exhausted",
+      "batch_deposit_rate_limited",
       "batch_deposit_ip_rate_limited",
       "batch_signer_funding_headroom_exhausted",
       "batch_new_channels_disabled",
@@ -2861,18 +2888,36 @@ describe("SolanaLLMClient batch-settlement", () => {
       "batch_initial_deposit_out_of_range",
       "batch_deposit_asset_not_supported",
       "batch_withdraw_delay_out_of_range",
-    ])("every PayAI admission refusal (blockrun-sol #427): a 402 + failed %s receipt forgets the deposit at once; the next call opens batch", async (reason) => {
+    ])("every PayAI admission refusal (blockrun-sol #427): a 402 + failed %s receipt forgets the deposit at once, skips batch for the refusal cooldown, then opens batch", async (reason) => {
+      // Most of these do not clear by the next call (new channels disabled, the
+      // account paused, the deposit's own terms): the wallet pays exact at once
+      // for a while instead of signing a deposit on every call to be refused again.
+      const cooldown = CONFIG_REFUSALS.has(reason) ? 600_000 : 60_000;
       const c = observed();
       const exact = stubExact(c);
       gateway.push(
         () => quote402([exactAccept(), batchAccept(operator.address)]),
-        () => new Response(JSON.stringify({ error: reason }), { status: 402, headers: { "content-type": "application/json", ...preBroadcast(reason) } }),
+        () => admissionRefused(reason),
         () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
       );
       await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
       expect(exact).toHaveBeenCalledTimes(1);
       expect(c.getBatchStats()).toMatchObject({ backoffs: 0, retries: 0, unresolved: 0, resyncs: 0 });
+      expect(events.at(-1)).toMatchObject({ type: "fallback", reason: "payment_required", status: 402, errorReason: reason, retryAfterMs: cooldown });
 
+      // Inside the cooldown: exact at once, no batch payment sent, nothing waited.
+      const t0 = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(t0 + cooldown - 1_000);
+      gateway.push(() => quote402([exactAccept(), batchAccept(operator.address)]), paidExact());
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exact).toHaveBeenCalledTimes(2);
+      expect(sleeps).toEqual([]);
+      expect(events.at(-1)).toMatchObject({ type: "fallback", reason: "admission_refused", errorReason: reason });
+      expect(events.at(-1)!.retryAfterMs).toBeGreaterThan(0);
+      expect(events.at(-1)!.retryAfterMs).toBeLessThanOrEqual(1_000);
+
+      // Once it is over: batch again, with no resync of the forgotten deposit.
+      vi.spyOn(Date, "now").mockReturnValue(t0 + cooldown + 1);
       gateway.push(
         () => quote402([exactAccept(), batchAccept(operator.address)]),
         async (_url, init) => {
@@ -2882,8 +2927,63 @@ describe("SolanaLLMClient batch-settlement", () => {
         }
       );
       await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
-      expect(exact).toHaveBeenCalledTimes(1);
+      expect(exact).toHaveBeenCalledTimes(2);
       expect(events.some((e) => e.type === "resync" || (e.type === "fallback" && e.reason === "channel_resync_pending"))).toBe(false);
+    });
+
+    it("an admission refusal's cooldown is the WALLET's: another client of it pays exact without sending a batch payment", async () => {
+      const c = observed();
+      stubExact(c);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        () => admissionRefused("batch_new_channels_disabled"),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+      await c.chat("openai/gpt-4o-mini", "gm");
+
+      const d = observed();
+      const exact = stubExact(d);
+      gateway.push(() => quote402([exactAccept(), batchAccept(operator.address)]), paidExact());
+      await expect(d.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(gatewayCalls).toHaveLength(5);
+      expect(d.getBatchStats().fallbacksByReason).toEqual({ admission_refused: 1 });
+    });
+
+    it("an admission refusal's Retry-After sets the cooldown, capped at 15 min", async () => {
+      const c = observed();
+      const exact = stubExact(c);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        () => admissionRefused("batch_signer_funding_headroom_exhausted", { "Retry-After": "5" }),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+      await c.chat("openai/gpt-4o-mini", "gm");
+      expect(events.at(-1)).toMatchObject({ reason: "payment_required", retryAfterMs: 5_000 });
+
+      // 5s later batch is open again, well before the 60s default.
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5_001);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        () => admissionRefused("batch_signer_funding_headroom_exhausted", { "Retry-After": "86400" }),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+      await c.chat("openai/gpt-4o-mini", "gm");
+      expect(exact).toHaveBeenCalledTimes(2);
+      expect(events.at(-1)).toMatchObject({ reason: "payment_required", retryAfterMs: 15 * 60_000 });
+    });
+
+    it("control: a 402 naming a code NOT on the list sets no refusal cooldown", async () => {
+      const c = observed();
+      stubExact(c);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        () => new Response(JSON.stringify({ error: "batch_some_future_code" }), { status: 402, headers: { "content-type": "application/json", ...preBroadcast("batch_some_future_code") } }),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+      await c.chat("openai/gpt-4o-mini", "gm");
+      expect(events.some((e) => e.reason === "admission_refused")).toBe(false);
+      expect(events.find((e) => e.reason === "payment_required")?.retryAfterMs).toBeUndefined();
     });
 
     it("control: a 402 + failed receipt naming a code NOT on the list keeps the deposit in doubt", async () => {
