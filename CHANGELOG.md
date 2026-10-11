@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.21.0] - 2026-10-11
+
 ### Added — Solana media polls sign a poll proof, not a payment
 
 - `SolanaLLMClient` polls a slow image, music or video job with the
@@ -22,6 +24,13 @@
 - Fixed: a Solana image job's relative `poll_url` (`/api/v1/...`) was appended
   to `apiUrl`, which already ends in `/api`. An absolute `poll_url` must now be
   on the gateway's origin.
+
+- Fixed: a paid Solana music or video POST now waits up to 120s (was the
+  client's 60s default). The music route can answer inline for up to 60s, so
+  the old timeout could abort a POST that had already been paid for.
+- A paid media POST that fails in transit is reported as `paid-or-in-doubt`,
+  and a paid video completion poll that fails in transit keeps polling
+  (bounded), so a payment that did settle is still delivered.
 
 ## [3.20.1] - 2026-10-05
 
