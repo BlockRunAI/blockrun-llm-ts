@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Added — Solana media polls sign a poll proof, not a payment
+
+- `SolanaLLMClient` polls a slow image, music or video job with the
+  `x-poll-wallet` / `x-poll-timestamp` / `x-poll-signature` headers: the
+  submitting wallet's ed25519 signature over
+  `blockrun-poll:v1:<kind>:<job id>:<unix seconds>`, signed fresh per poll. No
+  Solana transaction is built for a poll any more (a long job used to sign one
+  every few seconds). Base polling is unchanged.
+- New `SolanaLLMClient.video()` and `.music()`. A video's POST is only
+  verified; the finished job answers the proof poll with a 402 and ONE payment
+  is signed for it (recorded in `getSpending()` on delivery). A failed video is
+  never charged. Music and image are paid at the POST and never sign a payment
+  on a poll.
+- If the gateway refuses the proof (video `400 Invalid job id`, image/music
+  `404`) or answers it with a plain payment challenge (a batch-billed image job,
+  or a gateway without poll proofs), that job falls back once to the old
+  payment-per-poll polling, logged to stderr.
+- Fixed: a Solana image job's relative `poll_url` (`/api/v1/...`) was appended
+  to `apiUrl`, which already ends in `/api`. An absolute `poll_url` must now be
+  on the gateway's origin.
+
 ## [3.20.1] - 2026-10-05
 
 ### Fixed — an API key's chat call fails over again when the gateway itself answers 5xx

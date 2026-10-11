@@ -1,5 +1,8 @@
 // The Solana wallet path used to hand a 202 envelope back as if it were the
 // result: a caller asking for an image got a job id, and nothing ever settled.
+// The gateway here predates poll proofs (it answers x-poll-* with a plain
+// challenge), so the client falls back to paying each poll; the proof path is
+// covered in test/unit/solana-poll-ownership.test.ts.
 // The second test pins the other half — that the EVM client refuses a Solana
 // challenge outright rather than replaying one EIP-3009 signature across polls,
 // which could not work where a payment expires with its blockhash (~60s).

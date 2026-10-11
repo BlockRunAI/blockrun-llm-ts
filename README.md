@@ -490,6 +490,25 @@ const tweet = await client.chat('xai/grok-4.5', 'What is trending on X?', { sear
 **Supported endpoint:** `https://sol.blockrun.ai/api`
 **Payment:** Solana USDC (SPL, mainnet)
 
+**Images, music and video on Solana:**
+
+```typescript
+const image = await client.image('a lighthouse at dusk', { model: 'openai/gpt-image-2' });
+const track = await client.music('chill lo-fi beats with piano');
+const video = await client.video('a red apple slowly spinning', { duration_seconds: 5 });
+```
+
+Slow jobs answer `202 { id, poll_url }` and the client polls for you. Each poll
+proves the job is yours with a wallet signature (`x-poll-wallet`,
+`x-poll-timestamp`, `x-poll-signature`: ed25519 over
+`blockrun-poll:v1:<kind>:<job id>:<unix seconds>`), not a payment, so a
+multi-minute job no longer signs a Solana transaction every few seconds. Image
+and music are paid when submitted. A video is charged only once it is finished:
+the client signs one payment for the completed job, and a failed job costs
+nothing. If the gateway does not accept the poll signature for a job, the client
+falls back to paying each poll the old way (logged to stderr). Base polling is
+unchanged.
+
 ### Batch settlement (optional metered billing)
 
 By default, every Solana call uses x402 `exact`: one SPL transfer per call,
