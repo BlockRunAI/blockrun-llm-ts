@@ -1,6 +1,6 @@
 # @blockrun/llm (TypeScript SDK)
 
-TypeScript SDK for <!-- br:models.chatVisible -->82<!-- /br:models.chatVisible --> LLMs with streaming, smart routing, and pay-per-request billing.
+TypeScript SDK for <!-- br:models.chatVisible -->86<!-- /br:models.chatVisible --> LLMs with streaming, smart routing, and pay-per-request billing.
 Two authentication modes, one API surface:
 
 - **Account API key** — `apiKey` / `BLOCKRUN_API_KEY` bills a BlockRun account at `https://api.blockrun.ai`. Register, mint keys and top up credits at https://user.blockrun.ai.
@@ -25,6 +25,7 @@ src/
 ├── client.ts            # LLMClient (EVM: Base, Arc — the 402's network picks the chain)
 ├── solana-client.ts     # SolanaLLMClient
 ├── solana-batch.ts      # Opt-in x402 batch-settlement (metered) payer for SolanaLLMClient
+├── poll-ownership.ts    # Solana x-poll-* job-ownership proof (ed25519), signed instead of a payment per poll
 ├── router-adapter.ts    # Bundled Router Core V3 adapter (smartChat / blockrun/* aliases)
 ├── api-key.ts           # Account API-key auth: resolveApiKeyAuth / ApiKeyAuth transport + poll
 ├── blockrun.ts          # BlockrunClient — universal x402 primitive (get/post/poll/stream)
@@ -87,6 +88,18 @@ src/
   account `code`/`type`/`message`, and `retryAfter`.
 - Async jobs (image / video / music / `BlockrunClient.poll`) follow `poll_url` from the first
   authenticated response via `ApiKeyAuth.poll()` — no 402 challenge, no second POST.
+
+## Solana async media polls (`followSolanaJob` in `src/solana-client.ts`)
+
+- Polls carry `x-poll-*` (`src/poll-ownership.ts`, mirrors sol's `src/lib/poll-ownership.ts`):
+  ed25519 over `blockrun-poll:v1:<video|audio|image>:<decoded last poll_url path segment>:<unix s>`,
+  signed fresh per poll. Image/music are paid at POST (cost booked there) and never sign on a poll.
+  Video is verified at POST; the proof poll of a finished unpaid job answers 402 `{status:"completed"}`
+  + challenge → sign ONE payment, re-send the same GET with it; cost booked on delivery. A paid-poll 402
+  other than a non-stale verification failure is re-polled after Retry-After (bounded).
+- Proof refused (video 400 / image+music 404) or answered with a plain challenge → that job falls back
+  ONCE to payment-per-poll, logged. Base clients (`VideoClient` / `MusicClient` / `ImageClient`) never
+  send `x-poll-*`.
 - **Transient retries are GET/HEAD-only.** 502/503/504/522/524 retry twice on idempotent
   requests; a POST is never replayed, because in account mode the first POST is the billed
   one (the wallet path can retry because its first POST is the unpaid 402 challenge).

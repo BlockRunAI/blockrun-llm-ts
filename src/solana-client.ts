@@ -29,6 +29,8 @@ import type {
   Spending,
   SearchResult,
   SearchOptions,
+  VideoResponse,
+  MusicResponse,
 } from "./types";
 import { APIError, PaymentError, withDisposition } from "./types";
 import {
@@ -47,6 +49,7 @@ import {
   SOLANA_NETWORK,
 } from "./x402";
 import { solanaKeyToBytes, solanaPublicKey } from "./solana-wallet";
+import { pollJobIdFromUrl, signPollOwnership, type PollKind } from "./poll-ownership";
 import { BATCH_SCHEME, SolanaBatchPayer, type Rechallenge, type SolanaBatchOptions, type SolanaBatchStats } from "./solana-batch";
 import type { PaymentRequired } from "./types";
 import {
@@ -63,6 +66,64 @@ const DEFAULT_MAX_TOKENS = 1024;
 const DEFAULT_TIMEOUT = 60000;
 const STALE_BLOCKHASH_RETRY_BACKOFFS_MS = [500, 2000] as const;
 const MAX_PAYMENT_FAILURE_BYTES = 64 * 1024;
+const DEFAULT_VIDEO_MODEL = "xai/grok-imagine-video";
+const DEFAULT_MUSIC_MODEL = "minimax/music-2.5+";
+// Video renders take 1-3 min, but upstream status can lag completion by
+// several minutes; the job stays claimable for ~48h (same budget as VideoClient).
+const DEFAULT_VIDEO_BUDGET_MS = 900_000;
+const DEFAULT_MUSIC_BUDGET_MS = 300_000;
+const VIDEO_POLL_INTERVAL_MS = 5_000;
+// A paid video poll the gateway answers 402 without refusing the payment
+// (settlement held by another poll, outcome unknown, stale blockhash at settle)
+// is re-polled; this many in a row ends the call.
+const MAX_PAID_POLL_REFUSALS = 4;
+// Never wait longer than this on one Retry-After (the gateway asks for 90s at most).
+const MAX_RETRY_AFTER_MS = 120_000;
+// Per-request timeout for a paid music/video POST. sol answers a music POST
+// inline for up to 60s before detaching to 202 (Cloudflare's edge cuts at
+// ~100s); the client's 60s default would abort a POST it has already paid for.
+const MEDIA_SUBMIT_TIMEOUT_MS = 120_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readJsonOrEmpty(response: Response): Promise<Record<string, unknown>> {
+  try {
+    const parsed = (await response.json()) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/** A poll answer that means "not yet": 202 pending, or a transient 503/504. */
+function isPendingPollStatus(status: number): boolean {
+  return status === 202 || status === 503 || status === 504;
+}
+
+/** The poll's `Retry-After` in ms (delta-seconds only), or undefined. */
+function retryAfterMs(response: Response): number | undefined {
+  const raw = response.headers.get("retry-after");
+  if (!raw || !/^\d+$/.test(raw.trim())) return undefined;
+  return Math.min(Number(raw.trim()) * 1000, MAX_RETRY_AFTER_MS);
+}
+
+/** How a media POST is followed: total poll budget, and the paid POST's own timeout. */
+interface MediaJobOptions {
+  pollBudgetMs?: number;
+  submitTimeoutMs?: number;
+}
+
+/** Which job a media endpoint creates, for the poll proof's `<kind>`. */
+function pollKindFor(url: string): PollKind {
+  const path = new URL(url).pathname;
+  if (path.includes("/v1/videos")) return "video";
+  if (path.includes("/v1/audio/")) return "audio";
+  return "image";
+}
 
 class SafeStaleBlockhashError extends PaymentError {
   constructor() {
@@ -727,6 +788,62 @@ export class SolanaLLMClient {
     return data as unknown as ImageResponse;
   }
 
+  /**
+   * Generate a short video on Solana.
+   *
+   * The POST is verified, not charged. The job is then polled with a wallet
+   * signature (no payment) until it finishes, and ONE payment is signed for
+   * the finished video; a failed job is never charged. If the gateway does not
+   * accept poll signatures for the job, it is polled with a payment per poll
+   * instead, which is likewise only charged on completion.
+   *
+   * @param prompt - text description of the video.
+   * @param options - `model` (default `xai/grok-imagine-video`), `budgetMs`
+   *   (total wait, default 15 min); any other keys are sent verbatim, so use
+   *   the gateway's snake_case names (`duration_seconds`, `image_url`,
+   *   `aspect_ratio`, `resolution`, …).
+   */
+  async video(
+    prompt: string,
+    options: { model?: string; budgetMs?: number } & Record<string, unknown> = {}
+  ): Promise<VideoResponse> {
+    const { model, budgetMs, ...rest } = options;
+    const body: Record<string, unknown> = { ...rest, model: model || DEFAULT_VIDEO_MODEL, prompt };
+    const data = await this.requestWithPaymentRaw(
+      "/v1/videos/generations",
+      body,
+      { pollBudgetMs: budgetMs ?? DEFAULT_VIDEO_BUDGET_MS, submitTimeoutMs: Math.max(this.timeout, MEDIA_SUBMIT_TIMEOUT_MS) }
+    );
+    return data as unknown as VideoResponse;
+  }
+
+  /**
+   * Generate a music track on Solana. Paid at the POST; a slow track is then
+   * polled with a wallet signature, never another payment.
+   *
+   * @param prompt - music style, mood, or description.
+   * @param options - `model` (default `minimax/music-2.5+`), `instrumental`
+   *   (default true), `lyrics` (requires `instrumental: false`), `budgetMs`
+   *   (total wait, default 5 min); other keys are sent verbatim.
+   */
+  async music(
+    prompt: string,
+    options: { model?: string; instrumental?: boolean; lyrics?: string; budgetMs?: number } & Record<string, unknown> = {}
+  ): Promise<MusicResponse> {
+    const { model, instrumental: instrumentalOption, lyrics: rawLyrics, budgetMs, ...rest } = options;
+    const instrumental = instrumentalOption ?? true;
+    const lyrics = rawLyrics?.trim();
+    if (instrumental && lyrics) throw new Error("Cannot specify lyrics when instrumental is true");
+    const body: Record<string, unknown> = { ...rest, model: model || DEFAULT_MUSIC_MODEL, prompt, instrumental };
+    if (lyrics) body.lyrics = lyrics;
+    const data = await this.requestWithPaymentRaw(
+      "/v1/audio/generations",
+      body,
+      { pollBudgetMs: budgetMs ?? DEFAULT_MUSIC_BUDGET_MS, submitTimeoutMs: Math.max(this.timeout, MEDIA_SUBMIT_TIMEOUT_MS) }
+    );
+    return data as unknown as MusicResponse;
+  }
+
   /** Standalone search (Solana payment). */
   async search(query: string, options?: SearchOptions): Promise<SearchResult> {
     const body: Record<string, unknown> = { query, max_results: options?.maxResults || 10 };
@@ -1087,6 +1204,256 @@ export class SolanaLLMClient {
   }
 
   /**
+   * Follow a 202 `{ id, poll_url }` to completion on a Solana media route
+   * (image, music, video).
+   *
+   * **Polls prove ownership, they do not pay.** A Solana payment is a
+   * transaction pinned to a recent blockhash (~60s), so paying every poll of a
+   * multi-minute job meant signing a fresh transaction every few seconds. Each
+   * poll here instead carries the `x-poll-*` headers: the submitting wallet's
+   * ed25519 signature over `blockrun-poll:v1:<kind>:<job id>:<unix seconds>`
+   * (see `poll-ownership.ts`). That proof never charges.
+   *
+   * **Who pays when:**
+   * - image / music: the POST already settled (sol settles at submit because the
+   *   signed transaction would be dead by completion). The caller recorded the
+   *   cost at POST; this loop only fetches the result and never signs a payment.
+   *   A batch-billed image job still answers its proof poll with 402: that job
+   *   falls back to the per-poll payment below.
+   * - video: settles on completion, and a failed job is never charged. A
+   *   finished, unpaid job answers the proof poll with 402 `{status:"completed"}`
+   *   and a normal x402 challenge; ONE payment is signed from that challenge and
+   *   the same poll is re-sent with it. The cost is recorded here, on delivery.
+   *   A paid poll the gateway answers 402 (settlement in progress on another
+   *   poll, outcome unknown, stale blockhash) is re-polled after its
+   *   Retry-After — the gateway's per-job settlement claim makes a later fresh
+   *   payment safe — up to `MAX_PAID_POLL_REFUSALS` times.
+   *
+   * **Fallback, once per job:** if the gateway refuses the proof with its "no
+   * such job" answer (video 400, image/music 404) or answers it with a plain
+   * payment challenge (a gateway or job that predates poll proofs), the rest of
+   * this job is polled the old way — an x-payment signed per poll, which the
+   * gateway verifies against the job's payer and does not charge until a video
+   * completes. Logged to stderr; never switches back.
+   */
+  private async followSolanaJob(
+    submitBody: Record<string, unknown>,
+    budgetMs: number,
+    kind: PollKind,
+    intervalMs = kind === "video" ? VIDEO_POLL_INTERVAL_MS : 2_000
+  ): Promise<Record<string, unknown>> {
+    const id = submitBody.id as string | undefined;
+    const pollPath = submitBody.poll_url as string | undefined;
+    if (!id || !pollPath) return submitBody;
+
+    const pollUrl = this.resolvePollUrl(pollPath);
+    const jobId = pollJobIdFromUrl(pollUrl);
+
+    const deadline = Date.now() + budgetMs;
+    let lastStatus = (submitBody.status as string) || "queued";
+    let ownershipPolls = true;
+    let waitMs = intervalMs;
+    let paidRefusalsLeft = MAX_PAID_POLL_REFUSALS;
+    // Video only: the cost of the payment last sent on a poll of this job, booked once on delivery.
+    let videoCostUsd: number | undefined;
+    // Video only: a payment for the FINISHED job reached the gateway (pending-poll payments are only verified).
+    let settleAttempted = false;
+
+    const fallBack = (why: string): void => {
+      ownershipPolls = false;
+      waitMs = 0;
+      console.warn(
+        `[@blockrun/llm] ${kind} job ${id}: ${why}; falling back to x-payment polling for this job`
+      );
+    };
+    const deliver = (data: Record<string, unknown>, response: Response): Record<string, unknown> => {
+      if (kind === "video") {
+        if (videoCostUsd !== undefined) this.recordSettlement(videoCostUsd);
+        const txHash = response.headers.get("x-payment-receipt");
+        if (txHash) data.txHash = txHash;
+      }
+      return data;
+    };
+    const failIfFailed = (data: Record<string, unknown>, status: number): void => {
+      if (lastStatus === "failed") {
+        throw new APIError(
+          `Upstream job failed: ${(data.error as string) || "unknown"}`,
+          status,
+          sanitizeErrorResponse(data)
+        );
+      }
+    };
+
+    while (Date.now() < deadline) {
+      if (waitMs > 0) await sleep(Math.min(waitMs, Math.max(0, deadline - Date.now())));
+      waitMs = intervalMs;
+
+      // The 402 this poll will be paid against, when it is paid at all.
+      let challenge: Response | undefined;
+
+      if (ownershipPolls) {
+        const proof = signPollOwnership(await solanaKeyToBytes(this.privateKey), kind, jobId);
+        const polled = await this.fetchWithTimeout(pollUrl, {
+          method: "GET",
+          headers: { "User-Agent": USER_AGENT, ...proof },
+        });
+        const data = await readJsonOrEmpty(polled);
+
+        if (polled.status === 402) {
+          if (kind === "video" && data.status === "completed") {
+            // Finished and unpaid: this challenge is the one payment for the job.
+            lastStatus = "completed";
+            settleAttempted = true;
+            challenge = new Response(JSON.stringify(data), { status: 402, headers: polled.headers });
+          } else {
+            fallBack(
+              kind === "image"
+                ? "the gateway asks for a payment on this poll (a batch-billed job, or a gateway without poll proofs)"
+                : "the gateway answered the poll proof with a payment challenge (a gateway without poll proofs)"
+            );
+            continue;
+          }
+        } else if (polled.status === (kind === "video" ? 400 : 404)) {
+          fallBack(`the gateway refused the poll proof (HTTP ${polled.status})`);
+          continue;
+        } else {
+          lastStatus = (data.status as string) || lastStatus;
+          failIfFailed(data, polled.status);
+          if (polled.status === 200 && lastStatus === "completed") return deliver(data, polled);
+          if (!isPendingPollStatus(polled.status)) {
+            throw new APIError(`Poll failed: ${polled.status}`, polled.status, sanitizeErrorResponse(data));
+          }
+          waitMs = retryAfterMs(polled) ?? intervalMs;
+          continue;
+        }
+      }
+
+      if (!challenge) {
+        // x-payment polling: an unpaid GET for a 402 carrying a fresh blockhash.
+        const unpaid = await this.fetchWithTimeout(pollUrl, {
+          method: "GET",
+          headers: { "User-Agent": USER_AGENT },
+        });
+        if (unpaid.status === 200) {
+          // already settled on an earlier poll: URLs come back idempotently
+          return deliver((await unpaid.json()) as Record<string, unknown>, unpaid);
+        }
+        if (unpaid.status !== 402) {
+          let errorBody: unknown;
+          try { errorBody = await unpaid.json(); } catch { errorBody = { error: "Poll failed" }; }
+          throw new APIError(`Poll failed: ${unpaid.status}`, unpaid.status, sanitizeErrorResponse(errorBody));
+        }
+        challenge = unpaid;
+      }
+
+      const { paymentPayload, costUsd } = await this.signPaymentFrom402(
+        pollUrl,
+        challenge,
+        true,             // always a fresh blockhash; the last one is stale by now
+        pollUrl
+      );
+      if (kind === "video") videoCostUsd = costUsd;
+
+      let paid: Response;
+      try {
+        paid = await this.fetchWithTimeout(pollUrl, {
+          method: "GET",
+          headers: { "User-Agent": USER_AGENT, "PAYMENT-SIGNATURE": paymentPayload },
+        });
+      } catch (error) {
+        // The payment may have reached the gateway and settled, with only the
+        // answer lost. Do not give up on a job that may be paid for: the next
+        // poll reads the job's settlement record (200 already_settled) or, if it
+        // never settled, asks again.
+        if (kind === "video" && lastStatus === "completed") settleAttempted = true;
+        if (--paidRefusalsLeft <= 0) {
+          throw withDisposition(
+            new PaymentError(
+              `Paid poll failed in transit (${error instanceof Error ? error.message : String(error)}). ` +
+                `The payment may have settled: resume the job by polling ${pollUrl} with the same wallet ` +
+                `before submitting again.`
+            ),
+            "paid-or-in-doubt"
+          );
+        }
+        continue;
+      }
+
+      const data = await readJsonOrEmpty(paid);
+      lastStatus = (data.status as string) || lastStatus;
+      failIfFailed(data, paid.status);
+      if (paid.status === 200 && lastStatus === "completed") return deliver(data, paid);
+
+      if (paid.status === 402 && kind === "video") {
+        if (
+          data.error === "Payment verification failed" &&
+          !(await isSafeStaleBlockhashResponse(new Response(JSON.stringify(data), { status: 402 })))
+        ) {
+          // Refused at verification: settlement never ran, nothing was charged.
+          throw new PaymentError(
+            "Payment for the finished video was rejected. Check your Solana USDC balance, then " +
+              `resume the job by polling ${pollUrl} with the same wallet.`
+          );
+        }
+        // Settlement in progress on another poll, outcome unknown, or a stale
+        // blockhash at settle. Asking again (and signing a fresh payment if the
+        // job still reads unpaid) is the gateway's documented recovery and cannot
+        // charge twice: a per-job claim lets only one poll settle, a claim whose
+        // settle timed out is held with that authorization recorded, and the poll
+        // that takes it over checks on chain whether it landed before settling
+        // anything new (sol #398). A stale-blockhash settle can never land.
+        // Wait as told, then poll again.
+        settleAttempted = true;
+        if (--paidRefusalsLeft <= 0) {
+          throw withDisposition(
+            new PaymentError(
+              `Payment for the finished video did not settle after ${MAX_PAID_POLL_REFUSALS} attempts ` +
+                `(last: ${(data.error as string) || "HTTP 402"}). It may still settle: resume the job by ` +
+                `polling ${pollUrl} with the same wallet before submitting again.`
+            ),
+            "paid-or-in-doubt"
+          );
+        }
+        waitMs = retryAfterMs(paid) ?? intervalMs;
+        continue;
+      }
+
+      // 202 queued / in_progress, or a transient 503/504: keep going. A pending
+      // poll is never charged, so retrying is free.
+      if (!isPendingPollStatus(paid.status) && paid.status !== 200) {
+        throw new APIError(`Poll failed: ${paid.status}`, paid.status, sanitizeErrorResponse(data));
+      }
+      waitMs = retryAfterMs(paid) ?? intervalMs;
+    }
+
+    const billing = kind === "video"
+      ? settleAttempted
+        ? "A payment for the finished video was sent and may still settle."
+        : "Nothing was charged: a video is charged only when a completed poll is paid."
+      : "The submit was already paid.";
+    throw new APIError(
+      `Job did not complete within ${Math.round(budgetMs / 1000)}s (last status: ${lastStatus}). ` +
+        `${billing} Resume by polling the same poll_url with the same wallet before submitting again.`,
+      504,
+      { id, last_status: lastStatus, poll_url: pollUrl }
+    );
+  }
+
+  /**
+   * Absolute URL for a job's `poll_url`. The gateway returns `/api/v1/...`;
+   * {@link buildUrl} drops the `/api` that `apiUrl` already ends with. An
+   * absolute poll_url must be on the gateway's own origin: the poll carries a
+   * wallet signature (and, for a finished video, a payment).
+   */
+  private resolvePollUrl(pollPath: string): string {
+    if (!/^https?:\/\//i.test(pollPath)) return this.buildUrl(pollPath);
+    if (new URL(pollPath).origin !== new URL(this.apiUrl).origin) {
+      throw new APIError(`poll_url is not on the gateway origin: ${pollPath}`, 502, { poll_url: pollPath });
+    }
+    return pollPath;
+  }
+
+  /**
    * Turn a `402` into a signed Solana payment payload.
    *
    * Extracted because four call sites need it — chat, the raw POST helpers, the
@@ -1104,103 +1471,6 @@ export class SolanaLLMClient {
    * @returns the header value to replay with, and what it will settle for.
    * @throws PaymentError when the 402 carries no usable Solana requirements.
    */
-  /**
-   * Follow a 202 `{ id, poll_url }` to completion, on Solana **image** routes.
-   *
-   * Two things differ from Base and both come from the same constraint — a
-   * Solana payment is a transaction pinned to a recent blockhash, valid for
-   * ~150 blocks (~60s), and a long render outlives it:
-   *
-   * 1. **The POST already settled.** Base settles on the completed poll; Solana
-   *    cannot, because by then the signed transaction has expired. So sol
-   *    settles optimistically at submit, and this loop only fetches the result.
-   *    The cost is recorded by the caller at POST, never here — recording it on
-   *    completion would lose the charge whenever a paid job then fails.
-   *    Solana VIDEO is the exception: it settles on the completed poll and a
-   *    failed job is not charged. Do not route video through this loop as-is —
-   *    it would book spend for jobs that were never charged.
-   * 2. **Every poll re-signs.** One authorization cannot be replayed across a
-   *    long render. The gateway binds the job to the payer address rather than
-   *    to the signature, so a fresh signature from the same wallet is accepted
-   *    and is never charged again.
-   */
-  private async followSolanaJob(
-    submitBody: Record<string, unknown>,
-    budgetMs: number,
-    intervalMs = 2_000
-  ): Promise<Record<string, unknown>> {
-    const id = submitBody.id as string | undefined;
-    const pollPath = submitBody.poll_url as string | undefined;
-    if (!id || !pollPath) return submitBody;
-
-    const pollUrl = pollPath.startsWith("http")
-      ? pollPath
-      : `${this.apiUrl}${pollPath.startsWith("/") ? "" : "/"}${pollPath}`;
-
-    const deadline = Date.now() + budgetMs;
-    let lastStatus = (submitBody.status as string) || "queued";
-
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, intervalMs));
-
-      // unpaid GET -> 402 challenge carrying a server-provided blockhash
-      const challenge = await this.fetchWithTimeout(pollUrl, {
-        method: "GET",
-        headers: { "User-Agent": USER_AGENT },
-      });
-
-      if (challenge.status === 200) {
-        // already settled on an earlier poll: URLs come back idempotently
-        const done = (await challenge.json()) as Record<string, unknown>;
-        return done;
-      }
-      if (challenge.status !== 402) {
-        let errorBody: unknown;
-        try { errorBody = await challenge.json(); } catch { errorBody = { error: "Poll failed" }; }
-        throw new APIError(`Poll failed: ${challenge.status}`, challenge.status, sanitizeErrorResponse(errorBody));
-      }
-
-      const { paymentPayload } = await this.signPaymentFrom402(
-        pollUrl,
-        challenge,
-        true,             // always a fresh blockhash; the last one is stale by now
-        pollUrl
-      );
-
-      const paid = await this.fetchWithTimeout(pollUrl, {
-        method: "GET",
-        headers: { "User-Agent": USER_AGENT, "PAYMENT-SIGNATURE": paymentPayload },
-      });
-
-      let data: Record<string, unknown> = {};
-      try { data = (await paid.json()) as Record<string, unknown>; } catch { /* keep empty */ }
-      lastStatus = (data.status as string) || lastStatus;
-
-      if (lastStatus === "failed") {
-        throw new APIError(
-          `Upstream job failed: ${(data.error as string) || "unknown"}`,
-          paid.status,
-          sanitizeErrorResponse(data)
-        );
-      }
-      if (paid.status === 200 && lastStatus === "completed") {
-        return data;   // already paid for at POST; this poll only delivers
-      }
-      // 202 queued / in_progress, or a transient 504: keep going. Nothing was
-      // charged, so retrying is free.
-      if (paid.status !== 200 && paid.status !== 202 && paid.status !== 504) {
-        throw new APIError(`Poll failed: ${paid.status}`, paid.status, sanitizeErrorResponse(data));
-      }
-    }
-
-    throw new APIError(
-      `Job did not complete within ${Math.round(budgetMs / 1000)}s (last status: ${lastStatus}). ` +
-        `No payment was taken.`,
-      504,
-      { id, last_status: lastStatus }
-    );
-  }
-
   private async signPaymentFrom402(
     url: string,
     response: Response,
@@ -1325,19 +1595,21 @@ export class SolanaLLMClient {
 
   private async requestWithPaymentRaw(
     endpoint: string,
-    body: Record<string, unknown>
+    body: Record<string, unknown>,
+    media: MediaJobOptions = {}
   ): Promise<Record<string, unknown>> {
     const url = `${this.apiUrl}${endpoint}`;
+    const pollBudgetMs = media.pollBudgetMs ?? this.timeout;
     for (let staleRetries = 0; ; ) {
       const response = await this.fetchWithTimeout(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
         body: JSON.stringify(body),
-      });
+      }, media.submitTimeoutMs);
 
       if (response.status === 402) {
         try {
-          return await this.handlePaymentAndRetryRaw(url, body, response, staleRetries > 0);
+          return await this.handlePaymentAndRetryRaw(url, body, response, staleRetries > 0, media);
         } catch (error) {
           if (
             !(error instanceof SafeStaleBlockhashError) ||
@@ -1354,7 +1626,13 @@ export class SolanaLLMClient {
         throw new APIError(`API error: ${response.status}`, response.status, sanitizeErrorResponse(errorBody));
       }
 
-      if (this.apiAuth && endpoint.startsWith("/v1/images/")) return this.apiAuth.poll<Record<string, unknown>>(response, this.timeout, 2_000);
+      if (this.apiAuth && /^\/v1\/(images|videos|audio)\//.test(endpoint)) {
+        return this.apiAuth.poll<Record<string, unknown>>(
+          response,
+          pollBudgetMs,
+          endpoint.startsWith("/v1/videos/") ? VIDEO_POLL_INTERVAL_MS : 2_000
+        );
+      }
       return response.json() as Promise<Record<string, unknown>>;
     }
   }
@@ -1363,19 +1641,26 @@ export class SolanaLLMClient {
     url: string,
     body: Record<string, unknown>,
     response: Response,
-    forceFreshBlockhash = false
+    forceFreshBlockhash = false,
+    media: MediaJobOptions = {}
   ): Promise<Record<string, unknown>> {
     const { paymentPayload, costUsd } = await this.signPaymentFrom402(url, response, forceFreshBlockhash);
 
-    const retryResponse = await this.fetchWithTimeout(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": USER_AGENT,
-        "PAYMENT-SIGNATURE": paymentPayload,
-      },
-      body: JSON.stringify(body),
-    });
+    let retryResponse: Response;
+    try {
+      retryResponse = await this.fetchWithTimeout(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": USER_AGENT,
+          "PAYMENT-SIGNATURE": paymentPayload,
+        },
+        body: JSON.stringify(body),
+      }, media.submitTimeoutMs);
+    } catch (error) {
+      // The signed transfer may have reached the gateway and settled.
+      throw withDisposition(error, "paid-or-in-doubt");
+    }
 
     await this.assertPaid(retryResponse);
 
@@ -1384,12 +1669,15 @@ export class SolanaLLMClient {
     // caller would get a job id where it expected an image, and nothing would
     // ever settle.
     if (retryResponse.status === 202) {
-      // Solana image routes settle at POST, so the charge has ALREADY happened — record it
-      // here, before following the job. Recording on completion instead would
-      // drop the cost whenever a paid job later fails or times out.
-      this.recordSettlement(costUsd);
+      const kind = pollKindFor(url);
+      // Solana image and music routes settle at POST, so the charge has ALREADY
+      // happened — record it here, before following the job. Recording on
+      // completion instead would drop the cost whenever a paid job later fails
+      // or times out. A video POST is only verified: followSolanaJob records
+      // the video's cost when the finished job is paid for.
+      if (kind !== "video") this.recordSettlement(costUsd);
       const submitted = (await retryResponse.json()) as Record<string, unknown>;
-      return this.followSolanaJob(submitted, this.timeout);
+      return this.followSolanaJob(submitted, media.pollBudgetMs ?? this.timeout, kind);
     }
 
     this.recordSettlement(costUsd);
@@ -1502,9 +1790,9 @@ export class SolanaLLMClient {
     this.sessionTotalUsd += costUsd;
   }
 
-  private async fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {
+  private async fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number = this.timeout): Promise<Response> {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
       return await (this.apiAuth ? this.apiAuth.fetch.bind(this.apiAuth) : fetch)(url, { ...options, signal: controller.signal });
     } finally {
