@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.22.0] - 2026-10-11
+
 ### Added — a batch payment in doubt is recovered through `payment-identifier`
 
 - When the gateway's 402 declares the x402 `payment-identifier` extension,
