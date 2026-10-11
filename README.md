@@ -4,7 +4,7 @@
 
 ### Cut your LLM bill by <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->%. One line of TypeScript.
 
-The smart-routing SDK for <!-- br:models.chatVisible -->86<!-- /br:models.chatVisible --> models — every request goes to the cheapest model that can handle it,
+The smart-routing SDK for <!-- br:models.chatVisible -->88<!-- /br:models.chatVisible --> models — every request goes to the cheapest model that can handle it,
 paid with an API key or per-request USDC on Solana or Base. No vendor lock-in.
 
 [![npm](https://img.shields.io/npm/v/@blockrun/llm.svg?style=flat-square)](https://www.npmjs.com/package/@blockrun/llm)
@@ -56,7 +56,7 @@ console.log(r.response);         // the proof
 |                    | OpenAI SDK     | OpenRouter        | LiteLLM          | **@blockrun/llm**                                                       |
 | ------------------ | -------------- | ----------------- | ---------------- | ----------------------------------------------------------------------- |
 | **Cost routing**   | ✗ one vendor   | Manual selection  | Manual selection | **Automatic — <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->% cheaper** |
-| **Models**         | GPT only       | 200+              | 100+ (BYO keys)  | **<!-- br:models.chatVisible -->86<!-- /br:models.chatVisible -->, one credential** |
+| **Models**         | GPT only       | 200+              | 100+ (BYO keys)  | **<!-- br:models.chatVisible -->88<!-- /br:models.chatVisible -->, one credential** |
 | **Free tier**      | ✗              | Rate-limited      | ✗                | **<!-- br:models.free -->7<!-- /br:models.free --> models, no signup**  |
 | **Auth**           | API key        | Account + API key | Your API keys    | **API key *or* wallet signature**                                       |
 | **Payment**        | Card + invoice | Credit card       | BYO keys         | **Account credit or USDC per-request**                                  |
@@ -441,6 +441,14 @@ picked:
 | `reasoning` | Human-readable explanation of the decision |
 | `tierConfigs` | The tier → primary/fallback map the decision was made against |
 
+**Search and routing.** xAI search (`x_search` / `web_search` tools, or
+`search` / `searchParameters` not set to `mode: 'off'`) runs on `xai/*` models
+only. When a routed call asks for search, the candidate chain is narrowed to
+its `xai/*` models in the router's order; when the route has none, `route()` /
+`smartChat()` / `smartChatCompletion()` throw before anything is sent or paid.
+For search, calling an `xai/*` model directly (e.g. `xai/grok-4.3`) is the
+dependable path.
+
 ### TypeScript Types
 
 `RoutingDecision`, `RoutingProfile`, `RoutingTier`, `RoutingTaskType`,
@@ -480,7 +488,25 @@ console.log(response);
 
 // Live Search with Grok (Solana payment)
 const tweet = await client.chat('xai/grok-4.5', 'What is trending on X?', { search: true });
+
+// xAI x_search on chosen accounts, structured output, real cost per call
+const res = await client.chatCompletion('xai/grok-4.3', [
+  { role: 'user', content: 'Which new models did these labs announce today? Return JSON.' },
+], {
+  tools: [{ type: 'x_search', allowedXHandles: ['OpenAI', 'AnthropicAI', 'xai'], fromDate: '2026-10-04' }],
+  searchParameters: { maxTurns: 2 },          // bounds xAI's per-post search bill
+  responseFormat: { type: 'json_object' },
+  timeout: 180_000,
+});
+console.log(res.choices[0].message.annotations); // url_citation with positions
+console.log(res.usage?.server_side_tool_usage);  // { x_posts_fetched, ... }
+console.log(res.costUsd, res.settlement);        // what you paid, and the tx
 ```
+
+`costUsd`, `settlement` and the per-call `timeout` work the same on `LLMClient`
+(Base / Arc). `costUsd` is what the call added to `getSpending()`: the signed
+price under `exact`, the metered `extra.chargedAmount` under batch settlement,
+`0` for a free model; it is undefined in API-key mode (billed to the account).
 
 **Setup:**
 1. Export your Solana wallet key: `export SOLANA_WALLET_KEY="your-bs58-key"`
@@ -610,7 +636,7 @@ gateway's answer proves, in one place:
 | The gateway's answer to the payment | What the SDK does |
 | --- | --- |
 | a 2xx | the call is served and booked (a missing or unreconciled receipt only makes the SDK re-read the channel before the next payment) |
-| first send: a 402, or a recognised refusal (`batch_payer_not_allowed`, `batch_payer_not_admitted`, `batch_admission_paused`, `batch_server_signed_only`, `batch_unavailable`, `batch_channel_limit`, `PAYMENT_VERIFICATION_UNAVAILABLE`), with no receipt or a failed one with no transaction | nothing was charged: pays `exact`. A deposit refused with a 402 or `PAYMENT_VERIFICATION_UNAVAILABLE` may still have been broadcast, so its channel is re-read from the chain before anything pays into it again |
+| first send: a 402, or a recognised refusal (`batch_payer_not_allowed`, `batch_payer_not_admitted`, `batch_admission_paused`, `batch_server_signed_only`, `batch_unavailable`, `batch_channel_limit`, `PAYMENT_VERIFICATION_UNAVAILABLE`), with no receipt or a failed one with no transaction | nothing was charged: pays `exact`. A deposit refused with a 402 or `PAYMENT_VERIFICATION_UNAVAILABLE` may still have been broadcast, so its channel is re-read from the chain before anything pays into it again, unless the 402's failed receipt names one of PayAI's `batch_*` admission refusals (capacity, rate, new channels disabled, account paused, fee-payer lane, deposit terms): that proves nothing was broadcast, so the deposit is forgotten, and the wallet's calls pay `exact` at once, without trying batch (`fallback` / `admission_refused`), for `Retry-After` (at most 15 min), else 60s, or 10 min when the deposit's own amount, asset or withdraw delay was refused |
 | first send: a 429 whose failed receipt proves nothing was broadcast (`batch_account_channel_capacity_exhausted`, `batch_channel_capacity_exhausted`, `batch_deposit_rate_limited`) | nothing was charged: backs off, then pays again with a new batch payment from a fresh 402; `exact` once `rateLimit` runs out |
 | first send: a 429 with no receipt | **in doubt**: after the backoff, replays the identical payment **once**; a 2xx with a success receipt ends it, anything else raises. A payment carrying a payment identifier is replayed as in the last row instead |
 | first send of an authorization: an error status with a cancelled receipt (`success: false`, `errorReason: "batch_cancelled"`, no transaction) | nothing was charged: the error is raised with retry disposition `'unpaid'`, so `fallbackModels` / `smartChat()` move on to the next model |
@@ -2135,7 +2161,7 @@ The `AnthropicClient` wraps the official `@anthropic-ai/sdk` with a custom fetch
 ## Frequently Asked Questions
 
 ### What is @blockrun/llm?
-@blockrun/llm is a TypeScript SDK that cuts LLM costs by up to <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->% with built-in smart routing: every request is routed to the cheapest of <!-- br:models.chatVisible -->86<!-- /br:models.chatVisible --> models (OpenAI, Anthropic, Google, xAI, DeepSeek, Moonshot, and more) that can handle it, then paid per-request in USDC via the x402 protocol — with API key account billing or x402 wallet payments on Solana or Base.
+@blockrun/llm is a TypeScript SDK that cuts LLM costs by up to <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->% with built-in smart routing: every request is routed to the cheapest of <!-- br:models.chatVisible -->88<!-- /br:models.chatVisible --> models (OpenAI, Anthropic, Google, xAI, DeepSeek, Moonshot, and more) that can handle it, then paid per-request in USDC via the x402 protocol — with API key account billing or x402 wallet payments on Solana or Base.
 
 ### How does payment work?
 When you make an API call, the SDK automatically handles x402 payment. It signs a USDC transaction locally using your wallet private key (which never leaves your machine), and includes the payment proof in the request header. Settlement is non-custodial and instant on Base or Solana.

@@ -42,6 +42,61 @@
   challenged for even if the caller edits its `messages` while the call
   waits.
 
+### Fixed — xAI search filters reached the gateway as camelCase and were dropped
+
+- `searchParameters` was sent verbatim (`includedXHandles`, `fromDate`, …).
+  The gateways validate the snake_case body with a non-strict schema, so every
+  filter was stripped and a "these X handles since yesterday" search ran over
+  all of X. Both clients now send `toWireSearchParameters(...)` (snake_case,
+  `@` stripped from handles). Raw snake_case dicts cast to the type still work.
+
+### Added — native xAI search tools, per-call cost and settlement receipt
+
+- `tools` accepts `{ type: "x_search", allowedXHandles, excludedXHandles,
+  fromDate, toDate, enableImageUnderstanding, enableVideoUnderstanding }` and
+  `{ type: "web_search", allowedDomains, excludedDomains }` on xai/* models
+  (`AnyTool`). `SearchParameters.maxTurns` bounds xAI's agentic search rounds.
+- `ChatResponse.costUsd` — what the call cost, equal to what it added to
+  `getSpending()`: the metered `extra.chargedAmount` under batch, the signed
+  price under exact, 0 for a free model on either client (undefined in API-key
+  mode). `ChatResponse.settlement` — `{ scheme, quotedUsd, transaction?,
+  network? }` from the PAYMENT-RESPONSE receipt; a bare `X-Payment-Receipt`
+  transaction hash is used when the receipt names none. Both clients (Solana
+  and EVM).
+- Response types: `message.annotations` (URL citations with positions),
+  `search_calls`, `usage.server_side_tool_usage` (x_posts_fetched, …).
+- `ChatCompletionOptions.timeout` — per-call timeout on `LLMClient` and
+  `SolanaLLMClient`, applied to every request of the call, paid or not (the
+  client default stays 60 s).
+- `SolanaLLMClient.getBalance({ strict: true })` throws on an RPC failure
+  instead of reporting it as a 0 balance.
+- Smart routing with search: when `smartChat` / `smartChatCompletion` /
+  `route()` (and the `blockrun/*` aliases) carry `x_search` / `web_search`
+  tools or search parameters, the routed chain keeps only its `xai/*`
+  candidates, in the router's order. The gateway refuses search on any other
+  model with a non-transient 400 (`SEARCH_UNSUPPORTED_MODEL`), so a non-xai
+  pick used to fail outright; a route with no `xai/*` candidate now throws
+  before anything is sent or paid.
+
+### Fixed — every PayAI admission refusal of a batch deposit is read as "nothing broadcast", and parks batch briefly
+
+- PayAI refuses a deposit before broadcasting it with 16 `batch_*` codes
+  (capacity, rate, signer funding headroom, new channels disabled, account
+  paused, fee-payer lane, deposit amount / asset / withdraw delay), always
+  with an empty transaction; sol.blockrun.ai answers each as a 402 carrying
+  that failed receipt. The SDK already paid `exact` for the call, but forgot
+  the deposit at once only for the three capacity / rate codes and re-read
+  the other 13 from the chain for about 300 blocks. It now forgets all 16.
+- Most of these do not clear by the next call, so after one the wallet's
+  calls (every client of the wallet in the process) pay `exact` at once
+  without signing a deposit to be refused again: a `fallback` event with
+  reason `admission_refused`, naming the code as `errorReason` and the time
+  left as `retryAfterMs`. The pause is `Retry-After` when the gateway sends
+  one (at most 15 min), else 60s, or 10 min for a refusal of the deposit's
+  own amount, asset or withdraw delay. Nothing waits for it, unlike a 429's
+  cooldown. A refusal that arrives as a 429 still backs off and retries as
+  before.
+
 ## [3.21.0] - 2026-10-11
 
 ### Added — Solana media polls sign a poll proof, not a payment
