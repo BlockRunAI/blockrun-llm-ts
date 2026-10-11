@@ -180,7 +180,11 @@ src/
   batch request in flight per wallet; concurrent calls pay `exact`, they do not queue (they only wait
   out a 429 cooldown). `parseRetryAfter` drops a non-finite or > 1 day value (default backoff);
   `coolDown()` caps `wallet.cooldownUntil` at now + `maxWaitMs`, while the call itself weighs the full
-  delay (over its remaining budget → exact / raise at once).
+  delay (over its remaining budget → exact / raise at once). A deposit's 402 with a failed
+  `NOT_BROADCAST_REFUSALS` receipt sets `wallet.refusedUntil` instead (`refusalCooldownMs`:
+  Retry-After ≤ 15 min, else 60s, 10 min for `CONFIG_REFUSALS`): nothing waits for it, calls pay
+  exact at once (`admission_refused`). Optional field, read as `?? 0`, so older SDK copies sharing
+  the v1 registry stay compatible.
 - **Deposits in doubt (P2) are settled at `finalized` only.** Any pending `wallet.resyncs` target
   blocks every batch payment for the wallet (`resync()` throws `ResyncError` → exact), so no second
   deposit is signed over one in doubt. `readChannelAccount` reads at `finalized` (+ `minContextSlot`).

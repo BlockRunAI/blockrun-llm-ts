@@ -141,7 +141,12 @@ export const DEFAULT_BATCH_RATE_LIMIT = { maxAttempts: 3, maxWaitMs: 60_000 } as
  * One observable batch-settlement event.
  *
  * - `fallback`: this call pays with `exact`. `reason` says why. Only ever
- *   when no batch payment of this call can have been charged.
+ *   when no batch payment of this call can have been charged. After the
+ *   facilitator refuses a deposit before broadcasting it (`payment_required`
+ *   with one of PayAI's `batch_*` admission codes as `errorReason`), the
+ *   wallet's calls skip batch for `retryAfterMs` (`Retry-After`, else 60s,
+ *   or 10 min for a refusal of the deposit's own terms) and report
+ *   `admission_refused`, naming the same code, without sending a payment.
  * - `backoff`: this call is waiting before it retries batch, after a 429
  *   (`reason: "rate_limited"`) or because another call for the wallet hit one
  *   (`reason: "cooldown"`).
@@ -165,7 +170,7 @@ export interface SolanaBatchEvent {
    * A short, stable code: `rate_limited`, `cooldown`, `not_offered`,
    * `client_signed_not_supported`, `channel_busy`, `untrusted_operator`, `deposit_over_cap`,
    * `channel_pending`, `closed_during_call`, `peer_dependency_missing`, `payment_creation_failed`,
-   * `wallet_config_conflict`, `channel_store_locked`, `payment_required`,
+   * `wallet_config_conflict`, `channel_store_locked`, `payment_required`, `admission_refused`,
    * `channel_resync_pending`, `channel_resync_failed`, `channel_unreadable`,
    * `deposit_journal_unreadable`, `deposit_journal_failed`,
    * `served_unpaid_on_rechallenge` or `batch_cancelled` (`recovered` events), or one of the gateway's refusal codes the
@@ -1748,19 +1753,41 @@ export function parseRetryAfter(value: string | null | undefined, now = Date.now
 }
 
 /**
- * 429 reasons the facilitator gives before it broadcasts anything: the
- * account or channel capacity limit, and the deposit-attempt rate limit.
+ * The facilitator's admission refusals: every `batch_*` errorReason PayAI's
+ * `/settle` (and, from its admission checks there, `/verify`) answers before
+ * anything is broadcast, always with an empty transaction (PayAI 10-05). They
+ * arrive as PayAI's 429 (capacity, rate), 503 (funding headroom, new channels
+ * disabled), 403 (account paused, fee-payer lane) or 400 (deposit terms);
+ * sol.blockrun.ai answers every one as a 402 carrying the failed receipt
+ * (blockrun-sol #427). A closed list: any other code is not proof.
  */
-const NOT_BROADCAST_429 = new Set([
+const NOT_BROADCAST_REFUSALS = new Set([
+  // 429
   "batch_account_channel_capacity_exhausted",
   "batch_channel_capacity_exhausted",
   "batch_deposit_rate_limited",
+  "batch_deposit_ip_rate_limited",
+  // 503
+  "batch_signer_funding_headroom_exhausted",
+  "batch_new_channels_disabled",
+  "batch_public_new_channels_disabled",
+  // 403
+  "batch_account_admission_paused",
+  "batch_channel_owner_mismatch",
+  "batch_fee_payer_unavailable",
+  "batch_fee_payer_not_dedicated",
+  "batch_fee_payer_lane_not_authorized",
+  "batch_transaction_fee_payer_mismatch",
+  // 400
+  "batch_initial_deposit_out_of_range",
+  "batch_deposit_asset_not_supported",
+  "batch_withdraw_delay_out_of_range",
 ]);
 
 /**
  * Whether a refusal's receipt (a 429, or sol.blockrun.ai's 402 for the same
  * refusal) proves the payment went nowhere: a failed receipt
- * with no transaction, for one of {@link NOT_BROADCAST_429}. Any other
+ * with no transaction, for one of {@link NOT_BROADCAST_REFUSALS}. Any other
  * receipt (charged, `settlement_pending`, one naming a transaction) means a
  * deposit may have been broadcast, which rolling back local state cannot undo.
  */
@@ -1769,8 +1796,41 @@ function provesNothingBroadcast(receipt: SettleResponseLike | undefined): boolea
     receipt?.success === false &&
     !receipt.transaction &&
     typeof receipt.errorReason === "string" &&
-    NOT_BROADCAST_429.has(receipt.errorReason)
+    NOT_BROADCAST_REFUSALS.has(receipt.errorReason)
   );
+}
+
+/**
+ * Admission refusals that follow from the deposit's own terms (its amount,
+ * asset or withdraw delay), which this wallet's config will send again
+ * unchanged: kept off batch for {@link CONFIG_REFUSAL_COOLDOWN_MS}.
+ */
+const CONFIG_REFUSALS: ReadonlySet<string> = new Set([
+  "batch_initial_deposit_out_of_range",
+  "batch_deposit_asset_not_supported",
+  "batch_withdraw_delay_out_of_range",
+]);
+
+/** How long a wallet stays off batch after any other admission refusal of a deposit, without `Retry-After`. */
+const REFUSAL_COOLDOWN_MS = 60_000;
+/** How long a wallet stays off batch after a {@link CONFIG_REFUSALS} refusal of a deposit, without `Retry-After`. */
+const CONFIG_REFUSAL_COOLDOWN_MS = 10 * 60_000;
+/** The longest a `Retry-After` on an admission refusal keeps a wallet off batch. */
+const REFUSAL_COOLDOWN_MAX_MS = 15 * 60_000;
+
+/**
+ * How long a wallet's calls skip batch after the facilitator refused one of
+ * its deposits before broadcasting it ({@link NOT_BROADCAST_REFUSALS}, on
+ * sol.blockrun.ai's 402). Most of these codes do not clear by the next call
+ * (new channels disabled, the account paused, the fee-payer lane, the
+ * deposit's own terms), and every attempt costs a signed deposit, a round
+ * trip and then the `exact` payment anyway, while adding to PayAI's own
+ * deposit rate limits. `Retry-After` wins when the gateway sends one, up to
+ * {@link REFUSAL_COOLDOWN_MAX_MS}.
+ */
+function refusalCooldownMs(errorReason: string | undefined, retryAfterMs: number | undefined): number {
+  if (retryAfterMs !== undefined) return Math.min(retryAfterMs, REFUSAL_COOLDOWN_MAX_MS);
+  return errorReason !== undefined && CONFIG_REFUSALS.has(errorReason) ? CONFIG_REFUSAL_COOLDOWN_MS : REFUSAL_COOLDOWN_MS;
 }
 
 /** Exponential backoff with jitter for a 429 without `Retry-After`: ~1s, 2s, 4s... */
@@ -1879,6 +1939,12 @@ type SendOutcome =
       status: number;
       errorReason?: string;
       rateLimited?: { retryAfterMs?: number };
+      /**
+       * Set for a facilitator admission refusal proven not broadcast (a 402
+       * with a failed {@link NOT_BROADCAST_REFUSALS} receipt): how long the
+       * wallet's calls skip batch ({@link refusalCooldownMs}).
+       */
+      refusedForMs?: number;
       /**
        * Whether the answer also proves a deposit this payment carried was
        * never broadcast. Without that proof the call may still pay again
@@ -2075,6 +2141,17 @@ interface WalletBatch {
   busy: boolean;
   /** Until when (ms since the epoch) the gateway asked this wallet to back off. */
   cooldownUntil: number;
+  /**
+   * Until when (ms since the epoch) this wallet's calls pay `exact` without
+   * trying batch, after the facilitator refused one of its deposits before
+   * broadcasting it ({@link refusalCooldownMs}). Unlike `cooldownUntil`
+   * (a 429, which calls wait out), nothing waits for this: the refusal will
+   * not clear in a call's retry budget. Optional so a WalletBatch made by an
+   * older SDK copy in the process reads as "not refused".
+   */
+  refusedUntil?: number;
+  /** The facilitator code behind {@link refusedUntil}. */
+  refusedFor?: string;
   /**
    * Calls inside `pay()` for this wallet, including ones sleeping out a 429
    * and about to retry. Unlike `busy` (one batch request in flight), this
@@ -2636,7 +2713,10 @@ export class SolanaBatchPayer {
    *   call in doubt.
    *
    * The wallet stays in cooldown after a 429, so its other calls wait
-   * instead of sending opens of their own.
+   * instead of sending opens of their own. After a deposit the facilitator
+   * refused before broadcasting it (a 402 with a failed `batch_*` admission
+   * receipt), its calls do not wait: they pay exact at once
+   * (`admission_refused`) until the refusal cooldown ends.
    *
    * @param closesAtStart - {@link closeFence}, taken before the call's first
    *   (unpaid) request. If a close completed since, the call pays exact
@@ -2716,9 +2796,21 @@ export class SolanaBatchPayer {
     };
     try {
       for (;;) {
+        const now = Date.now();
+        // The facilitator refused a deposit of this wallet before broadcasting
+        // it, for a reason that does not clear by the next call: pay exact at
+        // once, without signing another deposit to be refused the same way.
+        if ((wallet.refusedUntil ?? 0) > now) {
+          return fallback({
+            reason: "admission_refused",
+            errorReason: wallet.refusedFor,
+            retryAfterMs: (wallet.refusedUntil ?? 0) - now,
+            attempt: budget.attempt,
+            detail: `the facilitator refused this wallet's last batch deposit (${wallet.refusedFor ?? "unknown"}); batch is skipped until the refusal cooldown ends`,
+          });
+        }
         // A cooldown this call has not already waited out: another call's
         // 429. Wait for it if the budget allows, else pay exact.
-        const now = Date.now();
         if (wallet.cooldownUntil > now && wallet.cooldownUntil !== waitedUntil) {
           const wait = wallet.cooldownUntil - now;
           if (budget.waited + wait > this.maxWaitMs) {
@@ -2825,12 +2917,25 @@ export class SolanaBatchPayer {
           if (built.kind !== "authorization") {
             if (outcome.depositSafe) this.forgetIntent(wallet, built.key);
             else this.distrust(wallet, built, "deposit_refused");
+            // An admission refusal: the wallet's next calls pay exact at once
+            // instead of each signing a deposit to be refused again.
+            if (outcome.refusedForMs !== undefined) {
+              const until = Date.now() + outcome.refusedForMs;
+              if (until > (wallet.refusedUntil ?? 0)) {
+                wallet.refusedUntil = until;
+                wallet.refusedFor = outcome.errorReason;
+              }
+            }
           }
           sent = undefined;
           release();
           if (!outcome.rateLimited) {
-            const { kind: _kind, rateLimited: _limited, depositSafe: _safe, ...event } = outcome;
-            return fallback({ ...event, attempt: budget.attempt });
+            const { kind: _kind, rateLimited: _limited, depositSafe: _safe, refusedForMs, ...event } = outcome;
+            return fallback({
+              ...event,
+              ...(refusedForMs !== undefined && built.kind !== "authorization" ? { retryAfterMs: refusedForMs } : {}),
+              attempt: budget.attempt,
+            });
           }
           const wait = this.coolDown(wallet, outcome.rateLimited.retryAfterMs ?? backoffDelay(budget.attempt));
           if (budget.attempt >= this.maxAttempts || budget.waited + wait > this.maxWaitMs) {
@@ -3244,11 +3349,20 @@ export class SolanaBatchPayer {
             cause: await afterPaymentError(response),
           };
         }
-        // sol.blockrun.ai answers PayAI's capacity / rate refusal of a deposit
-        // with this 402 and PayAI's failed receipt (blockrun-sol #426): the
-        // receipt proves nothing was broadcast, so the deposit is forgotten at
-        // once instead of being re-read from the chain for ~300 blocks.
-        return { kind: "not_charged", reason: "payment_required", status, errorReason: receipt?.errorReason, depositSafe: provesNothingBroadcast(receipt) };
+        // sol.blockrun.ai answers every PayAI admission refusal of a deposit
+        // with this 402 and PayAI's failed receipt (blockrun-sol #426, #427):
+        // the receipt proves nothing was broadcast, so the deposit is
+        // forgotten at once instead of being re-read from the chain for ~300
+        // blocks, and the wallet skips batch for a while (refusedForMs).
+        const refused = provesNothingBroadcast(receipt);
+        return {
+          kind: "not_charged",
+          reason: "payment_required",
+          status,
+          errorReason: receipt?.errorReason,
+          depositSafe: refused,
+          ...(refused ? { refusedForMs: refusalCooldownMs(receipt?.errorReason, parseRetryAfter(getHeader("retry-after"))) } : {}),
+        };
       }
       const refusal = await batchRefusal(response);
       // A refusal charges nothing, so a refused top-up leaves a healthy
