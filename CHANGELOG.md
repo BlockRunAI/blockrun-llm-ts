@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.23.1] - 2026-10-12
+
 ### Deprecated — `SurfClient`: the gateway retired Surf
 
 - Every `/v1/surf/*` call has answered `410 endpoint_retired` since
