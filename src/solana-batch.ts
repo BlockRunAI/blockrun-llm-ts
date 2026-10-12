@@ -2214,7 +2214,10 @@ export interface SolanaBatchPayerInit {
    * channel and scheme client) never run each other's hooks. A before-hook
    * that throws refuses the payment: nothing is signed or sent, and `pay()`
    * reports a fallback. An after-hook that throws does the same: the payment
-   * was signed but is rolled back unsent, so the channel is not left pending.
+   * was signed but is rolled back unsent, so the channel is not left pending,
+   * and the failure hooks are told. Failure hooks are notifications only: a
+   * payload one returns as `recovered` is ignored, since a batch payment is
+   * never replaced by a payment built outside the batch scheme.
    */
   configureClient?: (client: X402ClientLike) => void;
 }
@@ -2277,15 +2280,24 @@ function registerHookDispatchers(client: X402ClientLike): void {
     }
   });
   client.onPaymentCreationFailure(async (context) => {
-    for (const hook of payScope.getStore()?.hooks.failure ?? []) {
-      try {
-        await hook(context);
-      } catch {
-        // A failure hook cannot turn a failed payment into anything else.
-      }
-    }
+    await runFailureHooks(payScope.getStore(), context);
     return undefined;
   });
+}
+
+/**
+ * Run a payer's failure hooks. They are notifications only: a batch payment
+ * is never replaced by a payload a hook "recovers" (that would pay outside
+ * the batch scheme), and a hook that throws changes nothing.
+ */
+async function runFailureHooks(scope: PayScope | undefined, context: X402HookContext): Promise<void> {
+  for (const hook of scope?.hooks.failure ?? []) {
+    try {
+      await hook(context);
+    } catch {
+      // A failure hook cannot turn a failed payment into anything else.
+    }
+  }
 }
 
 /** The RPC endpoint, and the headers it needs, for the batch scheme call in progress. */
@@ -3472,6 +3484,14 @@ export class SolanaBatchPayer {
       const { error } = scope.afterError;
       scope.afterError = undefined;
       await this.settle(http, payload, () => null, 0);
+      // The payment failed after x402 returned it, so x402 never ran the
+      // failure hooks: run this payer's here, so a hook that reserved budget
+      // before signing can release it.
+      await runFailureHooks(scope, {
+        paymentRequired,
+        selectedRequirements: (payload as { accepted?: X402HookContext["selectedRequirements"] }).accepted,
+        error,
+      } as unknown as X402HookContext);
       throw error;
     }
     const headers = http.encodePaymentSignatureHeader(payload);

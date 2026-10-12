@@ -423,10 +423,12 @@ describe("SolanaLLMClient batch-settlement", () => {
 
     it("rolls back a payment its after-hook refused, so the channel is not left pending", async () => {
       let failAfter = false;
+      const failures: string[] = [];
       const p = payer((c) => {
         c.onAfterPaymentCreation(async () => {
           if (failAfter) throw new Error("ledger write failed");
         });
+        c.onPaymentCreationFailure(async (ctx: any) => void failures.push(`${ctx.selectedRequirements?.amount}:${ctx.error?.message}`));
       });
       let channelId = "";
       gateway.push(async (_url, init) => {
@@ -439,6 +441,8 @@ describe("SolanaLLMClient batch-settlement", () => {
       const refused = await p.pay(paymentRequired(), send, noRechallenge);
       expect(refused.kind).toBe("fallback");
       expect(gatewayCalls).toHaveLength(1);
+      // The failure hooks hear about it, so a reservation can be released.
+      expect(failures).toEqual(["5000:ledger write failed"]);
 
       // The hook recovers: the next call pays from the same channel, not channel_pending.
       failAfter = false;

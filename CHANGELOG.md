@@ -16,7 +16,11 @@
 - An after-hook that threw left the payment the scheme had just recorded as
   pending, so every later call on that channel fell back with
   `channel_pending` until the scheme was rebuilt. The payment is now rolled
-  back unsent and the call falls back, and the next call pays normally.
+  back unsent, the payer's failure hooks are told, the call falls back, and
+  the next call pays normally.
+- Failure hooks registered through `configureClient` are notifications only.
+  A payload one returns as `recovered` is ignored: a batch payment is never
+  replaced by one built outside the batch scheme.
 
 ## [3.23.0] - 2026-10-12
 
