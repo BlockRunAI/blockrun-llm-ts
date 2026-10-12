@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [3.23.0] - 2026-10-12
+
+### Added — `SolanaBatchPayer` for embedders
+
+- `SolanaBatchPayer` is now exported, with `SolanaBatchPayerInit`,
+  `BatchAttempt`, `Rechallenge`, `X402ClientLike` and `X402HookContext`, so a
+  proxy can pay Solana batch-settlement with the same payer
+  `SolanaLLMClient` uses instead of a second implementation.
+- New optional `configureClient(client)` on `SolanaBatchPayerInit`: called once
+  with the batch scheme's `x402Client`, before anything is signed, so an
+  embedder can register its own payment-creation hooks. They see each batch
+  payment at its per-call ceiling (`selectedRequirements.amount`), not the
+  channel deposit. A before-hook that throws refuses the payment: nothing is
+  signed or sent, and `pay()` returns a fallback.
+- `SolanaLLMClient` is unchanged.
+
 ### Fixed — `OpenAI.chat.completions.create({ stream: true })` is typed as a stream
 
 - The non-stream overload was listed first, so TypeScript resolved a

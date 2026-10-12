@@ -2203,6 +2203,35 @@ export interface SolanaBatchPayerInit {
   rpcUrl: string;
   /** Headers the exact path sends to `rpcUrl` (`rpcHeaders`, `SOLANA_RPC_HEADERS`, `SOLANA_RPC_API_KEY`). */
   rpcHeaders?: Record<string, string>;
+  /**
+   * Called once with the batch scheme's `x402Client`, after the scheme and its
+   * policy are registered and before anything is signed. An embedder that
+   * enforces its own spend rules registers its payment-creation hooks here, so
+   * they see every batch payment this payer signs (each one's
+   * `selectedRequirements.amount` is the per-call ceiling, not the channel
+   * deposit) exactly as they see the embedder's own `exact` payments. A
+   * before-hook that throws refuses the payment: nothing is signed or sent,
+   * and `pay()` reports a fallback.
+   */
+  configureClient?: (client: X402ClientLike) => void;
+}
+
+/**
+ * The slice of `@x402/core`'s x402Client handed to
+ * {@link SolanaBatchPayerInit.configureClient}: its payment-creation hooks.
+ * Structural, so this package's types never require the optional
+ * `@x402/core` peer to be installed.
+ */
+export interface X402ClientLike {
+  onBeforePaymentCreation(hook: (context: X402HookContext) => Promise<unknown> | unknown): unknown;
+  onAfterPaymentCreation(hook: (context: X402HookContext) => Promise<unknown> | unknown): unknown;
+  onPaymentCreationFailure(hook: (context: X402HookContext) => Promise<unknown> | unknown): unknown;
+}
+
+/** What a payment-creation hook receives: at least the requirement being paid. */
+export interface X402HookContext {
+  selectedRequirements: PaymentRequirement & { scheme: string; network: string; amount?: string };
+  [key: string]: unknown;
 }
 
 /** The RPC endpoint, and the headers it needs, for the batch scheme call in progress. */
@@ -2530,6 +2559,7 @@ export class SolanaBatchPayer {
         .register("solana:*", scheme)
         .registerPolicy(scheme.paymentPolicy);
       client.setSpendControls({ maxAmountPerPayment: false });
+      this.init.configureClient?.(client as unknown as X402ClientLike);
       // Every call that can reach the RPC runs with this client's RPC headers.
       const raw = new core.x402HTTPClient(client) as unknown as HttpPaymentClient;
       const http: HttpPaymentClient = {

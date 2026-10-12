@@ -216,6 +216,7 @@ export {
 // Solana client
 export { SolanaLLMClient, solanaClient, type SolanaLLMClientOptions } from "./solana-client";
 export {
+  SolanaBatchPayer,
   BLOCKRUN_SOL_OPERATOR,
   DEFAULT_BATCH_RATE_LIMIT,
   DEFAULT_BATCH_IN_DOUBT,
@@ -226,6 +227,11 @@ export {
   type SolanaBatchOptions,
   type SolanaBatchEvent,
   type SolanaBatchStats,
+  type SolanaBatchPayerInit,
+  type BatchAttempt,
+  type Rechallenge,
+  type X402ClientLike,
+  type X402HookContext,
 } from "./solana-batch";
 
 // Solana wallet utilities
