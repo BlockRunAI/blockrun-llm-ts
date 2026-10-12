@@ -165,7 +165,7 @@ describe("SolanaLLMClient.stream", () => {
 
   it("re-signs once with a fresh blockhash after a verification-phase stale rejection", async () => {
     const signed = vi
-      .spyOn(client as unknown as { signPaymentFrom402: () => unknown }, "signPaymentFrom402")
+      .spyOn(client as unknown as { signPaymentFrom402: (...args: unknown[]) => unknown }, "signPaymentFrom402")
       .mockResolvedValue({ paymentPayload: "signed-payload", costUsd: 0.001 });
 
     fetchSpy

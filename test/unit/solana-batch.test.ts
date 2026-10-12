@@ -30,6 +30,7 @@ import {
   type SolanaBatchEvent,
 } from "../../src/solana-batch";
 import { APIError, retryDisposition } from "../../src/types";
+import type { ModelPricing } from "../../src/router-adapter";
 
 /**
  * Stands in a peer `@x402/svm` whose channel account layout moved: with
@@ -3981,13 +3982,13 @@ describe("SolanaLLMClient batch-settlement", () => {
       it.each(inDoubt)("smartChat() raises after %s instead of moving on to its routed fallbacks", async (_label, reason, status, answers) => {
         const c = observed();
         const exact = stubExact(c);
-        vi.spyOn(c as never, "getModelPricing" as never).mockResolvedValue(
+        vi.spyOn(c as unknown as { getModelPricing: () => Promise<Map<string, ModelPricing>> }, "getModelPricing").mockResolvedValue(
           new Map([
             ["openai/gpt-5-mini", { inputPrice: 0.25, outputPrice: 2 }],
             ["google/gemini-3.5-flash", { inputPrice: 0.5, outputPrice: 3 }],
             ["deepseek/deepseek-chat", { inputPrice: 0.2, outputPrice: 0.4 }],
             ["anthropic/claude-sonnet-5", { inputPrice: 3, outputPrice: 15 }],
-          ]) as never
+          ])
         );
         const decision = await c.route("gm");
         expect(decision.fallbacks?.length).toBeGreaterThan(0);
