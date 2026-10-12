@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.24.0] - 2026-10-12
+
 ### Changed — `smartChat` with search falls back to an xAI model instead of failing
 
 - Search (`x_search` / `web_search` tools, `search`, `searchParameters`) runs on
