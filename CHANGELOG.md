@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed — `OpenAI.chat.completions.create({ stream: true })` is typed as a stream
+
+- The non-stream overload was listed first, so TypeScript resolved a
+  `stream: true` call to `OpenAIChatCompletionResponse` and `for await` over it
+  failed to compile in strict mode. The stream overload now comes first.
+  Runtime behavior was already correct.
+- vitest's typecheck pass now compiles `test/**/*.test-d.ts` (it only covered
+  `src/` before), and a type test pins both overloads.
+
 ### Docs — README rewritten: every example checked against src, model tables regenerated
 
 - TypeScript examples were typechecked against the exported API, and 58 audited

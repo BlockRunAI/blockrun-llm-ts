@@ -1655,7 +1655,7 @@ export class LLMClient {
   /**
    * Query Predexon prediction market data (GET endpoints).
    *
-   * Access real-time data from Polymarket, Kalshi, dFlow, and Binance Futures.
+   * Access real-time data from Polymarket, Kalshi, Limitless, Opinion, Predict.Fun, Binance Futures, UMA and sports markets.
    * Powered by Predexon. Billed per request.
    *
    * @param path - Endpoint path, e.g. "polymarket/events", "kalshi/markets/12345"

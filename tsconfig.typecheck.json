@@ -1,0 +1,9 @@
+{
+  // vitest's typecheck pass: src plus the *.test-d.ts type tests. The base
+  // tsconfig only includes src, so without this the type assertions in
+  // test-d files were never compiled. Runtime tests stay out until their
+  // existing type errors are fixed.
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "rootDir": "." },
+  "include": ["src/**/*", "test/**/*.test-d.ts"]
+}
