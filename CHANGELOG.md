@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.22.1] - 2026-10-11
+
 ### Fixed — a paid call answered by a free fallback no longer counts as spend
 
 - When the Base / Arc gateway serves a paid chat request from a free fallback
