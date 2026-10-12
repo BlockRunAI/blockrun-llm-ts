@@ -444,10 +444,13 @@ picked:
 **Search and routing.** xAI search (`x_search` / `web_search` tools, or
 `search` / `searchParameters` not set to `mode: 'off'`) runs on `xai/*` models
 only. When a routed call asks for search, the candidate chain is narrowed to
-its `xai/*` models in the router's order; when the route has none, `route()` /
-`smartChat()` / `smartChatCompletion()` throw before anything is sent or paid.
-For search, calling an `xai/*` model directly (e.g. `xai/grok-4.3`) is the
-dependable path.
+its `xai/*` models in the router's order. The router seldom ranks xAI, so when
+the route has none, the call falls back to the catalog's search-capable xAI
+models (those `/v1/models` tags `search`): cheapest first on `eco` / `auto`,
+most capable first on `premium`. `routing.reasoning` says when that happened.
+Only a catalog with no `xai/*` chat model at all makes `route()` /
+`smartChat()` / `smartChatCompletion()` throw, before anything is sent or paid.
+Pin an `xai/*` model yourself when you want a specific one.
 
 ### TypeScript Types
 

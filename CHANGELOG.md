@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Changed — `smartChat` with search falls back to an xAI model instead of failing
+
+- Search (`x_search` / `web_search` tools, `search`, `searchParameters`) runs on
+  `xai/*` models only. Since 3.22.0 a routed search call kept only the route's
+  `xai/*` candidates and threw when there were none, which, because the router
+  seldom ranks xAI, was most calls. It now falls back to the catalog's
+  search-capable xAI chat models (tagged `search` in `/v1/models`; any `xai/*`
+  chat model if none is tagged): cheapest first on `eco` / `auto`, most
+  capable (priciest) first on `premium`, newer id on a tie. The rest of that
+  list are the fallbacks, and `routing.reasoning` names the fallback. It only
+  throws, before anything is sent or paid, when the catalog has no `xai/*`
+  chat model at all.
+
 ## [3.23.2] - 2026-10-12
 
 ### Deprecated — `SurfClient`: the gateway retired Surf

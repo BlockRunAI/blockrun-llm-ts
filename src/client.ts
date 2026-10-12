@@ -53,6 +53,7 @@ import {
   BASE_MINIMUM_PAYMENT_USD,
   errSummary,
   isTransientError,
+  registerSearchModels,
   routeWithCatalog,
   routingProfileForModel,
   routingText,
@@ -439,6 +440,7 @@ export class LLMClient {
       }
     }
 
+    registerSearchModels(pricing, models);
     return pricing;
   }
 
