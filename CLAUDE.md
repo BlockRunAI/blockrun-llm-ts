@@ -112,6 +112,7 @@ src/
 
 ## Solana batch-settlement (`src/solana-batch.ts`)
 
+- User docs: `docs/solana-batch.md` holds the full runtime contract; the README keeps a summary. Update both on behavior changes.
 - Opt-in via `SolanaLLMClient({ batch: { operators, maxDeposit } })`; drives the official
   `@x402/svm` 2.28 `BatchSvmScheme` (server-signed/operator mode) through `@x402/core`'s
   `x402HTTPClient`. Peers are optional and lazily imported; tsup keeps them external.
