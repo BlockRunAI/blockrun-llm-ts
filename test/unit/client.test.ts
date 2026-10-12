@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { LLMClient } from "../../src/client";
 import { APIError, PaymentError } from "../../src/types";
 import {
@@ -21,8 +21,37 @@ describe("LLMClient", () => {
       expect(client.getWalletAddress().startsWith("0x")).toBe(true);
     });
 
-    it("should throw on missing private key", () => {
-      expect(() => new LLMClient({} as any)).toThrow("Private key required");
+    describe("wallet key from the environment", () => {
+      const OTHER_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+      beforeEach(() => {
+        vi.stubEnv("BLOCKRUN_API_KEY", undefined);
+        vi.stubEnv("BASE_CHAIN_WALLET_KEY", undefined);
+        vi.stubEnv("BLOCKRUN_WALLET_KEY", undefined);
+      });
+      afterEach(() => {
+        vi.unstubAllEnvs();
+      });
+
+      it("should throw on missing private key", () => {
+        expect(() => new LLMClient({} as any)).toThrow("Private key required");
+      });
+
+      it("reads BLOCKRUN_WALLET_KEY, like every other client, when BASE_CHAIN_WALLET_KEY is unset", () => {
+        vi.stubEnv("BLOCKRUN_WALLET_KEY", TEST_PRIVATE_KEY);
+        expect(new LLMClient().getWalletAddress()).toBe("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
+      });
+
+      it("BASE_CHAIN_WALLET_KEY wins when both are set, so the paying wallet never changes", () => {
+        vi.stubEnv("BASE_CHAIN_WALLET_KEY", TEST_PRIVATE_KEY);
+        vi.stubEnv("BLOCKRUN_WALLET_KEY", OTHER_KEY);
+        expect(new LLMClient().getWalletAddress()).toBe("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
+      });
+
+      it("BLOCKRUN_API_KEY still beats both wallet env vars", () => {
+        vi.stubEnv("BLOCKRUN_API_KEY", "brk_live_test_account");
+        vi.stubEnv("BLOCKRUN_WALLET_KEY", TEST_PRIVATE_KEY);
+        expect(new LLMClient().authMode).toBe("api-key");
+      });
     });
 
     it("should throw on invalid private key format", () => {

@@ -2,6 +2,12 @@ import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js"
 /**
  * BlockRun Surf Client — pay-per-call crypto data via account API keys or x402 micropayments.
  *
+ * @deprecated The gateway retired Surf on 2026-09-06: every `/v1/surf/*` call
+ * now answers `410 endpoint_retired`. Use `PriceClient` / `/v1/crypto/price`
+ * for prices, `LLMClient.defi*` for DeFi data, `LLMClient.pm()` for
+ * prediction markets and `LLMClient.dex*` for DEX quotes. This class will be
+ * removed in the next major version.
+ *
  * Surf aggregates 84+ endpoints across CEX/DEX market data, on-chain SQL,
  * wallet intelligence, prediction markets, social analytics, and news under
  * a single OpenAPI surface mounted at `/api/v1/surf/*`.
@@ -66,6 +72,9 @@ const SURF_PREFIX = "/v1/surf";
 type QueryValue = string | number | boolean | null | undefined;
 type QueryParams = Record<string, QueryValue | QueryValue[]>;
 
+let warnedRetired = false;
+
+/** @deprecated Surf is retired (`410 endpoint_retired`); see the module docs for replacements. */
 export class SurfClient {
   private _account?: Account;
   private get account(): Account { return requireWallet(this._account); }
@@ -78,6 +87,13 @@ export class SurfClient {
   private timeout: number;
 
   constructor(options: SurfClientOptions = {}) {
+    if (!warnedRetired) {
+      warnedRetired = true;
+      console.warn(
+        "[blockrun] SurfClient is deprecated: the gateway retired /v1/surf/* (410 endpoint_retired). " +
+          "Use PriceClient, LLMClient.defi*, LLMClient.pm() or LLMClient.dex* instead."
+      );
+    }
     this.apiAuth = resolveApiKeyAuth(options);
     if (!this.apiAuth) {
       const envKey =

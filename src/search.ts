@@ -3,14 +3,16 @@ import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js"
  * BlockRun Search Client - Standalone Grok Live Search via x402 micropayments.
  *
  * Backend endpoint: POST /api/v1/search
- * Pricing: per source plus margin — see https://blockrun.ai/models.
+ * Sources: `web` and `news`. The gateway rejects `x`: for X/Twitter, use chat on
+ * an `xai/*` model with an `x_search` tool or `searchParameters`.
+ * Pricing: a flat price per call — see https://blockrun.ai/models.
  *
  * Usage:
  *   import { SearchClient } from "@blockrun/llm";
  *
  *   const client = new SearchClient({ privateKey: "0x..." });
  *   const result = await client.search("Latest news on x402 adoption", {
- *     sources: ["x", "web"],
+ *     sources: ["web", "news"],
  *   });
  *   console.log(result.summary);
  */

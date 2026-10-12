@@ -379,7 +379,7 @@ export interface PaymentRequired {
 }
 
 export interface LLMClientOptions extends ApiKeyOptions {
-  /** EVM wallet private key (hex string starting with 0x). Optional if BASE_CHAIN_WALLET_KEY env var is set. */
+  /** EVM wallet private key (hex string starting with 0x). Optional if BASE_CHAIN_WALLET_KEY (or BLOCKRUN_WALLET_KEY) is set. */
   privateKey?: `0x${string}` | string;
   /** API endpoint URL (default: https://blockrun.ai/api) */
   apiUrl?: string;
@@ -929,7 +929,10 @@ export interface VideoGenerateOptions {
 
 // Search options for standalone search endpoint
 export interface SearchOptions {
-  /** Source types to search (e.g. ["web", "x", "news"]) */
+  /**
+   * Source types to search: `"web"` and/or `"news"` (default `["web"]`). `"x"` is
+   * rejected by the gateway; X search runs in chat on `xai/*` models (`x_search`).
+   */
   sources?: string[];
   /** Maximum number of results (default: 10) */
   maxResults?: number;
@@ -1102,6 +1105,7 @@ export interface PriceClientOptions extends ApiKeyOptions {
   requireWallet?: boolean;
 }
 
+/** @deprecated Surf is retired; see {@link SurfClient}. */
 export interface SurfClientOptions extends ApiKeyOptions {
   privateKey?: `0x${string}` | string;
   apiUrl?: string;

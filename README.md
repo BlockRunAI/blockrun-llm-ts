@@ -1600,9 +1600,9 @@ await status();
 
 `getOrCreateWallet()` resolves the Base wallet in a fixed order:
 `BLOCKRUN_WALLET_KEY` or `BASE_CHAIN_WALLET_KEY`, then `~/.blockrun/.session`,
-then the legacy `~/.blockrun/wallet.key`. `LLMClient` itself reads only
-`BASE_CHAIN_WALLET_KEY` (or an explicit `privateKey`). For a single run of the
-helpers without changing anything, use `export BLOCKRUN_WALLET_KEY=<private-key>`.
+then the legacy `~/.blockrun/wallet.key`. `LLMClient` reads an explicit
+`privateKey`, then `BASE_CHAIN_WALLET_KEY`, then `BLOCKRUN_WALLET_KEY`. For a
+single run without changing anything, use `export BLOCKRUN_WALLET_KEY=<private-key>`.
 
 ### Wallet discovery and migration
 
@@ -1686,7 +1686,7 @@ const configured = new LLMClient({
 | `BLOCKRUN_API_KEY` | Account key (`brk_...`): account billing, no wallet needed. Create one at [user.blockrun.ai/dashboard/keys](https://user.blockrun.ai/dashboard/keys) |
 | `BLOCKRUN_API_BASE_URL` | Account API endpoint (default `https://api.blockrun.ai`) |
 | `BASE_CHAIN_WALLET_KEY` | EVM wallet private key for `LLMClient` (Base / Arc) and every EVM client |
-| `BLOCKRUN_WALLET_KEY` | EVM wallet key honoured by the service clients, `BlockrunClient`, `setupAgentWallet()` and `AnthropicClient` (checked before `BASE_CHAIN_WALLET_KEY`); **not** read by `LLMClient` |
+| `BLOCKRUN_WALLET_KEY` | EVM wallet key read by every EVM client. The service clients, `BlockrunClient`, `setupAgentWallet()` and `AnthropicClient` check it before `BASE_CHAIN_WALLET_KEY`; `LLMClient` checks it after, so a process holding both keeps paying from the same wallet |
 | `SOLANA_WALLET_KEY` | Solana secret key, bs58-encoded, for `SolanaLLMClient` |
 | `SOLANA_RPC_URL` | Solana RPC for payments and balance (also `rpcUrl`) |
 | `SOLANA_RPC_API_KEY` / `SOLANA_RPC_HEADERS` | Header auth for that RPC (also `rpcHeaders`) |

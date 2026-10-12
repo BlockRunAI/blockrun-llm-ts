@@ -184,20 +184,23 @@ export class LLMClient {
   /**
    * Initialize the BlockRun LLM client.
    *
-   * @param options - Client configuration options (optional if BASE_CHAIN_WALLET_KEY env var is set)
+   * @param options - Client configuration options (optional if BLOCKRUN_API_KEY, BASE_CHAIN_WALLET_KEY or BLOCKRUN_WALLET_KEY is set)
    */
   constructor(options: LLMClientOptions = {}) {
     this.apiAuth = resolveApiKeyAuth(options);
     if (!this.apiAuth) {
-      // Get private key from options or environment variable (browser-safe check)
+      // Get private key from options or environment variable (browser-safe check).
+      // BASE_CHAIN_WALLET_KEY keeps precedence so a process holding both never
+      // switches the paying wallet; BLOCKRUN_WALLET_KEY, which every other
+      // client already reads, is the fallback.
       const envKey = typeof process !== "undefined" && process.env
-        ? process.env.BASE_CHAIN_WALLET_KEY
+        ? process.env.BASE_CHAIN_WALLET_KEY || process.env.BLOCKRUN_WALLET_KEY
         : undefined;
       const privateKey = options.privateKey || envKey;
 
       if (!privateKey) {
         throw new Error(
-          "Private key required. Pass privateKey in options or set BASE_CHAIN_WALLET_KEY environment variable."
+          "Private key required. Pass privateKey in options or set BASE_CHAIN_WALLET_KEY (or BLOCKRUN_WALLET_KEY) environment variable."
         );
       }
 
@@ -1019,7 +1022,7 @@ export class LLMClient {
 
   /**
    * Make a request with automatic x402 payment handling, returning raw JSON.
-   * Used for non-ChatResponse endpoints (X/Twitter, search, image edit, etc.).
+   * Used for non-ChatResponse endpoints (search, image edit, etc.).
    */
   private async requestWithPaymentRaw(
     endpoint: string,
@@ -1477,7 +1480,8 @@ export class LLMClient {
   }
 
   /**
-   * Standalone search (web, X/Twitter, news).
+   * Standalone search over web and news. For X/Twitter, use chat on an
+   * `xai/*` model with an `x_search` tool.
    *
    * @param query - Search query
    * @param options - Optional search parameters

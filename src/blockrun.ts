@@ -5,8 +5,8 @@ import { readSseFrames } from "./sse";
  *
  * This is the **primitive** that every BlockRun API surface composes on top of:
  * a wallet, an x402 401-sign-replay handler, and four call shapes (get, post,
- * poll, stream). Per-API classes (LLMClient, ImageClient, SurfClient, …) are
- * being collapsed into Claude Code skills that drive this client directly.
+ * poll, stream). The per-API classes (LLMClient, ImageClient, …) remain fully
+ * supported; this client is the generic escape hatch for endpoints without one.
  *
  * Why one primitive instead of one client per API surface:
  *   - Every BlockRun endpoint pays the same way (USDC via x402 on Base/Solana)
@@ -15,8 +15,8 @@ import { readSseFrames } from "./sse";
  *     new TypeScript class + npm release
  *
  * Four call shapes:
- *   client.get<T>(path, params?)                — sync GET, e.g. /v1/surf/market/price
- *   client.post<T>(path, body?)                 — sync POST, e.g. /v1/surf/onchain/sql
+ *   client.get<T>(path, params?)                — sync GET, e.g. /v1/crypto/price/BTC-USD
+ *   client.post<T>(path, body?)                 — sync POST, e.g. /v1/search
  *   client.poll<T>(path, body?, { budgetMs })   — submit + poll, e.g. /v1/videos/generations
  *   client.stream<T>(path, body?)               — SSE iterator, e.g. /v1/chat/completions
  *
@@ -25,13 +25,11 @@ import { readSseFrames } from "./sse";
  *
  *   const br = new BlockrunClient({ privateKey: "0x..." });
  *
- *   // Surf endpoint (Tier 1)
- *   const btc = await br.get("/v1/surf/market/price", { symbol: "BTC" });
+ *   // Crypto price (Pyth, free)
+ *   const btc = await br.get("/v1/crypto/price/BTC-USD");
  *
- *   // Raw on-chain SQL (Tier 3)
- *   const rows = await br.post("/v1/surf/onchain/sql", {
- *     query: "SELECT block_number FROM ethereum.blocks ORDER BY block_number DESC LIMIT 1",
- *   });
+ *   // Standalone web search
+ *   const res = await br.post("/v1/search", { query: "x402 adoption", sources: ["web"] });
  *
  *   // Long-running video generation (submit + poll, paid on success)
  *   const video = await br.poll("/v1/videos/generations", {

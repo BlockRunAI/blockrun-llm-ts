@@ -3,6 +3,22 @@ import { SurfClient } from "../../src/surf";
 import { APIError, PaymentError } from "../../src/types";
 import { TEST_PRIVATE_KEY } from "../helpers/testHelpers";
 
+describe("SurfClient retirement", () => {
+  it("warns once per process that Surf is retired, naming the replacements", async () => {
+    vi.resetModules();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const { SurfClient: FreshSurfClient } = await import("../../src/surf");
+      new FreshSurfClient({ privateKey: TEST_PRIVATE_KEY });
+      new FreshSurfClient({ privateKey: TEST_PRIVATE_KEY });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toMatch(/410 endpoint_retired.*PriceClient/s);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
 describe("SurfClient", () => {
   describe("Constructor", () => {
     it("creates a client with a valid private key", () => {
