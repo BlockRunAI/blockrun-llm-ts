@@ -405,6 +405,56 @@ describe("SolanaLLMClient batch-settlement", () => {
       expect(signed).toEqual(["5000"]);
     });
 
+    it("runs only the paying payer's hooks when two payers share a wallet", async () => {
+      // A builds the wallet's shared scheme client first, with no hooks.
+      const a = payer(() => {});
+      const b = payer((c) => {
+        c.onBeforePaymentCreation(async () => {
+          throw new Error("over b's cap");
+        });
+      });
+      gateway.push(async (_url, init) => servedWithVoucher(operator, channelIdOf(decodePayment(init)), 1200n, 1200n));
+
+      expect((await a.pay(paymentRequired(), send, noRechallenge)).kind).toBe("paid");
+      // B's refusal still applies on the client A built.
+      expect((await b.pay(paymentRequired(), send, noRechallenge)).kind).toBe("fallback");
+      expect(gatewayCalls).toHaveLength(1);
+    });
+
+    it("rolls back a payment its after-hook refused, so the channel is not left pending", async () => {
+      let failAfter = false;
+      const failures: string[] = [];
+      const p = payer((c) => {
+        c.onAfterPaymentCreation(async () => {
+          if (failAfter) throw new Error("ledger write failed");
+        });
+        c.onPaymentCreationFailure(async (ctx: any) => void failures.push(`${ctx.selectedRequirements?.amount}:${ctx.error?.message}`));
+      });
+      let channelId = "";
+      gateway.push(async (_url, init) => {
+        channelId = channelIdOf(decodePayment(init));
+        return servedWithVoucher(operator, channelId, 1200n, 1200n);
+      });
+      expect((await p.pay(paymentRequired(), send, noRechallenge)).kind).toBe("paid");
+
+      failAfter = true;
+      const refused = await p.pay(paymentRequired(), send, noRechallenge);
+      expect(refused.kind).toBe("fallback");
+      expect(gatewayCalls).toHaveLength(1);
+      // The failure hooks hear about it, so a reservation can be released.
+      expect(failures).toEqual(["5000:ledger write failed"]);
+
+      // The hook recovers: the next call pays from the same channel, not channel_pending.
+      failAfter = false;
+      gateway.push(async (_url, init) => {
+        const payment = decodePayment(init);
+        expect(payment.payload.type).toBe("authorization");
+        expect(channelIdOf(payment)).toBe(channelId);
+        return servedWithVoucher(operator, channelId, 2000n, 800n);
+      });
+      expect((await p.pay(paymentRequired(), send, noRechallenge)).kind).toBe("paid");
+    });
+
     it("refuses the payment when an embedder's before-hook throws: nothing is signed or sent", async () => {
       const p = payer((c) => {
         c.onBeforePaymentCreation(async () => {
