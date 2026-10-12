@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [3.23.1] - 2026-10-12
+## [3.23.2] - 2026-10-12
 
 ### Deprecated — `SurfClient`: the gateway retired Surf
 
@@ -25,6 +25,26 @@
   `"x"` was a source; the gateway rejects it with a 400. Sources are `web` and
   `news`; X search runs in chat on `xai/*` models (`x_search`). Pricing is a
   flat price per call. `BlockrunClient`'s examples no longer use Surf.
+
+## [3.23.1] - 2026-10-12
+
+### Fixed — `configureClient` hooks belong to the payer that registered them
+
+- Payers of the same wallet share its channel and scheme client, and 3.23.0
+  ran `configureClient` against that shared client, so only the first payer's
+  hooks were ever installed: a second payer's spend rules were silently
+  skipped and its payments ran the first payer's hooks instead. Each payer now
+  keeps its own hooks, and the shared client runs the hooks of the payer whose
+  `pay()` is in progress, and only those. `configureClient` is now called when
+  the payer is constructed.
+- An after-hook that threw left the payment the scheme had just recorded as
+  pending, so every later call on that channel fell back with
+  `channel_pending` until the scheme was rebuilt. The payment is now rolled
+  back unsent, the payer's failure hooks are told, the call falls back, and
+  the next call pays normally.
+- Failure hooks registered through `configureClient` are notifications only.
+  A payload one returns as `recovered` is ignored: a batch payment is never
+  replaced by one built outside the batch scheme.
 
 ## [3.23.0] - 2026-10-12
 
