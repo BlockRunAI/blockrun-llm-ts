@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [3.23.1] - 2026-10-12
+
+### Fixed — `configureClient` hooks belong to the payer that registered them
+
+- Payers of the same wallet share its channel and scheme client, and 3.23.0
+  ran `configureClient` against that shared client, so only the first payer's
+  hooks were ever installed: a second payer's spend rules were silently
+  skipped and its payments ran the first payer's hooks instead. Each payer now
+  keeps its own hooks, and the shared client runs the hooks of the payer whose
+  `pay()` is in progress, and only those. `configureClient` is now called when
+  the payer is constructed.
+- An after-hook that threw left the payment the scheme had just recorded as
+  pending, so every later call on that channel fell back with
+  `channel_pending` until the scheme was rebuilt. The payment is now rolled
+  back unsent and the call falls back, and the next call pays normally.
+
 ## [3.23.0] - 2026-10-12
 
 ### Added — `SolanaBatchPayer` for embedders

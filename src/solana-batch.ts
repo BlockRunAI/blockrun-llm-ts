@@ -2204,14 +2204,17 @@ export interface SolanaBatchPayerInit {
   /** Headers the exact path sends to `rpcUrl` (`rpcHeaders`, `SOLANA_RPC_HEADERS`, `SOLANA_RPC_API_KEY`). */
   rpcHeaders?: Record<string, string>;
   /**
-   * Called once with the batch scheme's `x402Client`, after the scheme and its
-   * policy are registered and before anything is signed. An embedder that
-   * enforces its own spend rules registers its payment-creation hooks here, so
-   * they see every batch payment this payer signs (each one's
-   * `selectedRequirements.amount` is the per-call ceiling, not the channel
-   * deposit) exactly as they see the embedder's own `exact` payments. A
-   * before-hook that throws refuses the payment: nothing is signed or sent,
-   * and `pay()` reports a fallback.
+   * Called once, when the payer is constructed, with a registrar for x402
+   * payment-creation hooks. An embedder that enforces its own spend rules
+   * registers its hooks here, so they see every batch payment THIS payer signs
+   * (each one's `selectedRequirements.amount` is the per-call ceiling, not the
+   * channel deposit) exactly as they see the embedder's own `exact` payments.
+   *
+   * The hooks are this payer's own: payers that share a wallet (and so its
+   * channel and scheme client) never run each other's hooks. A before-hook
+   * that throws refuses the payment: nothing is signed or sent, and `pay()`
+   * reports a fallback. An after-hook that throws does the same: the payment
+   * was signed but is rolled back unsent, so the channel is not left pending.
    */
   configureClient?: (client: X402ClientLike) => void;
 }
@@ -2232,6 +2235,57 @@ export interface X402ClientLike {
 export interface X402HookContext {
   selectedRequirements: PaymentRequirement & { scheme: string; network: string; amount?: string };
   [key: string]: unknown;
+}
+
+type X402Hook = (context: X402HookContext) => Promise<unknown> | unknown;
+
+/** One payer's hooks, and an after-hook failure seen during the payment being built. */
+interface PayScope {
+  hooks: { before: X402Hook[]; after: X402Hook[]; failure: X402Hook[] };
+  afterError?: { error: unknown };
+}
+
+/**
+ * The payer whose `pay()` is running. The scheme client is shared by every
+ * payer of a wallet, so its hooks are dispatchers that run the hooks of the
+ * payer in scope, and only those.
+ */
+const payScope = new AsyncLocalStorage<PayScope>();
+
+/**
+ * Register, on a wallet's shared scheme client, hooks that run the hooks of
+ * the payer in scope ({@link payScope}). An after-hook's failure is recorded
+ * for {@link SolanaBatchPayer.buildPayment} to roll the payment back, rather
+ * than thrown past the scheme's pending record.
+ */
+function registerHookDispatchers(client: X402ClientLike): void {
+  client.onBeforePaymentCreation(async (context) => {
+    for (const hook of payScope.getStore()?.hooks.before ?? []) {
+      const result = await hook(context);
+      if (result && typeof result === "object" && (result as { abort?: unknown }).abort) return result;
+    }
+    return undefined;
+  });
+  client.onAfterPaymentCreation(async (context) => {
+    const scope = payScope.getStore();
+    for (const hook of scope?.hooks.after ?? []) {
+      try {
+        await hook(context);
+      } catch (error) {
+        if (scope && !scope.afterError) scope.afterError = { error };
+      }
+    }
+  });
+  client.onPaymentCreationFailure(async (context) => {
+    for (const hook of payScope.getStore()?.hooks.failure ?? []) {
+      try {
+        await hook(context);
+      } catch {
+        // A failure hook cannot turn a failed payment into anything else.
+      }
+    }
+    return undefined;
+  });
 }
 
 /** The RPC endpoint, and the headers it needs, for the batch scheme call in progress. */
@@ -2415,7 +2469,14 @@ export class SolanaBatchPayer {
     unresolvedByReason: {},
   };
 
+  private readonly hooks: PayScope["hooks"] = { before: [], after: [], failure: [] };
+
   constructor(private readonly init: SolanaBatchPayerInit) {
+    init.configureClient?.({
+      onBeforePaymentCreation: (hook) => void this.hooks.before.push(hook),
+      onAfterPaymentCreation: (hook) => void this.hooks.after.push(hook),
+      onPaymentCreationFailure: (hook) => void this.hooks.failure.push(hook),
+    });
     const { operators, rateLimit, inDoubt } = init.options;
     if (!Array.isArray(operators) || operators.length === 0 || operators.some((o) => typeof o !== "string" || !o)) {
       throw new Error("batch.operators must list at least one base58 operator public key");
@@ -2559,7 +2620,7 @@ export class SolanaBatchPayer {
         .register("solana:*", scheme)
         .registerPolicy(scheme.paymentPolicy);
       client.setSpendControls({ maxAmountPerPayment: false });
-      this.init.configureClient?.(client as unknown as X402ClientLike);
+      registerHookDispatchers(client as unknown as X402ClientLike);
       // Every call that can reach the RPC runs with this client's RPC headers.
       const raw = new core.x402HTTPClient(client) as unknown as HttpPaymentClient;
       const http: HttpPaymentClient = {
@@ -2918,7 +2979,9 @@ export class SolanaBatchPayer {
     }
     wallet.active += 1;
     try {
-      return await this.payWith(wallet, paymentRequired, send, rechallenge, closesAtStart ?? wallet.closes);
+      return await payScope.run({ hooks: this.hooks }, () =>
+        this.payWith(wallet, paymentRequired, send, rechallenge, closesAtStart ?? wallet.closes),
+      );
     } finally {
       wallet.active -= 1;
     }
@@ -3402,6 +3465,15 @@ export class SolanaBatchPayer {
   /** Build a new batch payment for a 402: the payload, its headers and its kind. */
   private async buildPayment(wallet: WalletBatch, paymentRequired: PaymentRequired): Promise<SentPayment> {
     const { http, payload } = await this.createPayload(wallet, paymentRequired);
+    // An embedder's after-hook refused the payment once it was signed: roll it
+    // back unsent (the scheme already recorded it as pending) and refuse.
+    const scope = payScope.getStore();
+    if (scope?.afterError) {
+      const { error } = scope.afterError;
+      scope.afterError = undefined;
+      await this.settle(http, payload, () => null, 0);
+      throw error;
+    }
     const headers = http.encodePaymentSignatureHeader(payload);
     const channelId = payloadChannelId(payload);
     const known = channelId ? wallet.book.find(channelId) : undefined;
