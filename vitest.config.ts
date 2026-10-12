@@ -26,6 +26,7 @@ export default defineConfig({
     testMatch: ['**/test/**/*.test.ts'],
     typecheck: {
       enabled: true,
+      tsconfig: './tsconfig.typecheck.json',
     },
   },
 });

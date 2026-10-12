@@ -42,9 +42,11 @@ import {
 
 const DEFAULT_API_URL = "https://blockrun.ai/api";
 const DEFAULT_MODEL = "google/nano-banana";
-// Available image models: openai/dall-e-3, openai/gpt-image-1, openai/gpt-image-2,
-//   google/nano-banana, google/nano-banana-pro, zai/cogview-4,
-//   xai/grok-imagine-image, xai/grok-imagine-image-pro
+// Image models (GET /v1/models lists the current set): openai/gpt-image-1,
+//   openai/gpt-image-2, openai/gpt-image-2.5-flare, openai/gpt-image-2.5-sunburst,
+//   google/nano-banana, google/nano-banana-2, google/nano-banana-pro,
+//   xai/grok-imagine-image, xai/grok-imagine-image-2.0, xai/grok-imagine-image-pro,
+//   bytedance/seedream-5-pro, zai/cogview-4
 const DEFAULT_SIZE = "1024x1024";
 const DEFAULT_TIMEOUT = 200000; // gpt-image-2 at >=1536px can take ~180s server-side; 200s gives buffer
 
@@ -151,7 +153,8 @@ export class ImageClient {
    * combined with multiple source images.
    *
    * Edit-capable models: `openai/gpt-image-1`, `openai/gpt-image-2`,
-   * `google/nano-banana`, `google/nano-banana-pro`.
+   * `openai/gpt-image-2.5-sunburst`, `google/nano-banana`, `google/nano-banana-2`,
+   * `google/nano-banana-pro`. `mask` is OpenAI-only.
    *
    * @param prompt - Text description of the desired edit
    * @param image - A base64 `data:image/...` URI, or an array of 2–4 such URIs to fuse

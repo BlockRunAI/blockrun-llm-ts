@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+### Fixed — `OpenAI.chat.completions.create({ stream: true })` is typed as a stream
+
+- The non-stream overload was listed first, so TypeScript resolved a
+  `stream: true` call to `OpenAIChatCompletionResponse` and `for await` over it
+  failed to compile in strict mode. The stream overload now comes first.
+  Runtime behavior was already correct.
+- vitest's typecheck pass now compiles `test/**/*.test-d.ts` (it only covered
+  `src/` before), and a type test pins both overloads.
+
+### Docs — README rewritten: every example checked against src, model tables regenerated
+
+- TypeScript examples were typechecked against the exported API, and 58 audited
+  inaccuracies are fixed: router example picks and savings, the retired Surf
+  section, Search sources (`web` / `news` only), Predexon endpoints and params,
+  Arc's env var, the cost-log path, cache behavior, env vars, and error handling
+  in account mode.
+- Model tables regenerated from `GET /v1/models`: adds `openai/gpt-6.1-sol`,
+  `qwen/qwen3.8-max`, Mistral / Tencent / Poolside, the GPT Image 2.5 and Grok
+  Imagine 2.0 rows, the seventh free model `nvidia/muse-glimmer-30b`, and the
+  current video limits; new Music and Phone sections.
+- Restructured and deduplicated (smart routing first, one free-model table, one
+  credential-precedence statement, merged Wallets and Configuration sections).
+- The Solana batch-settlement reference moved to `docs/solana-batch.md`, with
+  the missing `admission_refused`, `batch_cancelled` and `deposit_refused`
+  event reasons added.
+
 ## [3.22.1] - 2026-10-11
 
 ### Fixed — a paid call answered by a free fallback no longer counts as spend

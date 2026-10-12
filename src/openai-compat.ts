@@ -187,8 +187,10 @@ class ChatCompletions {
   /**
    * Create a chat completion (OpenAI-compatible).
    */
-  async create(params: OpenAIChatCompletionParams): Promise<OpenAIChatCompletionResponse>;
+  // The stream overload must come first: TypeScript picks the first match,
+  // and `{ stream: true }` also satisfies the plain params type.
   async create(params: OpenAIChatCompletionParams & { stream: true }): Promise<AsyncIterable<OpenAIChatCompletionChunk>>;
+  async create(params: OpenAIChatCompletionParams): Promise<OpenAIChatCompletionResponse>;
   async create(params: OpenAIChatCompletionParams): Promise<OpenAIChatCompletionResponse | AsyncIterable<OpenAIChatCompletionChunk>> {
     if (params.stream) {
       return this.createStream(params);
