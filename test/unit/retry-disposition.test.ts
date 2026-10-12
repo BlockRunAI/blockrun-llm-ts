@@ -63,7 +63,7 @@ beforeEach(() => {
   });
   // The EVM client waits 1s before its one 502/503 retry; skip that wait.
   const realSetTimeout = globalThis.setTimeout;
-  vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms?: number, ...args: unknown[]) =>
+  vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) =>
     realSetTimeout(fn, ms === 1000 ? 0 : ms, ...args)) as typeof setTimeout);
 });
 

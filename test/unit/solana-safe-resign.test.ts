@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isSafeStaleBlockhashResponse } from "../../src/solana-client";
 
-function rejection(body: Record<string, unknown>, headers?: HeadersInit): Response {
+function rejection(body: Record<string, unknown>, headers?: Record<string, string>): Response {
   return new Response(JSON.stringify(body), {
     status: 402,
     headers: { "content-type": "application/json", ...headers },

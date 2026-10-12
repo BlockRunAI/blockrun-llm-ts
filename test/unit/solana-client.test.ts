@@ -59,7 +59,7 @@ describe("SolanaLLMClient", () => {
     );
 
     expect(response.model).toBe("fallback/model");
-    expect(requestSpy.mock.calls.map((call) => call[1].model)).toEqual([
+    expect(requestSpy.mock.calls.map((call) => (call[1] as { model: string }).model)).toEqual([
       "primary/model",
       "fallback/model",
     ]);

@@ -17,6 +17,13 @@
   throws, before anything is sent or paid, when the catalog has no `xai/*`
   chat model at all.
 
+### Fixed — `batch.onEvent` accepts a callback that returns a value
+
+- `SolanaBatchOptions.onEvent` was typed `(event) => void | PromiseLike<void>`,
+  so `onEvent: (e) => events.push(e)` (or any callback returning a value) failed
+  to type-check, although the SDK already ignores the return value unless it is
+  a promise. It is now typed `(event) => unknown`; runtime behaviour is unchanged.
+
 ## [3.23.2] - 2026-10-12
 
 ### Deprecated — `SurfClient`: the gateway retired Surf

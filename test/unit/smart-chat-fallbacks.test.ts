@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { LLMClient } from "../../src/client";
 import { APIError, withDisposition } from "../../src/types";
-import { routingText, routeWithCatalog } from "../../src/router-adapter";
+import { routingText, routeWithCatalog, type ModelPricing } from "../../src/router-adapter";
 import { DEFAULT_MODEL_CAPABILITIES } from "@blockrun/router-core";
 import { TEST_PRIVATE_KEY, buildChatResponse } from "../helpers/testHelpers";
 
@@ -25,7 +25,10 @@ function routerPricing() {
 
 function makeClient(pricing: Map<string, { inputPrice: number; outputPrice: number }> = routerPricing()) {
   const client = new LLMClient({ privateKey: TEST_PRIVATE_KEY });
-  vi.spyOn(client as never, "getModelPricing" as never).mockResolvedValue(pricing as never);
+  vi.spyOn(
+    client as unknown as { getModelPricing: () => Promise<Map<string, ModelPricing>> },
+    "getModelPricing",
+  ).mockResolvedValue(pricing);
   return client;
 }
 
@@ -140,8 +143,8 @@ describe("Router Core SDK integration", () => {
   it("resolves blockrun/auto before the paid gateway request", async () => {
     const client = makeClient();
     const requestSpy = vi
-      .spyOn(client as never, "requestWithPayment" as never)
-      .mockResolvedValue(buildChatResponse() as never);
+      .spyOn(client as unknown as { requestWithPayment: (...a: unknown[]) => unknown }, "requestWithPayment")
+      .mockResolvedValue(buildChatResponse());
 
     const response = await client.chatCompletion(
       "blockrun/auto",

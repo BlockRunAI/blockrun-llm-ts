@@ -14,8 +14,9 @@ vi.mock("fs", async (importOriginal) => {
   const name = (p: unknown) => path.basename(String(p));
   return {
     ...real,
-    openSync: (file: string, flags?: string, mode?: number) => {
-      const fd = real.openSync(file, flags, mode);
+    openSync: (...args: Parameters<typeof real.openSync>) => {
+      const [file] = args;
+      const fd = real.openSync(...args);
       fdPaths.set(fd, String(file));
       calls.push(`open ${name(file)}`);
       return fd;
