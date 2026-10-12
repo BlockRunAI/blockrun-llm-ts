@@ -167,7 +167,7 @@ describe("LLMClient", () => {
 
       try {
         await client.listModels();
-        fail("Should have thrown");
+        expect.unreachable("Should have thrown");
       } catch (error) {
         expect(error).toBeInstanceOf(APIError);
         const apiError = error as APIError;

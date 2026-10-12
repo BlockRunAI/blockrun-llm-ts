@@ -39,6 +39,7 @@ import {
   SOLANA_MINIMUM_PAYMENT_USD,
   errSummary,
   isTransientError,
+  registerSearchModels,
   routeWithCatalog,
   routingProfileForModel,
   routingText,
@@ -511,6 +512,7 @@ export class SolanaLLMClient {
             : {}),
         });
       }
+      registerSearchModels(pricing, models);
       return pricing;
     })();
     try {

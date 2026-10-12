@@ -88,6 +88,57 @@ export function requestsSearch(options: {
   return options.search === true;
 }
 
+/**
+ * The catalog's search-capable xAI chat models, keyed by the pricing map the
+ * client built from the same catalog. Registered by {@link registerSearchModels}
+ * so routing can fall back to one without changing the pricing map's
+ * router-core shape.
+ */
+const searchModelsByCatalog = new WeakMap<Map<string, ModelPricing>, string[]>();
+
+/**
+ * Record which catalog models can serve search, for {@link routeWithCatalog}:
+ * available `xai/*` chat models, preferring those the catalog tags `search`
+ * (all `xai/*` chat models when none is tagged). The gateway serves search on
+ * any `xai/*` id, but the tag marks the models built for it.
+ */
+export function registerSearchModels(
+  pricing: Map<string, ModelPricing>,
+  models: ReadonlyArray<{ id: string; categories?: string[]; available?: boolean }>,
+): void {
+  const xaiChat = models.filter(
+    (m) =>
+      m.id.startsWith("xai/") &&
+      m.available !== false &&
+      Array.isArray(m.categories) &&
+      m.categories.includes("chat") &&
+      pricing.has(m.id),
+  );
+  const tagged = xaiChat.filter((m) => m.categories!.includes("search"));
+  searchModelsByCatalog.set(pricing, (tagged.length > 0 ? tagged : xaiChat).map((m) => m.id));
+}
+
+/**
+ * The search fallback when the route has no `xai/*` candidate: the cheapest
+ * search-capable model (premium: the most capable, read as the priciest),
+ * then the rest in that order. Ties go to the newer id.
+ */
+function searchFallbackChain(
+  modelPricing: Map<string, ModelPricing>,
+  routingProfile: RoutingProfile | undefined,
+): string[] {
+  const pool =
+    searchModelsByCatalog.get(modelPricing) ??
+    [...modelPricing.keys()].filter((id) => id.startsWith("xai/"));
+  const price = (id: string) => {
+    const p = modelPricing.get(id);
+    return p ? p.inputPrice + p.outputPrice : Number.POSITIVE_INFINITY;
+  };
+  const sorted = [...pool].sort((a, b) => price(a) - price(b) || b.localeCompare(a, undefined, { numeric: true }));
+  if (routingProfile !== "premium") return sorted;
+  return [...pool].sort((a, b) => price(b) - price(a) || b.localeCompare(a, undefined, { numeric: true }));
+}
+
 export function routingProfileForModel(model: string): RoutingProfile | undefined {
   return AUTO_ROUTING_PROFILES[model.toLowerCase()];
 }
@@ -196,16 +247,23 @@ export function routeWithCatalog(
 
   // Search runs on xai/* only: the gateway refuses any other model with a
   // non-transient 400, so a non-xai pick (or fallback) would fail outright.
-  // Keep the router's order among the xai/* candidates; with none, fail here,
-  // before any request is sent or paid. Nothing else about the candidate
-  // policy changes.
+  // Keep the router's order among the xai/* candidates. When the route has
+  // none (the common case: the router seldom ranks xAI), fall back to the
+  // catalog's search-capable xAI models, cheapest first (premium: most
+  // capable first). Only with no xAI model in the catalog at all does it
+  // fail, before any request is sent or paid. Nothing else about the
+  // candidate policy changes.
+  let searchFallback = false;
   if (requestsSearch(options)) {
-    const searchable = callable.filter((id) => id.startsWith("xai/"));
+    let searchable = callable.filter((id) => id.startsWith("xai/"));
+    if (searchable.length === 0) {
+      searchable = searchFallbackChain(modelPricing, options.routingProfile);
+      searchFallback = true;
+    }
     if (searchable.length === 0) {
       throw new Error(
         `Search (x_search / web_search tools or searchParameters) runs on xai/* models only, and the ` +
-          `${options.routingProfile ?? "auto"} route has no xai/* candidate for this request. ` +
-          `Call an xai/* model directly (e.g. xai/grok-4.3) or drop the search options.`,
+          `catalog lists no available xai/* chat model. Call an xai/* model directly or drop the search options.`,
       );
     }
     callable.splice(0, callable.length, ...searchable);
@@ -261,8 +319,11 @@ export function routeWithCatalog(
     costEstimate,
     savings,
     model,
-    reasoning:
-      model === decision.model
+    reasoning: searchFallback
+      ? `${decision.reasoning} | search runs on xai/* only; the route had none, so the ${
+          options.routingProfile === "premium" ? "most capable" : "cheapest"
+        } search-capable xAI model: ${model}`
+      : model === decision.model
         ? decision.reasoning
         : `${decision.reasoning} | catalog fallback: ${model}`,
     candidates: availableCandidates,

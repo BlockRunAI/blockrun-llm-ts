@@ -160,8 +160,9 @@ export interface SolanaBatchOptions {
    * re-read, in addition to the one-line log the SDK writes to stderr for each.
    * A callback that throws, or returns a promise that rejects, is logged and
    * ignored; it never affects the payment, and its promise is not awaited.
+   * Any other return value is ignored, so `(e) => events.push(e)` is fine.
    */
-  onEvent?: (event: SolanaBatchEvent) => void | PromiseLike<void>;
+  onEvent?: (event: SolanaBatchEvent) => unknown;
 }
 
 /** Default {@link SolanaBatchOptions.rateLimit}. */

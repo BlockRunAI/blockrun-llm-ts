@@ -3,7 +3,7 @@ import { LLMClient } from "../../src/client";
 import { SolanaLLMClient } from "../../src/solana-client";
 import { toWireSearchParameters, toWireTools } from "../../src/search-wire";
 import { readSettlement } from "../../src/receipt";
-import { requestsSearch, routeWithCatalog } from "../../src/router-adapter";
+import { registerSearchModels, requestsSearch, routeWithCatalog } from "../../src/router-adapter";
 import { TEST_PRIVATE_KEY, buildChatResponse } from "../helpers/testHelpers";
 
 const TEST_BS58_KEY = "5MaiiCavjCmn9Hs1o3eznqDEhRwxo7pXiAYez7keQUviQeRjpzKCY8trDwpvBMTKTpNFbCJsBZthJ4tCs6o62rr";
@@ -288,31 +288,63 @@ describe("smart routing with search stays on xai/*", () => {
     expect(off.candidates).toEqual(plain.candidates);
   });
 
-  it("throws before any request when the route has no xai/* candidate", () => {
+  it("with no xai/* candidate in the route, falls back to the cheapest xAI model instead of failing", () => {
+    const decision = routeWithCatalog("Name the capital of France. One word.", undefined, 50, pricing(), {
+      routingProfile: "eco",
+      tools: [{ type: "x_search" }],
+    });
+    // No catalog categories registered: every xai/* id is a candidate, cheapest first.
+    expect(decision.model).toBe("xai/grok-4.3");
+    expect(decision.fallbacks).toEqual(["xai/grok-4.5"]);
+    expect(decision.reasoning).toMatch(/search runs on xai\/\* only.*cheapest.*xai\/grok-4\.3/);
+  });
+
+  it("prefers the models the catalog tags `search`; premium takes the most capable", () => {
+    const catalog = new Map([
+      ...pricing(),
+      ["xai/grok-4.6", { inputPrice: 2, outputPrice: 6 }],
+      ["xai/grok-4.7-heavy", { inputPrice: 6, outputPrice: 30 }],
+      ["xai/grok-imagine-image", { inputPrice: 0, outputPrice: 0 }],
+    ]);
+    registerSearchModels(catalog, [
+      { id: "xai/grok-4.3", categories: ["chat", "reasoning"], available: true },
+      { id: "xai/grok-4.5", categories: ["chat", "search"], available: true },
+      { id: "xai/grok-4.6", categories: ["chat", "search"], available: true },
+      { id: "xai/grok-4.7-heavy", categories: ["chat", "search"], available: true },
+      { id: "xai/grok-imagine-image", categories: ["image"], available: true },
+      { id: "google/gemini-3.5-flash", categories: ["chat"], available: true },
+    ]);
+    const simple = "Name the capital of France. One word.";
+    const eco = routeWithCatalog(simple, undefined, 50, catalog, { routingProfile: "eco", search: true });
+    // Equal price: the newer id first. Untagged grok-4.3 and the image model are out.
+    expect(eco.candidates).toEqual(["xai/grok-4.6", "xai/grok-4.5", "xai/grok-4.7-heavy"]);
+    const premium = routeWithCatalog(simple, undefined, 50, catalog, { routingProfile: "premium", search: true });
+    expect(premium.model).toBe("xai/grok-4.7-heavy");
+    expect(premium.reasoning).toMatch(/most capable/);
+  });
+
+  it("throws, before any request, only when the catalog has no xai/* model at all", () => {
+    const noXai = new Map([...pricing()].filter(([id]) => !id.startsWith("xai/")));
     expect(() =>
-      routeWithCatalog("Name the capital of France. One word.", undefined, 50, pricing(), {
+      routeWithCatalog("Name the capital of France. One word.", undefined, 50, noXai, {
         routingProfile: "eco",
         tools: [{ type: "x_search" }],
       }),
     ).toThrow(/xai\/\* models only/);
   });
 
-  it("both clients refuse a search smartChatCompletion with no xai/* route, sending nothing", async () => {
-    const fetchMock = vi.fn(async () => jsonResponse(buildChatResponse()));
-    vi.stubGlobal("fetch", fetchMock);
+  it("both clients serve a search smartChat whose route had no xai/* pick, on an xai/* model", async () => {
     for (const client of [new LLMClient({ privateKey: TEST_PRIVATE_KEY }), new SolanaLLMClient({ privateKey: TEST_BS58_KEY })]) {
       vi.spyOn(client as any, "getModelPricing").mockResolvedValue(pricing());
-      await expect(
-        client.smartChatCompletion([{ role: "user", content: "Name the capital of France. One word." }], {
-          routingProfile: "eco",
-          tools: [{ type: "x_search", allowedXHandles: ["xai"] }],
-        }),
-      ).rejects.toThrow(/xai\/\* models only/);
-      await expect(
-        client.smartChat("Name the capital of France. One word.", { routingProfile: "eco", search: true }),
-      ).rejects.toThrow(/xai\/\* models only/);
+      const spy = vi.spyOn(client as any, "requestWithPayment").mockResolvedValue(buildChatResponse());
+      const result = await client.smartChatCompletion([{ role: "user", content: "Name the capital of France. One word." }], {
+        routingProfile: "eco",
+        tools: [{ type: "x_search", allowedXHandles: ["xai"] }],
+      });
+      expect(result.model).toBe("xai/grok-4.3");
+      const [, body] = spy.mock.calls[0] as [string, Record<string, unknown>];
+      expect(body.model).toBe("xai/grok-4.3");
     }
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("both clients route a search smartChatCompletion to xai/* with xai/* fallbacks", async () => {
