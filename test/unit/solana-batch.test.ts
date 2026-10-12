@@ -26,6 +26,7 @@ import {
   holdsChannelFile,
   lockChannelFile,
   parseRetryAfter,
+  SolanaBatchPayer,
   type SolanaBatchEvent,
 } from "../../src/solana-batch";
 import { APIError, retryDisposition } from "../../src/types";
@@ -363,6 +364,63 @@ describe("SolanaLLMClient batch-settlement", () => {
     const [record] = Object.values(stored) as Array<Record<string, unknown>>;
     expect(record).toMatchObject({ channelId, chargedCumulativeAmount: "2000", deposit: "25000" });
     expect(record.pending).toBeUndefined();
+  });
+
+  describe("configureClient", () => {
+    const keyBytes = bs58.decode(TEST_BS58_KEY);
+    const paymentRequired = () =>
+      ({ x402Version: 2, resource: { url: CHAT_URL }, accepts: [exactAccept(), batchAccept(operator.address)] }) as never;
+    function payer(configureClient: (c: any) => void) {
+      return new SolanaBatchPayer({
+        options: { operators: [operator.address], channelStore: path.join(tmp, "payer.json") },
+        secretKey: async () => keyBytes,
+        address: async () => bs58.encode(keyBytes.subarray(32)),
+        rpcUrl: RPC_URL,
+        configureClient,
+      });
+    }
+    const send = (headers: Record<string, string>) => fetch(CHAT_URL, { method: "POST", headers });
+    const noRechallenge = async (): Promise<never> => {
+      throw new Error("no rechallenge expected");
+    };
+
+    it("lets an embedder's hooks see each batch payment at its per-call ceiling", async () => {
+      const seen: string[] = [];
+      const signed: string[] = [];
+      const p = payer((c) => {
+        c.onBeforePaymentCreation(async (ctx: any) => void seen.push(`${ctx.selectedRequirements.scheme}:${ctx.selectedRequirements.amount}`));
+        c.onAfterPaymentCreation(async (ctx: any) => void signed.push(ctx.selectedRequirements.amount));
+      });
+      gateway.push(async (_url, init) => {
+        const payment = decodePayment(init);
+        expect(payment.payload.type).toBe("deposit");
+        return servedWithVoucher(operator, channelIdOf(payment), 1200n, 1200n);
+      });
+
+      const result = await p.pay(paymentRequired(), send, noRechallenge);
+
+      expect(result.kind).toBe("paid");
+      // The ceiling the gateway quoted, not the channel deposit (25000).
+      expect(seen).toEqual(["batch-settlement:5000"]);
+      expect(signed).toEqual(["5000"]);
+    });
+
+    it("refuses the payment when an embedder's before-hook throws: nothing is signed or sent", async () => {
+      const p = payer((c) => {
+        c.onBeforePaymentCreation(async () => {
+          throw new Error("over the embedder's cap");
+        });
+      });
+
+      const result = await p.pay(paymentRequired(), send, noRechallenge);
+
+      expect(result.kind).toBe("fallback");
+      expect(gatewayCalls).toHaveLength(0);
+      // No channel record for a deposit that was never built.
+      const store = path.join(tmp, "payer.json");
+      const records = fs.existsSync(store) ? Object.values(JSON.parse(fs.readFileSync(store, "utf8"))) : [];
+      expect(records).toHaveLength(0);
+    });
   });
 
   it("never signs a transfer against a batch accept, even listed first, without the option", async () => {
