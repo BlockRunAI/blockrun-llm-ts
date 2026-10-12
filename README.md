@@ -507,6 +507,9 @@ console.log(res.costUsd, res.settlement);        // what you paid, and the tx
 (Base / Arc). `costUsd` is what the call added to `getSpending()`: the signed
 price under `exact`, the metered `extra.chargedAmount` under batch settlement,
 `0` for a free model; it is undefined in API-key mode (billed to the account).
+When the gateway answers a paid request from a free fallback model it skips
+settlement: `costUsd` is `0`, `settlement.skipped` is `"free-fallback"`, and
+nothing is added to `getSpending()`.
 
 **Setup:**
 1. Export your Solana wallet key: `export SOLANA_WALLET_KEY="your-bs58-key"`

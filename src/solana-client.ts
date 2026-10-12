@@ -1,5 +1,5 @@
 import { toWireSearchParameters, toWireTools } from "./search-wire";
-import { withCost } from "./receipt";
+import { settlementSkipped, withCost } from "./receipt";
 import { accountErrorDisposition, resolveApiKeyAuth, requireWallet, type ApiKeyAuth, type ApiKeyOptions } from "./api-key.js";
 /**
  * BlockRun Solana LLM Client.
@@ -1628,7 +1628,8 @@ export class SolanaLLMClient {
     }
 
     await this.assertPaid(retryResponse);
-    this.recordSettlement(costUsd);
+    // A free-fallback answer with settlement skipped moved nothing on chain.
+    if (!settlementSkipped(retryResponse)) this.recordSettlement(costUsd);
 
     const paid = await this.readPaidJson<ChatResponse>(retryResponse);
     return withCost(paid, retryResponse, costUsd, "exact");
