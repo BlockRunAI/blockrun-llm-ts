@@ -1,5 +1,5 @@
 import { toWireSearchParameters, toWireTools } from "./search-wire";
-import { withCost } from "./receipt";
+import { settlementSkipped, withCost } from "./receipt";
 import { accountErrorDisposition, resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js";
 /**
  * BlockRun LLM Client - Main SDK entry point.
@@ -784,11 +784,7 @@ export class LLMClient {
           try { errorBody = await retryResp2.json(); } catch { errorBody = { error: "Request failed" }; }
           throw new APIError(`API error after payment: ${retryResp2.status}`, retryResp2.status, sanitizeErrorResponse(errorBody));
         }
-        const costUsd = parseFloat(details.amount) / 1e6;
-        this.sessionCalls += 1;
-        this.sessionTotalUsd += costUsd;
-        this.recordCost(url, costUsd, { body, network: details.network });
-        return withCost(await this.parseChatResponse(retryResp2), retryResp2, costUsd, "exact");
+        return this.bookPaid(url, body, details, retryResp2);
       }
     }
 
@@ -811,13 +807,28 @@ export class LLMClient {
       );
     }
 
-    // Update session spending
-    const costUsd = parseFloat(details.amount) / 1e6; // Convert from micro USDC
-    this.sessionCalls += 1;
-    this.sessionTotalUsd += costUsd;
-    this.recordCost(url, costUsd, { body, network: details.network });
+    return this.bookPaid(url, body, details, retryResponse);
+  }
 
-    return withCost(await this.parseChatResponse(retryResponse), retryResponse, costUsd, "exact");
+  /**
+   * Book a served, paid chat call and attach its cost. A response the gateway
+   * served from a free fallback with settlement skipped
+   * (`X-Settlement-Skipped: free-fallback`) moved nothing on chain, so it is
+   * not added to `getSpending()` or the cost log, and reports `costUsd: 0`.
+   */
+  private async bookPaid(
+    url: string,
+    body: Record<string, unknown>,
+    details: ReturnType<typeof extractPaymentDetails>,
+    response: Response
+  ): Promise<ChatResponse> {
+    const costUsd = parseFloat(details.amount) / 1e6; // Convert from micro USDC
+    if (!settlementSkipped(response)) {
+      this.sessionCalls += 1;
+      this.sessionTotalUsd += costUsd;
+      this.recordCost(url, costUsd, { body, network: details.network });
+    }
+    return withCost(await this.parseChatResponse(response), response, costUsd, "exact");
   }
 
   /**

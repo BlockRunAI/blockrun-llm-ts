@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [3.22.1] - 2026-10-11
+
+### Fixed — a paid call answered by a free fallback no longer counts as spend
+
+- When the Base / Arc gateway serves a paid chat request from a free fallback
+  model it skips settlement (`X-Settlement-Skipped: free-fallback`): nothing
+  moves on chain. `LLMClient` still booked the signed price into
+  `getSpending()` and the cost log, and 3.22.0's `costUsd` reported it. Such a
+  call now reports `costUsd: 0` and `settlement.skipped: "free-fallback"`
+  (`quotedUsd` still states what was signed) and books nothing.
+  `SolanaLLMClient`'s exact path reads the same header.
+- Tests: the fee-nonce exhaustion test in `x402-solana-cache.test.ts` signs 67
+  real transactions and could pass vitest's 5s default under load; it now has
+  30s.
+
 ## [3.22.0] - 2026-10-11
 
 ### Added — a batch payment in doubt is recovered through `payment-identifier`

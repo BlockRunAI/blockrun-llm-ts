@@ -75,12 +75,23 @@ export function readSettlement(
 }
 
 /**
+ * Whether the gateway skipped settlement because a free fallback model served
+ * the paid request (`X-Settlement-Skipped: free-fallback`). The signed payment
+ * was never settled, so nothing was charged and nothing may be booked.
+ */
+export function settlementSkipped(response: Response): boolean {
+  return response.headers.get("X-Settlement-Skipped") === "free-fallback";
+}
+
+/**
  * Attach cost + settlement to a parsed chat response (mutates and returns it).
  *
  * `costUsd` is `bookedUsd`, the amount the client just added to its session
  * spending (`getSpending()`), so the two always agree: the signed price under
  * exact, the receipt's `extra.chargedAmount` under batch. The settlement's
- * transaction / network come from the receipt.
+ * transaction / network come from the receipt. When the gateway skipped
+ * settlement ({@link settlementSkipped}) the cost is 0 and the caller must not
+ * have booked anything; `bookedUsd` is then only the signed quote.
  */
 export function withCost<T extends { costUsd?: number; settlement?: Settlement }>(
   body: T,
@@ -88,6 +99,13 @@ export function withCost<T extends { costUsd?: number; settlement?: Settlement }
   bookedUsd: number,
   scheme: Settlement["scheme"],
 ): T {
+  if (settlementSkipped(response)) {
+    // Settlement was skipped: the caller booked nothing, and `bookedUsd` is
+    // only what was signed.
+    body.costUsd = 0;
+    body.settlement = { ...readSettlement(response, bookedUsd, scheme).settlement, skipped: "free-fallback" };
+    return body;
+  }
   body.costUsd = bookedUsd;
   body.settlement = readSettlement(response, bookedUsd, scheme).settlement;
   return body;

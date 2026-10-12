@@ -162,7 +162,9 @@ describe("Solana payment payload caching", () => {
 
     // A different amount is unaffected — the range is per-economics, not global.
     expect(seen.has(await pay("9700"))).toBe(false);
-  });
+    // 67 real ed25519-signed transactions: ~2-3s alone, past vitest's 5s
+    // default when the suite runs in parallel on a loaded machine.
+  }, 30_000);
 
   it("refetches once the blockhash TTL expires", async () => {
     // BLOCKHASH_TTL_MS is 10s. Nothing should hit the network before that.

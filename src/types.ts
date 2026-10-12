@@ -73,6 +73,13 @@ export interface Settlement {
   network?: string;
   /** Present and false only when the gateway reported a failed settlement. */
   success?: false;
+  /**
+   * `"free-fallback"` when the gateway served a paid request from a free
+   * fallback model and skipped settlement (`X-Settlement-Skipped`): nothing
+   * moved on chain, so `costUsd` is 0 and nothing was added to `getSpending()`.
+   * `quotedUsd` still states what was signed.
+   */
+  skipped?: "free-fallback";
 }
 
 export interface FunctionCall {
