@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [3.23.2] - 2026-10-12
+
+### Deprecated — `SurfClient`: the gateway retired Surf
+
+- Every `/v1/surf/*` call has answered `410 endpoint_retired` since
+  2026-09-06. `SurfClient` and `SurfClientOptions` are marked `@deprecated`,
+  and the first `SurfClient` constructed in a process logs one warning naming
+  the replacements (`PriceClient`, `LLMClient.defi*`, `LLMClient.pm()`,
+  `LLMClient.dex*`). It will be removed in the next major version.
+
+### Fixed — `LLMClient` reads `BLOCKRUN_WALLET_KEY`
+
+- Every other EVM client already did. `LLMClient` now falls back to it when
+  `BASE_CHAIN_WALLET_KEY` is unset. `BASE_CHAIN_WALLET_KEY` keeps precedence,
+  so a process holding both keys never switches the paying wallet, and
+  `BLOCKRUN_API_KEY` still beats both.
+
+### Docs — search sources
+
+- `SearchClient` / `search()` docs and the `SearchOptions.sources` TSDoc said
+  `"x"` was a source; the gateway rejects it with a 400. Sources are `web` and
+  `news`; X search runs in chat on `xai/*` models (`x_search`). Pricing is a
+  flat price per call. `BlockrunClient`'s examples no longer use Surf.
+
 ## [3.23.1] - 2026-10-12
 
 ### Fixed — `configureClient` hooks belong to the payer that registered them
