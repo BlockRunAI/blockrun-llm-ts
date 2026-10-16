@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [3.24.1] - 2026-10-16
+
+### Changed — router-core 0.2.0
+
+- `@blockrun/router-core` moves to 0.2.0 (BlockRunAI/router-core@27125a3).
+  Eleven newly tool-verified models (Claude Fable 5.1 / Opus 5.5 / Sonnet 5.5,
+  Gemini 3.8 Flash, GPT-5.1, GPT-6 Astra / Luna / Sol, Grok 4.6 / 4.7, MiMo
+  2.5) become availability fallbacks for tool-required turns. Primary
+  selection is unchanged; on `eco` and `auto` the new fallbacks are tried
+  cheapest first.
+
 ## [3.24.0] - 2026-10-12
 
 ### Changed — `smartChat` with search falls back to an xAI model instead of failing
