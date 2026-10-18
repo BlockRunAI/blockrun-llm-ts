@@ -58,7 +58,7 @@
   },
   "devDependencies": {
     "@blockrun/core": "^0.1.0",
-    "@blockrun/router-core": "https://codeload.github.com/BlockRunAI/router-core/tar.gz/27125a3dfe319a6f422a0c0f41bf1666b0dc61a9",
+    "@blockrun/router-core": "https://codeload.github.com/BlockRunAI/router-core/tar.gz/65a92c85ea1f187a64e7611302ef6add236b0cba",
     "@eslint/js": "^10.0.1",
     "@solana/kit": "^5.5.1",
     "@types/node": "^26.4.1",
