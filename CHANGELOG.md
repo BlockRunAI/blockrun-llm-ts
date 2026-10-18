@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [3.24.2] - 2026-10-18
+
+### Changed — router-core 0.3.0
+
+- `@blockrun/router-core` moves to 0.3.0 (BlockRunAI/router-core@65a92c8).
+  Auto routing now reads only the user turn for structured-output, stakes,
+  latency and language cues; a system prompt that lists tool schemas or says
+  "be quick" no longer lifts a request off the cheapest tier. CJK input is
+  sized at about one token per character, so a long Chinese document reaches
+  the long-context models instead of overflowing a smaller window. Keyword
+  scoring matches whole words ("classic" is no longer code, "history" is no
+  longer creative), a stale speed probe fades toward neutral instead of toward
+  zero, and a model with no catalog price no longer reports 100% savings.
+
 ## [3.24.1] - 2026-10-16
 
 ### Changed — router-core 0.2.0
