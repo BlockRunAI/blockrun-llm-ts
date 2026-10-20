@@ -987,6 +987,7 @@ token price.
 
 | Model | Context |
 |---|---|
+| `google/gemini-4-argon` | 1M |
 | `google/gemini-3.1-pro` | 1M |
 | `google/gemini-3.8-flash` | 1M |
 | `google/gemini-3.6-flash` | 1M |
