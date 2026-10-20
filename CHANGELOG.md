@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [3.24.3] - 2026-10-20
+
+### Changed — router-core 2cd5a10
+
+- `@blockrun/router-core` moves to BlockRunAI/router-core@2cd5a10, which adds
+  capability rows for `deepseek/deepseek-v4.1-flash`, `openai/gpt-6.1-sol` and
+  `mistral/mistral-large-4`. The routing algorithm is unchanged since 0.3.0.
+
 ## [3.24.2] - 2026-10-18
 
 ### Changed — router-core 0.3.0
