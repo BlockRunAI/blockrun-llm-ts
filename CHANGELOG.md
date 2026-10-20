@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Docs
+
+- README model list adds `google/gemini-4-argon` (Gemini 4 Argon, live on the
+  gateway on Base and Solana since 2026-10-20). Catalog only: routing tiers are
+  unchanged until router-core lists it.
+
 ## [3.24.3] - 2026-10-20
 
 ### Changed — router-core 2cd5a10
