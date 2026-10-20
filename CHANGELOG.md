@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [3.24.4] - 2026-10-20
+
+### Changed — router-core 8773a99
+
+- `@blockrun/router-core` moves to BlockRunAI/router-core@8773a99. A live probe
+  confirmed tool calls from `deepseek/deepseek-v4.1-flash` and
+  `openai/gpt-6.1-sol`, so both join the verified tool fallbacks behind the
+  configured chains. No primary changes.
+
 ### Docs
 
 - README model list adds `google/gemini-4-argon` (Gemini 4 Argon, live on the
