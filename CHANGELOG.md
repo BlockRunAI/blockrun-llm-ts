@@ -2,11 +2,21 @@
 
 ## [Unreleased]
 
+## [3.24.4] - 2026-10-20
+
+### Changed — router-core 3aca0e1
+
+- `@blockrun/router-core` moves from 2cd5a10 to BlockRunAI/router-core@3aca0e1,
+  which adds `google/gemini-4-argon` to the capability table (1M context,
+  vision, `supportsTools: false` until a paid tool probe verifies it, so tool
+  requests fail closed). Capability facts only: router-core's decision snapshot
+  is byte-identical across that range, so no routing decision changes.
+
 ### Docs
 
 - README model list adds `google/gemini-4-argon` (Gemini 4 Argon, live on the
-  gateway on Base and Solana since 2026-10-20). Catalog only: routing tiers are
-  unchanged until router-core lists it.
+  gateway on Base and Solana since 2026-10-20). Catalog only: no routing tier
+  picks it.
 
 ## [3.24.3] - 2026-10-20
 
