@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [3.24.5] - 2026-10-25
+
+### Fixed — a streamed call reuses cached payment terms only for a same-size request
+
+- `chatCompletionStream` re-signed the model's last 402 terms for any request to
+  skip the 402 round trip. A quote prices one request (input size and
+  `max_tokens`), and an exact payment settles the whole signed amount, so a
+  smaller request paid the larger one's price. Cached terms are now reused only
+  for a request body of the length they were quoted for; any other request pays
+  its own quote. The gateway also refuses a payment signed more than 3% over the
+  price (`PAYMENT_OVERSIGNED`, nothing charged), so older versions are no longer
+  overcharged either.
+
 ## [3.24.4] - 2026-10-20
 
 ### Changed — router-core 8773a99
