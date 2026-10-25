@@ -59,6 +59,14 @@ describe("chatCompletionStream pre-auth never pays twice", () => {
     expect(client.getSpending().calls).toBe(2);
   });
 
+  it("a request of a different size skips pre-auth: those terms priced another request", async () => {
+    const client = await warmed();
+    answers.push(evm402, sse);
+    await client.chatCompletionStream("openai/gpt-4o-mini", [{ role: "user", content: "a much longer question than gm" }]);
+    // No pre-signed send — an unpaid probe, then one payment for THIS request's quote.
+    expect(signatures).toEqual([undefined, expect.any(String)]);
+  });
+
   it("a 402 to the pre-auth payment (refused at verification) falls back and pays once", async () => {
     const client = await warmed();
     answers.push(evm402, evm402, sse);
