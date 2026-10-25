@@ -177,9 +177,16 @@ export class LLMClient {
   private modelPricingPromise: Promise<Map<string, ModelPricing>> | null = null;
 
   // Pre-auth cache: avoids the 402 round-trip on repeat requests to the same model.
-  // Key = "endpoint:model", value = cached payment header + timestamp.
+  // Key = "endpoint:model", value = cached payment header + timestamp + the
+  // length of the request body it was quoted for.
   // TTL: 1 hour — pre-auth quotes are stable server-side on that horizon.
-  private preAuthCache: Map<string, { paymentHeader: string; cachedAt: number }> = new Map();
+  //
+  // A quote prices ONE request (input size + max_tokens), and exact settles
+  // the whole signed amount, so reusing it for a smaller request overpaid and
+  // for a larger one underpaid. The gateway refuses both with a 402 (an
+  // over-signed payment since blockrun#874), so a reuse is only attempted for
+  // a body the same size as the one that was quoted.
+  private preAuthCache: Map<string, { paymentHeader: string; cachedAt: number; bodyLength: number }> = new Map();
   private static readonly PRE_AUTH_TTL_MS = 3_600_000;
 
   /**
@@ -917,6 +924,7 @@ export class LLMClient {
     if (options?.stop !== undefined) body.stop = options.stop;
 
     const cacheKey = `/v1/chat/completions:${requestModel}`;
+    const requestBody = JSON.stringify(body);
     const cached = this.preAuthCache.get(cacheKey);
     const now = Date.now();
 
@@ -928,7 +936,7 @@ export class LLMClient {
     // the gateway verified the payment and may have served and settled it (a
     // proxy's 502/504 or our own timeout says nothing about the handler behind
     // it). Paying again there could charge the call twice.
-    if (cached && now - cached.cachedAt < LLMClient.PRE_AUTH_TTL_MS) {
+    if (cached && now - cached.cachedAt < LLMClient.PRE_AUTH_TTL_MS && cached.bodyLength === requestBody.length) {
       let signed: { paymentPayload: string; costUsd: number } | undefined;
       try {
         signed = await this.signPayment(cached.paymentHeader);
@@ -996,7 +1004,7 @@ export class LLMClient {
     if (!paymentHeader) throw new PaymentError("402 response but no payment requirements found");
 
     // Cache for pre-auth on future requests
-    this.preAuthCache.set(cacheKey, { paymentHeader, cachedAt: now });
+    this.preAuthCache.set(cacheKey, { paymentHeader, cachedAt: now, bodyLength: requestBody.length });
 
     const { paymentPayload, costUsd } = await this.signPayment(paymentHeader);
 
