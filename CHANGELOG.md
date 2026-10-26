@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [3.24.6] - 2026-10-26
+
+### Changed — router-core fd6d03d
+
+- Bump @blockrun/router-core to fd6d03d: adds the shared parseModelCatalog /
+  toRoutingCatalog catalog API (chat, image, video, music). No routing behavior
+  change.
+
 ## [3.24.5] - 2026-10-25
 
 ### Fixed — a streamed call reuses cached payment terms only for a same-size request
