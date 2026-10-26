@@ -35,8 +35,8 @@ importers:
         specifier: ^0.1.0
         version: 0.1.1(bufferutil@4.1.0)(typescript@6.0.3)(utf-8-validate@6.0.6)(zod@3.25.76)
       '@blockrun/router-core':
-        specifier: https://codeload.github.com/BlockRunAI/router-core/tar.gz/8773a9954b091bd0090acdfec67c75a006c0e156
-        version: https://codeload.github.com/BlockRunAI/router-core/tar.gz/8773a9954b091bd0090acdfec67c75a006c0e156
+        specifier: https://codeload.github.com/BlockRunAI/router-core/tar.gz/fd6d03d035ff676642ba1683c333d929939f8a00
+        version: https://codeload.github.com/BlockRunAI/router-core/tar.gz/fd6d03d035ff676642ba1683c333d929939f8a00
       '@eslint/js':
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.9.1)
@@ -89,8 +89,8 @@ packages:
   '@blockrun/core@0.1.1':
     resolution: {integrity: sha512-mXeF/XCFc9z+2Mxq4zGrhrFkEjpYprnuHOp20naE6YhouBu2SwHuaWaYec4gb7yJ+uU8S7aqUf6UIXkD5xDTvA==}
 
-  '@blockrun/router-core@https://codeload.github.com/BlockRunAI/router-core/tar.gz/8773a9954b091bd0090acdfec67c75a006c0e156':
-    resolution: {tarball: https://codeload.github.com/BlockRunAI/router-core/tar.gz/8773a9954b091bd0090acdfec67c75a006c0e156}
+  '@blockrun/router-core@https://codeload.github.com/BlockRunAI/router-core/tar.gz/fd6d03d035ff676642ba1683c333d929939f8a00':
+    resolution: {tarball: https://codeload.github.com/BlockRunAI/router-core/tar.gz/fd6d03d035ff676642ba1683c333d929939f8a00}
     version: 0.3.0
     engines: {node: '>=20.19.0'}
 
@@ -2328,7 +2328,7 @@ snapshots:
       - utf-8-validate
       - zod
 
-  '@blockrun/router-core@https://codeload.github.com/BlockRunAI/router-core/tar.gz/8773a9954b091bd0090acdfec67c75a006c0e156': {}
+  '@blockrun/router-core@https://codeload.github.com/BlockRunAI/router-core/tar.gz/fd6d03d035ff676642ba1683c333d929939f8a00': {}
 
   '@esbuild/aix-ppc64@0.28.2':
     optional: true
