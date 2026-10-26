@@ -4,7 +4,7 @@
 
 ### Cut your LLM bill by <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->%. One line of TypeScript.
 
-The smart-routing SDK for <!-- br:models.chatVisible -->88<!-- /br:models.chatVisible --> models — every request goes to the cheapest model that can handle it,
+The smart-routing SDK for <!-- br:models.chatVisible -->90<!-- /br:models.chatVisible --> models — every request goes to the cheapest model that can handle it,
 paid with an API key or per-request USDC on Solana, Base or Arc. No vendor lock-in.
 
 [![npm](https://img.shields.io/npm/v/@blockrun/llm.svg?style=flat-square)](https://www.npmjs.com/package/@blockrun/llm)
@@ -56,7 +56,7 @@ console.log(r.response);         // the proof
 |                    | OpenAI SDK     | OpenRouter        | LiteLLM          | **@blockrun/llm**                                                       |
 | ------------------ | -------------- | ----------------- | ---------------- | ----------------------------------------------------------------------- |
 | **Cost routing**   | ✗ one vendor   | Manual selection  | Manual selection | **Automatic — <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->% cheaper** |
-| **Models**         | GPT only       | 200+              | 100+ (BYO keys)  | **<!-- br:models.chatVisible -->88<!-- /br:models.chatVisible -->, one credential** |
+| **Models**         | GPT only       | 200+              | 100+ (BYO keys)  | **<!-- br:models.chatVisible -->90<!-- /br:models.chatVisible -->, one credential** |
 | **Free tier**      | ✗              | Rate-limited      | ✗                | **<!-- br:models.free -->7<!-- /br:models.free --> models, no signup**  |
 | **Auth**           | API key        | Account + API key | Your API keys    | **API key *or* wallet signature**                                       |
 | **Payment**        | Card + invoice | Credit card       | BYO keys         | **Account credit or USDC per-request**                                  |
@@ -1811,7 +1811,7 @@ to pick up security fixes.
 ## Frequently Asked Questions
 
 ### What is @blockrun/llm?
-A TypeScript SDK that cuts LLM costs by <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->% on a realistic workload with built-in smart routing: every request goes to the cheapest of <!-- br:models.chatVisible -->88<!-- /br:models.chatVisible --> models (OpenAI, Anthropic, Google, xAI, DeepSeek, Moonshot, and more) that can handle it, paid with an account API key or per-request USDC via x402 on Solana, Base or Arc.
+A TypeScript SDK that cuts LLM costs by <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->% on a realistic workload with built-in smart routing: every request goes to the cheapest of <!-- br:models.chatVisible -->90<!-- /br:models.chatVisible --> models (OpenAI, Anthropic, Google, xAI, DeepSeek, Moonshot, and more) that can handle it, paid with an account API key or per-request USDC via x402 on Solana, Base or Arc.
 
 ### What is smart routing?
 Router Core V3, bundled into the SDK: the same deterministic engine that powers ClawRouter. It analyzes each request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions locally, in under 1ms, and picks the cheapest capable model. Use `smartChat()`, `smartChatCompletion()`, or the `blockrun/auto` model alias. See [Smart Routing](#smart-routing-router-core-v3).
