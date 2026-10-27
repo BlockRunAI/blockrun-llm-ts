@@ -823,9 +823,9 @@ export class LLMClient {
   }
 
   /**
-   * Book a served, paid chat call and attach its cost. A response the gateway
-   * served from a free fallback with settlement skipped
-   * (`X-Settlement-Skipped: free-fallback`) moved nothing on chain, so it is
+   * Book a served, paid chat call and attach its cost. A response whose
+   * settlement the gateway skipped ({@link settlementSkipped}: e.g.
+   * `X-Settlement-Skipped: free-fallback`) moved nothing on chain, so it is
    * not added to `getSpending()` or the cost log, and reports `costUsd: 0`.
    */
   private async bookPaid(
@@ -841,6 +841,27 @@ export class LLMClient {
       this.recordCost(url, costUsd, { body, network: details.network });
     }
     return withCost(await this.parseChatResponse(response), response, costUsd, "exact");
+  }
+
+  /**
+   * Book a served, paid raw (non-chat) call: the signed amount goes to
+   * `getSpending()` and the cost log, unless the gateway skipped settlement
+   * ({@link settlementSkipped}: e.g. `X-Settlement-Skipped: empty-result` on an
+   * empty prediction-market search, `unexecuted` on a JSON-RPC call that never
+   * ran, or `X-Payment-Waived`), in which case nothing moved and nothing is
+   * booked. `X-Payment-Settled: false` alone is still booked: it is owed.
+   */
+  private bookPaidRaw(
+    url: string,
+    details: ReturnType<typeof extractPaymentDetails>,
+    response: Response,
+    body?: Record<string, unknown>
+  ): void {
+    if (settlementSkipped(response)) return;
+    const costUsd = parseFloat(details.amount) / 1e6;
+    this.sessionCalls += 1;
+    this.sessionTotalUsd += costUsd;
+    this.recordCost(url, costUsd, body ? { body, network: details.network } : { network: details.network });
   }
 
   /**
@@ -960,8 +981,11 @@ export class LLMClient {
           throw withDisposition(err, "paid-or-in-doubt");
         }
         if (preAuthResp.ok) {
-          this.sessionCalls += 1;
-          this.sessionTotalUsd += signed.costUsd;
+          // A skipped settlement (the gateway names why) moved nothing: book nothing.
+          if (!settlementSkipped(preAuthResp)) {
+            this.sessionCalls += 1;
+            this.sessionTotalUsd += signed.costUsd;
+          }
           return preAuthResp; // Pre-auth hit — no 402 round-trip
         }
         this.preAuthCache.delete(cacheKey);
@@ -1025,8 +1049,11 @@ export class LLMClient {
       throw new APIError(`API error after payment: ${streamResp.status}`, streamResp.status, sanitizeErrorResponse(errorBody));
     }
 
-    this.sessionCalls += 1;
-    this.sessionTotalUsd += costUsd;
+    // A skipped settlement (the gateway names why) moved nothing: book nothing.
+    if (!settlementSkipped(streamResp)) {
+      this.sessionCalls += 1;
+      this.sessionTotalUsd += costUsd;
+    }
     return streamResp;
   }
 
@@ -1164,10 +1191,7 @@ export class LLMClient {
           try { errorBody = await retryResp2.json(); } catch { errorBody = { error: "Request failed" }; }
           throw new APIError(`API error after payment: ${retryResp2.status}`, retryResp2.status, sanitizeErrorResponse(errorBody));
         }
-        const costUsd = parseFloat(details.amount) / 1e6;
-        this.sessionCalls += 1;
-        this.sessionTotalUsd += costUsd;
-        this.recordCost(url, costUsd, { body, network: details.network });
+        this.bookPaidRaw(url, details, retryResp2, body);
         return retryResp2.json() as Promise<Record<string, unknown>>;
       }
     }
@@ -1190,10 +1214,7 @@ export class LLMClient {
       );
     }
 
-    const costUsd = parseFloat(details.amount) / 1e6;
-    this.sessionCalls += 1;
-    this.sessionTotalUsd += costUsd;
-    this.recordCost(url, costUsd, { body, network: details.network });
+    this.bookPaidRaw(url, details, retryResponse, body);
 
     return retryResponse.json() as Promise<Record<string, unknown>>;
   }
@@ -1329,10 +1350,7 @@ export class LLMClient {
           try { errorBody = await retryResp2.json(); } catch { errorBody = { error: "Request failed" }; }
           throw new APIError(`API error after payment: ${retryResp2.status}`, retryResp2.status, sanitizeErrorResponse(errorBody));
         }
-        const costUsd = parseFloat(details.amount) / 1e6;
-        this.sessionCalls += 1;
-        this.sessionTotalUsd += costUsd;
-        this.recordCost(url, costUsd, { network: details.network });
+        this.bookPaidRaw(url, details, retryResp2);
         return retryResp2.json() as Promise<Record<string, unknown>>;
       }
     }
@@ -1355,10 +1373,7 @@ export class LLMClient {
       );
     }
 
-    const costUsd = parseFloat(details.amount) / 1e6;
-    this.sessionCalls += 1;
-    this.sessionTotalUsd += costUsd;
-    this.recordCost(url, costUsd, { network: details.network });
+    this.bookPaidRaw(url, details, retryResponse);
 
     return retryResponse.json() as Promise<Record<string, unknown>>;
   }

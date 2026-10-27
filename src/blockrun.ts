@@ -1,4 +1,5 @@
 import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js";
+import { settlementSkipped } from "./receipt";
 import { readSseFrames } from "./sse";
 /**
  * BlockrunClient — the x402-paying HTTP primitive for the BlockRun gateway.
@@ -214,7 +215,7 @@ export class BlockrunClient {
     }
 
     if (submitResp.status === 200) {
-      this.recordSpending();
+      this.recordSpending(submitResp);
       return submitResp.json() as Promise<T>;
     }
 
@@ -268,7 +269,7 @@ export class BlockrunClient {
       }
 
       if (pollResp.status === 200 && lastStatus === "completed") {
-        this.recordSpending();
+        this.recordSpending(pollResp);
         return pollData as T;
       }
 
@@ -343,7 +344,7 @@ export class BlockrunClient {
       if (!streamResp.ok) {
         await this.throwApiError(streamResp, `stream failed after payment (${url})`);
       }
-      this.recordSpending();
+      this.recordSpending(streamResp);
     } else {
       await this.throwApiError(resp402, `stream failed (${url})`);
       return; // unreachable
@@ -448,7 +449,7 @@ export class BlockrunClient {
       await this.throwApiError(retry, `${method} ${url} failed after payment`);
     }
 
-    this.recordSpending();
+    this.recordSpending(retry);
     return retry.json() as Promise<T>;
   }
 
@@ -508,7 +509,18 @@ export class BlockrunClient {
   /** Accumulates the most-recent pending cost; settled by recordSpending. */
   private pendingCostUsd: number = 0;
 
-  private recordSpending(): void {
+  /**
+   * Book the pending cost of the paid call `response` answered. A response
+   * whose settlement the gateway skipped ({@link settlementSkipped}:
+   * `X-Settlement-Skipped: <reason>` or `X-Payment-Waived`) moved nothing, so
+   * the pending cost is dropped unbooked. `X-Payment-Settled: false` alone is
+   * still booked: the payment is owed.
+   */
+  private recordSpending(response: Response): void {
+    if (settlementSkipped(response)) {
+      this.pendingCostUsd = 0;
+      return;
+    }
     if (this.pendingCostUsd > 0) {
       this.sessionCalls += 1;
       this.sessionTotalUsd += this.pendingCostUsd;

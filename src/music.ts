@@ -1,4 +1,5 @@
 import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js";
+import { settlementSkipped } from "./receipt";
 /**
  * BlockRun Music Client - Generate music tracks via x402 micropayments.
  *
@@ -215,8 +216,11 @@ export class MusicClient {
     const data = await retryResponse.json() as MusicResponse;
 
     // Track spending
-    this.sessionCalls++;
-    this.sessionTotalUsd += 0.1575;
+    // A skipped settlement (X-Settlement-Skipped / X-Payment-Waived) moved nothing: book nothing.
+    if (!settlementSkipped(retryResponse)) {
+      this.sessionCalls++;
+      this.sessionTotalUsd += 0.1575;
+    }
 
     // Attach tx hash from response header if present
     const txHash = retryResponse.headers.get("x-payment-receipt") || retryResponse.headers.get("X-Payment-Receipt");

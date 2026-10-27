@@ -1,4 +1,5 @@
 import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js";
+import { settlementSkipped } from "./receipt";
 /**
  * BlockRun Speech Client - Text-to-speech and sound effects (ElevenLabs) via x402 micropayments.
  *
@@ -281,9 +282,12 @@ export class SpeechClient {
 
     // Track spending — actual price is derived server-side from the payment
     // requirements (character-scaled for TTS, flat for sound effects).
-    this.sessionCalls++;
-    const paidUsd = Number(details.amount) / 1_000_000; // USDC has 6 decimals
-    if (Number.isFinite(paidUsd)) this.sessionTotalUsd += paidUsd;
+    // A skipped settlement (X-Settlement-Skipped / X-Payment-Waived) moved nothing: book nothing.
+    if (!settlementSkipped(retryResponse)) {
+      this.sessionCalls++;
+      const paidUsd = Number(details.amount) / 1_000_000; // USDC has 6 decimals
+      if (Number.isFinite(paidUsd)) this.sessionTotalUsd += paidUsd;
+    }
 
     // Attach tx hash from response header if present
     const txHash = retryResponse.headers.get("x-payment-receipt") || retryResponse.headers.get("X-Payment-Receipt");

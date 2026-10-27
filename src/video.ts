@@ -1,4 +1,5 @@
 import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js";
+import { settlementSkipped } from "./receipt";
 /**
  * BlockRun Video Client - Generate short AI videos via x402 micropayments.
  *
@@ -419,8 +420,11 @@ export class VideoClient {
         // Account the actual settled amount (micro-USDC from the signed 402),
         // not a hardcoded per-second rate. Seedance is flat-token priced, so
         // the old xAI formula misreported every non-Grok video.
-        this.sessionCalls++;
-        this.sessionTotalUsd += Number(details.amount) / 1e6;
+        // A skipped settlement (X-Settlement-Skipped / X-Payment-Waived) moved nothing: book nothing.
+        if (!settlementSkipped(pollResp)) {
+          this.sessionCalls++;
+          this.sessionTotalUsd += Number(details.amount) / 1e6;
+        }
         const txHash =
           pollResp.headers.get("x-payment-receipt") ||
           pollResp.headers.get("X-Payment-Receipt");

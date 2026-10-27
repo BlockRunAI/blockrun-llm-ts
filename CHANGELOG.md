@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Fixed — a paid call the gateway did not settle is booked at $0
+
+- The gateways now serve some paid requests without settling them and say so:
+  `X-Settlement-Skipped: empty-result` (sol `/v1/pm/*` empty search, with
+  `X-Payment-Waived`), `X-Settlement-Skipped: unexecuted` (sol `/v1/rpc/*`
+  JSON-RPC never executed), `X-Settlement-Skipped: free-fallback` (chat), and
+  `X-Payment-Waived: empty-result` alone (blockrun.ai `/v1/pm/*`). The SDK only
+  recognised `free-fallback`, and only on the chat path, so `getSpending()` and
+  the cost log booked the full signed amount for calls that moved no money.
+  `settlementSkipped()` now treats any non-empty `X-Settlement-Skipped` or
+  `X-Payment-Waived` as skipped, and every booking site (LLMClient raw GET/POST,
+  chat, streams; SolanaLLMClient exact, batch, stream, raw, 202 media, video
+  delivery; BlockrunClient; Video, Voice, Speech, Music, Rpc, Portrait, Phone
+  clients) books $0 for it. `settlement.skipped` carries the gateway's reason.
+  `X-Payment-Settled: false` alone is still booked: the payment is owed.
+
 ## [3.24.8] - 2026-10-27
 
 ### Fixed — a reclaimed channel is dropped on the SDK's own chain evidence

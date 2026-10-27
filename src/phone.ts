@@ -1,4 +1,5 @@
 import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js";
+import { settlementSkipped } from "./receipt";
 /**
  * BlockRun Phone Client — Twilio-backed phone lookup + number provisioning via x402.
  *
@@ -289,9 +290,11 @@ export class PhoneClient {
     }
     const data = await this.unwrap<Record<string, unknown>>(retry, true);
 
-    const costUsd = Number.parseFloat(details.amount) / 1e6;
-    this.sessionCalls += 1;
-    this.sessionTotalUsd += costUsd;
+    // A skipped settlement (X-Settlement-Skipped / X-Payment-Waived) moved nothing: book nothing.
+    if (!settlementSkipped(retry)) {
+      this.sessionCalls += 1;
+      this.sessionTotalUsd += Number.parseFloat(details.amount) / 1e6;
+    }
 
     const txHash =
       retry.headers.get("x-payment-receipt") ||
