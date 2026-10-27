@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.24.7] - 2026-10-26
+
 ### Fixed — a channel the facilitator closed is reopened, not topped up
 
 - When a stored batch channel's account no longer exists on-chain (PayAI closes
