@@ -1,4 +1,5 @@
 import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js";
+import { settlementSkipped } from "./receipt";
 /**
  * BlockRun Portrait Client — enroll a Virtual Portrait via x402.
  *
@@ -208,9 +209,11 @@ export class PortraitClient {
     }
     const data = await this.unwrap<Record<string, unknown>>(retry, true);
 
-    const costUsd = Number.parseFloat(details.amount) / 1e6;
-    this.sessionCalls += 1;
-    this.sessionTotalUsd += costUsd;
+    // A skipped settlement (X-Settlement-Skipped / X-Payment-Waived) moved nothing: book nothing.
+    if (!settlementSkipped(retry)) {
+      this.sessionCalls += 1;
+      this.sessionTotalUsd += Number.parseFloat(details.amount) / 1e6;
+    }
 
     // The enroll route returns the on-chain settlement hash in the body
     // (`settlement.tx_hash`), not a receipt header. Surface it as a flat

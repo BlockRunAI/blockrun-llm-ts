@@ -1,4 +1,5 @@
 import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js";
+import { settlementSkipped } from "./receipt";
 /**
  * BlockRun RPC Client - Multi-chain JSON-RPC (Tatum gateway) via x402 micropayments.
  *
@@ -366,9 +367,12 @@ export class RpcClient {
 
     // Track spending — the quote comes from the 402 requirements
     // (per-element rate x batch size).
-    this.sessionCalls++;
-    const paidUsd = Number(details.amount) / 1_000_000; // USDC has 6 decimals
-    if (Number.isFinite(paidUsd)) this.sessionTotalUsd += paidUsd;
+    // A skipped settlement (X-Settlement-Skipped / X-Payment-Waived) moved nothing: book nothing.
+    if (!settlementSkipped(retryResponse)) {
+      this.sessionCalls++;
+      const paidUsd = Number(details.amount) / 1_000_000; // USDC has 6 decimals
+      if (Number.isFinite(paidUsd)) this.sessionTotalUsd += paidUsd;
+    }
 
     return { data: await retryResponse.json(), headers: retryResponse.headers };
   }

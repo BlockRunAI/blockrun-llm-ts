@@ -692,7 +692,7 @@ export class SolanaLLMClient {
         // Throws before the body is touched, so a refusal never reaches the SSE
         // reader as an empty stream the caller would read as an empty answer.
         await this.assertPaid(paid);
-        this.recordSettlement(costUsd);
+        this.recordSettlement(costUsd, paid);
         return paid;
       } catch (error) {
         if (
@@ -1165,7 +1165,7 @@ export class SolanaLLMClient {
             // A batch payment in doubt throws BatchPaymentUnresolvedError
             // ("paid-or-in-doubt").
             if (batch.kind === "paid") {
-              this.recordSettlement(batch.chargedUsd);
+              this.recordSettlement(batch.chargedUsd, batch.response);
               // costUsd is the charge just booked (extra.chargedAmount), never the ceiling.
               const paid = await this.readPaidJson<ChatResponse>(batch.response);
               return withCost(paid, batch.response, batch.chargedUsd, "batch");
@@ -1305,7 +1305,7 @@ export class SolanaLLMClient {
     };
     const deliver = (data: Record<string, unknown>, response: Response): Record<string, unknown> => {
       if (kind === "video") {
-        if (videoCostUsd !== undefined) this.recordSettlement(videoCostUsd);
+        if (videoCostUsd !== undefined) this.recordSettlement(videoCostUsd, response);
         const txHash = response.headers.get("x-payment-receipt");
         if (txHash) data.txHash = txHash;
       }
@@ -1630,8 +1630,8 @@ export class SolanaLLMClient {
     }
 
     await this.assertPaid(retryResponse);
-    // A free-fallback answer with settlement skipped moved nothing on chain.
-    if (!settlementSkipped(retryResponse)) this.recordSettlement(costUsd);
+    // A skipped settlement (e.g. a free-fallback answer) books nothing.
+    this.recordSettlement(costUsd, retryResponse);
 
     const paid = await this.readPaidJson<ChatResponse>(retryResponse);
     return withCost(paid, retryResponse, costUsd, "exact");
@@ -1719,12 +1719,12 @@ export class SolanaLLMClient {
       // completion instead would drop the cost whenever a paid job later fails
       // or times out. A video POST is only verified: followSolanaJob records
       // the video's cost when the finished job is paid for.
-      if (kind !== "video") this.recordSettlement(costUsd);
+      if (kind !== "video") this.recordSettlement(costUsd, retryResponse);
       const submitted = (await retryResponse.json()) as Record<string, unknown>;
       return this.followSolanaJob(submitted, media.pollBudgetMs ?? this.timeout, kind);
     }
 
-    this.recordSettlement(costUsd);
+    this.recordSettlement(costUsd, retryResponse);
     return retryResponse.json() as Promise<Record<string, unknown>>;
   }
 
@@ -1784,7 +1784,7 @@ export class SolanaLLMClient {
     });
 
     await this.assertPaid(retryResponse);
-    this.recordSettlement(costUsd);
+    this.recordSettlement(costUsd, retryResponse);
 
     return retryResponse.json() as Promise<Record<string, unknown>>;
   }
@@ -1828,8 +1828,17 @@ export class SolanaLLMClient {
     }
   }
 
-  /** Count one settled x402 payment against the session total. */
-  private recordSettlement(costUsd: number): void {
+  /**
+   * Count one settled x402 payment against the session total.
+   *
+   * Takes the paid response so no booking site can forget the check: a
+   * response whose settlement the gateway skipped ({@link settlementSkipped}:
+   * `X-Settlement-Skipped: free-fallback | empty-result | unexecuted | …`, or
+   * `X-Payment-Waived`) moved nothing on chain and books nothing.
+   * `X-Payment-Settled: false` alone is still booked: the payment is owed.
+   */
+  private recordSettlement(costUsd: number, response: Response): void {
+    if (settlementSkipped(response)) return;
     this.sessionCalls += 1;
     this.sessionTotalUsd += costUsd;
   }

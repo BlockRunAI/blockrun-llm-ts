@@ -75,12 +75,43 @@ export function readSettlement(
 }
 
 /**
- * Whether the gateway skipped settlement because a free fallback model served
- * the paid request (`X-Settlement-Skipped: free-fallback`). The signed payment
- * was never settled, so nothing was charged and nothing may be booked.
+ * Why the gateway served a paid request WITHOUT settling it, or undefined when
+ * it did not say so.
+ *
+ * The gateway names a skipped settlement two ways:
+ * - `X-Settlement-Skipped: <reason>`: `free-fallback` (a free model answered a
+ *   paid chat), `empty-result` (a prediction-market search found nothing),
+ *   `unexecuted` (a JSON-RPC call that never ran), and any reason added later.
+ * - `X-Payment-Waived: <reason>`: the same waiver on routes that do not (yet)
+ *   send `X-Settlement-Skipped` (blockrun.ai's `/v1/pm/*` empty result).
+ *
+ * Either one means the signed payment was never settled. An empty value is
+ * not a reason and does not count: a call is booked unless the gateway names
+ * why it was not charged.
+ *
+ * `X-Payment-Settled: false` on its own is NOT a skip: it means settlement did
+ * not land before the response went out, and the payment is still owed.
+ */
+export function settlementSkipReason(response: Response): string | undefined {
+  // Read AFTER a payment was sent: a response-like object without headers (a
+  // custom fetch) names no skip and must not turn a paid call into a throw.
+  const headers = response.headers as Headers | undefined;
+  if (typeof headers?.get !== "function") return undefined;
+  return (
+    headers.get("X-Settlement-Skipped")?.trim() ||
+    headers.get("X-Payment-Waived")?.trim() ||
+    undefined
+  );
+}
+
+/**
+ * Whether the gateway skipped settlement for this paid request
+ * ({@link settlementSkipReason}). The signed payment was never settled, so
+ * nothing was charged and nothing may be booked: every site that adds a paid
+ * call to `getSpending()` or the cost log checks this first.
  */
 export function settlementSkipped(response: Response): boolean {
-  return response.headers.get("X-Settlement-Skipped") === "free-fallback";
+  return settlementSkipReason(response) !== undefined;
 }
 
 /**
@@ -99,11 +130,12 @@ export function withCost<T extends { costUsd?: number; settlement?: Settlement }
   bookedUsd: number,
   scheme: Settlement["scheme"],
 ): T {
-  if (settlementSkipped(response)) {
+  const skipped = settlementSkipReason(response);
+  if (skipped !== undefined) {
     // Settlement was skipped: the caller booked nothing, and `bookedUsd` is
     // only what was signed.
     body.costUsd = 0;
-    body.settlement = { ...readSettlement(response, bookedUsd, scheme).settlement, skipped: "free-fallback" };
+    body.settlement = { ...readSettlement(response, bookedUsd, scheme).settlement, skipped };
     return body;
   }
   body.costUsd = bookedUsd;

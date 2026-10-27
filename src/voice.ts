@@ -1,4 +1,5 @@
 import { resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js";
+import { settlementSkipped } from "./receipt";
 /**
  * BlockRun Voice Call Client - AI-powered outbound phone calls via x402 micropayments.
  *
@@ -271,8 +272,11 @@ export class VoiceClient {
 
     const data = (await retryResponse.json()) as CallInitiatedResponse;
 
-    this.sessionCalls++;
-    this.sessionTotalUsd += CALL_PRICE_USD;
+    // A skipped settlement (X-Settlement-Skipped / X-Payment-Waived) moved nothing: book nothing.
+    if (!settlementSkipped(retryResponse)) {
+      this.sessionCalls++;
+      this.sessionTotalUsd += CALL_PRICE_USD;
+    }
 
     const txHash = retryResponse.headers.get("x-payment-receipt") || retryResponse.headers.get("X-Payment-Receipt");
     if (txHash) data.txHash = txHash;
