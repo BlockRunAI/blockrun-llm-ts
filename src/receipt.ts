@@ -85,9 +85,13 @@ export function readSettlement(
  * - `X-Payment-Waived: <reason>`: the same waiver on routes that do not (yet)
  *   send `X-Settlement-Skipped` (blockrun.ai's `/v1/pm/*` empty result).
  *
- * Either one means the signed payment was never settled. An empty value is
- * not a reason and does not count: a call is booked unless the gateway names
- * why it was not charged.
+ * Either one means the signed payment was never settled. An empty value, or
+ * one that says the opposite (`false`, `0`, `no`, `none`), is not a reason and
+ * does not count: a call is booked unless the gateway names why it was not
+ * charged. Nor does a skip header on a response that proves the payment
+ * settled anyway (a successful receipt with a transaction or a positive
+ * charge, or an `X-Payment-Receipt` hash): that call is booked, and the
+ * conflict logged to stderr.
  *
  * `X-Payment-Settled: false` on its own is NOT a skip: it means settlement did
  * not land before the response went out, and the payment is still owed.
@@ -97,11 +101,43 @@ export function settlementSkipReason(response: Response): string | undefined {
   // custom fetch) names no skip and must not turn a paid call into a throw.
   const headers = response.headers as Headers | undefined;
   if (typeof headers?.get !== "function") return undefined;
-  return (
-    headers.get("X-Settlement-Skipped")?.trim() ||
-    headers.get("X-Payment-Waived")?.trim() ||
-    undefined
-  );
+  const reason = [headers.get("X-Settlement-Skipped"), headers.get("X-Payment-Waived")]
+    .map((value) => value?.trim())
+    .find((value): value is string => !!value && !NOT_A_SKIP.test(value));
+  if (reason === undefined) return undefined;
+  // Settlement evidence beats a skip header: money that moved is booked.
+  const evidence = settlementEvidence(response);
+  if (evidence !== undefined) {
+    console.error(
+      `[@blockrun/llm] settlement: the gateway named a skipped settlement (${JSON.stringify(reason)}) on a response that also carries ${evidence}; booked as charged`,
+    );
+    return undefined;
+  }
+  return reason;
+}
+
+/** Header values that say settlement was NOT skipped: never a reason. */
+const NOT_A_SKIP = /^(false|0|no|none)$/i;
+
+/**
+ * Proof in the response that the payment settled anyway: a receipt that
+ * succeeded with a transaction or a positive charge, or an
+ * `X-Payment-Receipt` transaction hash. Undefined when there is none.
+ */
+function settlementEvidence(response: Response): string | undefined {
+  const header = response.headers.get("PAYMENT-RESPONSE") ?? response.headers.get("X-PAYMENT-RESPONSE");
+  const receipt = header ? decode(header) : undefined;
+  if (receipt && receipt.success !== false) {
+    if (typeof receipt.transaction === "string" && receipt.transaction) return "a settlement receipt with a transaction";
+    const extra = receipt.extra;
+    const charged = receiptChargedUsd({
+      amount: receipt.amount,
+      extra: extra && typeof extra === "object" ? (extra as { chargedAmount?: unknown }) : undefined,
+    });
+    if (charged !== undefined && charged > 0) return "a settlement receipt with a charge";
+  }
+  if (response.headers.get("X-Payment-Receipt")?.trim()) return "an X-Payment-Receipt transaction";
+  return undefined;
 }
 
 /**

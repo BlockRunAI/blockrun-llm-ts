@@ -192,7 +192,7 @@ export class BlockrunClient {
       await this.throwApiError(resp402, `poll submit failed (${submitUrl})`);
     }
 
-    const paymentPayload = await this.signFrom402(resp402, submitUrl, {
+    const { paymentPayload, costUsd } = await this.signFrom402(resp402, submitUrl, {
       description: "BlockRun async job",
       maxTimeoutSeconds: MAX_SIGNED_AUTH_SECONDS,
     });
@@ -215,7 +215,7 @@ export class BlockrunClient {
     }
 
     if (submitResp.status === 200) {
-      this.recordSpending(submitResp);
+      this.recordSpending(submitResp, costUsd);
       return submitResp.json() as Promise<T>;
     }
 
@@ -269,7 +269,7 @@ export class BlockrunClient {
       }
 
       if (pollResp.status === 200 && lastStatus === "completed") {
-        this.recordSpending(pollResp);
+        this.recordSpending(pollResp, costUsd);
         return pollData as T;
       }
 
@@ -325,7 +325,7 @@ export class BlockrunClient {
     if (resp402.status === 200) {
       streamResp = resp402;
     } else if (resp402.status === 402) {
-      const paymentPayload = await this.signFrom402(resp402, url, {
+      const { paymentPayload, costUsd } = await this.signFrom402(resp402, url, {
         description: "BlockRun stream",
       });
       streamResp = await this.fetchWithTimeout(url, {
@@ -344,7 +344,7 @@ export class BlockrunClient {
       if (!streamResp.ok) {
         await this.throwApiError(streamResp, `stream failed after payment (${url})`);
       }
-      this.recordSpending(streamResp);
+      this.recordSpending(streamResp, costUsd);
     } else {
       await this.throwApiError(resp402, `stream failed (${url})`);
       return; // unreachable
@@ -422,7 +422,7 @@ export class BlockrunClient {
     body: Record<string, unknown> | undefined,
     response: Response
   ): Promise<T> {
-    const paymentPayload = await this.signFrom402(response, url, {
+    const { paymentPayload, costUsd } = await this.signFrom402(response, url, {
       description: "BlockRun",
     });
 
@@ -449,20 +449,21 @@ export class BlockrunClient {
       await this.throwApiError(retry, `${method} ${url} failed after payment`);
     }
 
-    this.recordSpending(retry);
+    this.recordSpending(retry, costUsd);
     return retry.json() as Promise<T>;
   }
 
   /**
    * Read a 402 response's payment requirements (header or body), then sign and
-   * return the base64 PAYMENT-SIGNATURE payload. Also records the cost-to-be
-   * onto the response context (settled on `recordSpending`).
+   * return the base64 PAYMENT-SIGNATURE payload with what it pays, in USD.
+   * The cost stays with the call that signed it (booked by `recordSpending`):
+   * concurrent calls on one client never share it.
    */
   private async signFrom402(
     response: Response,
     url: string,
     opts: { description: string; maxTimeoutSeconds?: number }
-  ): Promise<string> {
+  ): Promise<{ paymentPayload: string; costUsd: number }> {
     let paymentHeader = response.headers.get("payment-required");
 
     if (!paymentHeader) {
@@ -485,9 +486,9 @@ export class BlockrunClient {
 
     const paymentRequired = parsePaymentRequired(paymentHeader);
     const details = extractPaymentDetails(paymentRequired);
-    this.pendingCostUsd = parseFloat(details.amount) / 1e6;
+    const costUsd = parseFloat(details.amount) / 1e6;
 
-    return createPaymentPayload(
+    const paymentPayload = await createPaymentPayload(
       this.privateKey,
       this.account.address,
       details.recipient,
@@ -504,27 +505,21 @@ export class BlockrunClient {
         asset: details.asset,
       }
     );
+    return { paymentPayload, costUsd };
   }
 
-  /** Accumulates the most-recent pending cost; settled by recordSpending. */
-  private pendingCostUsd: number = 0;
-
   /**
-   * Book the pending cost of the paid call `response` answered. A response
+   * Book `costUsd`, what the call that `response` answered signed. A response
    * whose settlement the gateway skipped ({@link settlementSkipped}:
    * `X-Settlement-Skipped: <reason>` or `X-Payment-Waived`) moved nothing, so
-   * the pending cost is dropped unbooked. `X-Payment-Settled: false` alone is
-   * still booked: the payment is owed.
+   * nothing is booked. `X-Payment-Settled: false` alone is still booked: the
+   * payment is owed.
    */
-  private recordSpending(response: Response): void {
-    if (settlementSkipped(response)) {
-      this.pendingCostUsd = 0;
-      return;
-    }
-    if (this.pendingCostUsd > 0) {
+  private recordSpending(response: Response, costUsd: number): void {
+    if (settlementSkipped(response)) return;
+    if (costUsd > 0) {
       this.sessionCalls += 1;
-      this.sessionTotalUsd += this.pendingCostUsd;
-      this.pendingCostUsd = 0;
+      this.sessionTotalUsd += costUsd;
     }
   }
 

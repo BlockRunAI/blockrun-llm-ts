@@ -16,6 +16,21 @@
   record without it), so a process that makes one call per run still finishes
   the wait. Closes the known gap noted in 3.24.8.
 
+### Fixed — a skipped-settlement header never hides a real charge
+
+- A response that names a skipped settlement (`X-Settlement-Skipped` /
+  `X-Payment-Waived`) but also proves the payment settled (a successful
+  `PAYMENT-RESPONSE` with a transaction or a positive charge, or an
+  `X-Payment-Receipt` hash) is now booked as charged, and the conflict is
+  logged to stderr. The gateways never send both today (a free-fallback
+  receipt has an empty transaction and no amount); this keeps a future gateway
+  change from making `getSpending()` under-report money that moved.
+- A header value that says the opposite (`false`, `0`, `no`, `none`) is no
+  longer read as a skip.
+- `BlockrunClient` books each call's own signed cost. It kept one pending cost
+  per client, so a skipped call could zero a concurrent call's charge on the
+  same client, which was then never booked.
+
 ### Fixed — a paid call the gateway did not settle is booked at $0
 
 - The gateways now serve some paid requests without settling them and say so:

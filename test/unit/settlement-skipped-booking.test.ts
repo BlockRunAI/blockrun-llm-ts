@@ -42,6 +42,10 @@ const SKIPPED: Array<[string, Headers_]> = [
   ["chat free fallback (X-Settlement-Skipped: free-fallback)", { "X-Settlement-Skipped": "free-fallback" }],
   ["base pm empty result (X-Payment-Waived alone)", { "X-Payment-Waived": "empty-result" }],
   ["a reason the SDK has never seen (X-Settlement-Skipped: some-future-reason)", { "X-Settlement-Skipped": "some-future-reason" }],
+  [
+    "chat free fallback as blockrun.ai sends it (a receipt with an empty transaction and no amount)",
+    { "X-Settlement-Skipped": "free-fallback", "PAYMENT-RESPONSE": b64({ success: true, transaction: "", network: "eip155:8453" }) },
+  ],
 ];
 
 /** Paid 200s that still owe the payment: each must book the full quote. */
@@ -49,6 +53,19 @@ const BOOKED: Array<[string, Headers_]> = [
   ["settled (PAYMENT-RESPONSE with a transaction)", { "PAYMENT-RESPONSE": b64({ success: true, transaction: "0xpaid", network: "eip155:8453" }) }],
   ["X-Payment-Settled: false alone (settlement did not land in time: still owed)", { "X-Payment-Settled": "false" }],
   ["empty X-Settlement-Skipped / blank X-Payment-Waived (no reason named)", { "X-Settlement-Skipped": "", "X-Payment-Waived": " " }],
+  ["X-Settlement-Skipped: false / X-Payment-Waived: 0 (says it was NOT skipped)", { "X-Settlement-Skipped": "false", "X-Payment-Waived": "0" }],
+  [
+    "a skip header on a receipt that settled with a transaction (the receipt wins)",
+    { "X-Settlement-Skipped": "free-fallback", "PAYMENT-RESPONSE": b64({ success: true, transaction: "0xpaid", network: "eip155:8453" }) },
+  ],
+  [
+    "a skip header on a receipt that states a charge (the receipt wins)",
+    {
+      "X-Payment-Waived": "empty-result",
+      "PAYMENT-RESPONSE": b64({ success: true, transaction: "", network: "eip155:8453", extra: { chargedAmount: QUOTE_ATOMIC } }),
+    },
+  ],
+  ["a skip header with an X-Payment-Receipt transaction hash (the hash wins)", { "X-Settlement-Skipped": "unexecuted", "X-Payment-Receipt": "0xpaid" }],
 ];
 
 type Call = { method: string; url: string; paid: boolean };
@@ -367,6 +384,7 @@ const SITES: Site[] = [
 beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "debug").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -391,6 +409,41 @@ describe("settlementSkipped / settlementSkipReason", () => {
     expect(settlementSkipReason(r({ "X-Settlement-Skipped": "unexecuted", "X-Payment-Waived": "empty-result" }))).toBe("unexecuted");
     expect(settlementSkipReason(r({ "X-Payment-Waived": "empty-result" }))).toBe("empty-result");
     expect(settlementSkipReason(r({ "X-Settlement-Skipped": "", "X-Payment-Waived": "empty-result" }))).toBe("empty-result");
+    expect(settlementSkipReason(r({ "X-Settlement-Skipped": "none", "X-Payment-Waived": "empty-result" }))).toBe("empty-result");
+  });
+
+  it("logs a skip header contradicted by settlement evidence, and books the call", () => {
+    const error = vi.mocked(console.error);
+    expect(
+      settlementSkipped(r({ "X-Settlement-Skipped": "free-fallback", "PAYMENT-RESPONSE": b64({ success: true, transaction: "0xpaid" }) }))
+    ).toBe(false);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('skipped settlement ("free-fallback")'));
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("booked as charged"));
+  });
+
+  it("a failed receipt is no evidence: the skip stands", () => {
+    expect(
+      settlementSkipReason(r({ "X-Settlement-Skipped": "unexecuted", "PAYMENT-RESPONSE": b64({ success: false, transaction: "0xfailed" }) }))
+    ).toBe("unexecuted");
+  });
+});
+
+describe("BlockrunClient books each call's own cost", () => {
+  it("a skipped call never drops a concurrent call's charge on the same client", async () => {
+    const client = new BlockrunClient({ privateKey: TEST_PRIVATE_KEY });
+    stubFetch((c) => {
+      const skipped = c.url.includes("/v1/pm/");
+      if (!c.paid) return challenge(skipped ? `${API}/v1/pm/markets/search` : `${API}/v1/rpc/base`);
+      return json({ ok: true }, skipped ? { "X-Settlement-Skipped": "empty-result" } : {});
+    });
+    // Both sign before either answer is booked.
+    await Promise.all([
+      client.get("/v1/pm/markets/search", { q: "x" }),
+      client.post("/v1/rpc/base", { jsonrpc: "2.0", id: 1, method: "eth_blockNumber" }),
+    ]);
+    expect(calls.filter((c) => c.paid)).toHaveLength(2);
+    expect(client.getSpending().calls).toBe(1);
+    expect(client.getSpending().totalUsd).toBeCloseTo(QUOTE_USD, 10);
   });
 });
 
