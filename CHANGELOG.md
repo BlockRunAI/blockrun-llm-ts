@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed — SolanaLLMClient waits as long as LLMClient (issue #93)
+
+- `SolanaLLMClient` aborted every request after a fixed 60 s, while
+  `LLMClient` waits 600 s and honours `BLOCKRUN_CHAT_TIMEOUT`. A reasoning
+  model's long turn (`moonshot/kimi-k3.1-pro` at 60.3 s) was aborted after its
+  batch payment was sent, ending in `BatchPaymentUnresolvedError`. Both clients
+  now share one default: `BLOCKRUN_CHAT_TIMEOUT` (seconds) when set, else
+  600 s; the `timeout` option still overrides it.
+
 ## [3.24.9] - 2026-10-27
 
 ### Fixed — a reclaimed channel with deposit to spare is re-read when refused

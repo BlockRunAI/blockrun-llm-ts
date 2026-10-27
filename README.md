@@ -635,7 +635,10 @@ console.log(res.costUsd, res.settlement);        // what you paid, and the tx
 ```
 
 `costUsd`, `settlement` and the per-call `timeout` work the same on `LLMClient`
-(Base / Arc). `costUsd` is what the call added to `getSpending()`: the signed
+(Base / Arc). Both clients default to a 600 s request timeout
+(`BLOCKRUN_CHAT_TIMEOUT`, in seconds, overrides it; the `timeout` option, in
+ms, overrides both): a call aborted after its payment was sent may already be
+charged, so a batch payment ends unresolved rather than paid again. `costUsd` is what the call added to `getSpending()`: the signed
 price under `exact`, the metered `extra.chargedAmount` under batch settlement,
 `0` for a free model; it is undefined in API-key mode (billed to the account).
 When the gateway answers a paid request from a free fallback model it skips
@@ -1695,7 +1698,7 @@ const configured = new LLMClient({
 | `SOLANA_RPC_URL` | Solana RPC for payments and balance (also `rpcUrl`) |
 | `SOLANA_RPC_API_KEY` / `SOLANA_RPC_HEADERS` | Header auth for that RPC (also `rpcHeaders`) |
 | `BASE_RPC_URL` | Base RPC tried first by `LLMClient.getBalance()` |
-| `BLOCKRUN_CHAT_TIMEOUT` | `LLMClient` default timeout, in **seconds** (default 600) |
+| `BLOCKRUN_CHAT_TIMEOUT` | `LLMClient` and `SolanaLLMClient` default timeout, in **seconds** (default 600) |
 | `BLOCKRUN_HOME` | Base directory for the Base wallet files (security-sensitive, see [Wallets](#one-wallet-across-every-blockrun-product)) |
 
 `BLOCKRUN_SOL_OPERATOR` is **not** an environment variable or a secret. It is
