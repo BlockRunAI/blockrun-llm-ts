@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.25.0] - 2026-10-27
+
 ### Added — `batch.onLocked`: wait or fail instead of paying exact (issue #96)
 
 - Batch pays in one process per wallet: the process that opened the channel
