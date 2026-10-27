@@ -450,6 +450,17 @@ anything else keeps the record and pays `exact` (`channel_unreadable`). Until
 it succeeds, calls pay `exact` (`channel_resync_pending`, or
 `channel_resync_failed` when the chain cannot be read).
 
+A channel whose account the chain no longer has (the operator closes channels
+left idle and reclaims the account) is not topped up either. The SDK reads it
+again at `confirmed` commitment: an account that shows there is only not
+finalized yet, and the top-up goes ahead. One gone there too is re-read
+(`channel_unusable`) against a block height the SDK reads itself: calls pay
+`exact` (`channel_resync_pending`) for about two minutes, until finality is
+past that height, then the record is dropped (if the finalized chain still has
+no account) and the next call opens a fresh channel. The height is saved in the
+channel file, so a process that exits and restarts finishes the same wait
+rather than starting it over. Nothing in the 402 can shorten that wait.
+
 Only an absent account counts as "no channel": an account at that address that
 cannot be read as your channel (another owner, layout, encoding, payer,
 operator or mint) keeps the record and pays `exact` (`channel_unreadable`), and
