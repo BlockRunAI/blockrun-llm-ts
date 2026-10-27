@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.24.8] - 2026-10-27
+
 ### Fixed — a reclaimed channel is dropped on the SDK's own chain evidence
 
 - 3.24.7 dropped a stored channel whose account was missing at finalized once
@@ -16,6 +18,12 @@
   anchor is saved in the channel file (`reclaimAnchorHeight`), so short-lived
   processes finish the wait instead of restarting it. A channel closed within
   a day of its open is no longer stuck for up to a day.
+- Older SDK copies keep their own behaviour on a shared channel file: 3.24.7
+  still drops on the 402's `openSlot`, and earlier versions still top up a
+  reclaimed channel. Upgrade every process that shares a wallet.
+- Known gap (unchanged): a reclaimed channel with deposit left over is only
+  re-read when a call needs a top-up; calls that fit sign an authorization the
+  gateway refuses and pay exact. Fix to follow.
 
 ## [3.24.7] - 2026-10-26
 
