@@ -28,6 +28,10 @@ const SKIPPED: Array<[string, Headers_]> = [
 const BOOKED: Array<[string, Headers_]> = [
   ["settled (PAYMENT-RESPONSE with a transaction)", { "PAYMENT-RESPONSE": b64({ success: true, transaction: "5sig", network: "solana:mainnet" }) }],
   ["X-Payment-Settled: false alone (still owed)", { "X-Payment-Settled": "false" }],
+  [
+    "a skip header on a receipt that settled with a transaction (the receipt wins)",
+    { "X-Settlement-Skipped": "empty-result", "PAYMENT-RESPONSE": b64({ success: true, transaction: "5sig", network: "solana:mainnet" }) },
+  ],
 ];
 
 const CHALLENGE = {
@@ -157,6 +161,7 @@ const SITES: Site[] = [
 
 beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
 afterEach(() => {
