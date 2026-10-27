@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.24.10] - 2026-10-27
+
 ### Fixed — SolanaLLMClient waits as long as LLMClient (issue #93)
 
 - `SolanaLLMClient` aborted every request after a fixed 60 s, while
