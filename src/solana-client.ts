@@ -62,11 +62,11 @@ import {
   validateResourceUrl,
 } from "./validation";
 import { USER_AGENT } from "./version";
+import { DEFAULT_TIMEOUT } from "./client";
 import { readSseFrames } from "./sse";
 
 const SOLANA_API_URL = "https://sol.blockrun.ai/api";
 const DEFAULT_MAX_TOKENS = 1024;
-const DEFAULT_TIMEOUT = 60000;
 const STALE_BLOCKHASH_RETRY_BACKOFFS_MS = [500, 2000] as const;
 const MAX_PAYMENT_FAILURE_BYTES = 64 * 1024;
 const DEFAULT_VIDEO_MODEL = "xai/grok-imagine-video";
@@ -267,7 +267,12 @@ export interface SolanaLLMClientOptions extends ApiKeyOptions {
    * (shortcut for `{ "x-api-key": "..." }`) env vars when omitted.
    */
   rpcHeaders?: Record<string, string>;
-  /** Request timeout in milliseconds (default: 60000) */
+  /**
+   * Request timeout in milliseconds. Default: `BLOCKRUN_CHAT_TIMEOUT` (in
+   * seconds) when set, else 600000, the same as `LLMClient`: a reasoning
+   * model's long turn can take minutes, and a batch payment whose call is
+   * aborted after it was sent ends unresolved.
+   */
   timeout?: number;
   /**
    * Opt in to x402 batch-settlement (metered billing) for chat completions.
