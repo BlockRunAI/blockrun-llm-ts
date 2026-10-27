@@ -1364,6 +1364,8 @@ export class ChannelLayoutError extends Error {
  *
  * @param options.minContextSlot - refuse an answer from a node that has not
  *   reached this slot (the RPC errors instead).
+ * @param options.commitment - `confirmed` only to tell an account that is not
+ *   finalized yet from one that is gone; never to size or settle anything.
  * @returns the channel, or undefined only when the RPC reports no account
  *   there (`value: null`).
  * @throws ChannelLayoutError (before any request) when `@x402/svm`'s
@@ -1377,10 +1379,10 @@ export async function readChannelAccount(
   rpcUrl: string,
   channelId: string,
   rpcHeaders?: Record<string, string>,
-  options: { minContextSlot?: number } = {},
+  options: { minContextSlot?: number; commitment?: "confirmed" | "finalized" } = {},
 ): Promise<OnChainChannel | undefined> {
   await checkChannelLayout();
-  const config: Record<string, unknown> = { encoding: "base64", commitment: "finalized" };
+  const config: Record<string, unknown> = { encoding: "base64", commitment: options.commitment ?? "finalized" };
   if (options.minContextSlot !== undefined) config.minContextSlot = options.minContextSlot;
   const response = await fetch(rpcUrl, {
     method: "POST",
@@ -1479,8 +1481,6 @@ function checkChannelLayout(): Promise<void> {
  * transaction, and any block that did is finalized and visible.
  */
 const LANDING_MARGIN_BLOCKS = 300;
-/** Solana's target slot time; converts a channel's withdraw delay to slots. */
-const SECONDS_PER_SLOT = 0.4;
 
 /** The larger of two optional amounts. */
 function maxOf(a: bigint | undefined, b: bigint | undefined): bigint | undefined {
@@ -3826,7 +3826,11 @@ export class SolanaBatchPayer {
    * pays exact (`channel_unreadable`), record kept. If
    * the finalized channel is closing or closed, or is not this wallet's for
    * the record's operator and mint, no top-up is sized from the record: it
-   * is re-read at once (`channel_unusable`), see {@link createPayload}.
+   * is re-read at once (`channel_unusable`), see {@link createPayload}. So is
+   * a channel with no account at finalized or at confirmed commitment (closed
+   * and reclaimed); resync drops its record only once finality is past its
+   * own anchor. One that shows only at confirmed is not finalized yet: the
+   * lifetime cap applies.
    */
   private async prepareTopUp(wallet: WalletBatch, paymentRequired: PaymentRequired): Promise<void> {
     wallet.topUp = undefined;
@@ -3844,8 +3848,16 @@ export class SolanaBatchPayer {
     const deposit = parseAtomic(record.deposit);
     if (parseAtomic(record.chargedCumulativeAmount) + parseAtomic(accept.amount) <= deposit) return;
     let channel: OnChainChannel | undefined;
+    let unfinalized = false;
     try {
       channel = await readChannelAccount(this.init.rpcUrl, record.channelId, this.init.rpcHeaders);
+      // No account at finalized commitment: either the channel is not
+      // finalized yet, or it was closed and its account reclaimed. Only the
+      // first shows at confirmed commitment.
+      if (channel === undefined) {
+        unfinalized =
+          (await readChannelAccount(this.init.rpcUrl, record.channelId, this.init.rpcHeaders, { commitment: "confirmed" })) !== undefined;
+      }
     } catch (err) {
       // A layout this SDK cannot decode, or an account at the channel's
       // address that is not a readable channel (wrong owner, short data,
@@ -3865,36 +3877,25 @@ export class SolanaBatchPayer {
         `could not read channel ${record.channelId} before topping it up: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+    // Not at finalized commitment yet: keep the lifetime cap.
+    if (channel === undefined && unfinalized) return;
     if (channel === undefined) {
-      // No account at finalized commitment. A confirmed record opened more
-      // than a withdraw delay ago names a channel that was closed and its
-      // account reclaimed (the facilitator closes channels left idle, PayAI's
-      // `idleCloseSeconds`, and a forced close waits out the withdraw delay):
-      // a top-up into it is refused, and every call would fall back to exact.
-      // Re-read it through resync, which drops the record, and the call goes
-      // on as with no channel (a fresh open if it fits). A younger open (it may
-      // not be finalized yet), a record with no open slot, or a failed slot
-      // read keeps the lifetime cap.
-      const openSlot = Number((record.channelConfig as { openSlot?: unknown }).openSlot);
-      const delaySlots = Math.ceil((record.channelConfig.withdrawDelay ?? 86_400) / SECONDS_PER_SLOT);
-      let finalizedSlot: number;
-      try {
-        const epoch = (await rpcRequest(this.init.rpcUrl, "getEpochInfo", [{ commitment: "finalized" }], this.init.rpcHeaders)) as {
-          absoluteSlot?: unknown;
-        };
-        finalizedSlot = rpcInteger(epoch.absoluteSlot, "getEpochInfo absoluteSlot");
-      } catch {
-        return;
-      }
-      if (!Number.isSafeInteger(openSlot) || openSlot <= 0 || finalizedSlot <= openSlot + delaySlots) return;
+      // Gone at confirmed commitment too: the channel was most likely closed
+      // and its account reclaimed (the facilitator closes channels left idle,
+      // PayAI's `idleCloseSeconds`), and a top-up into it would be refused,
+      // every call falling back to exact. Never sign one. Re-read it through
+      // resync instead: with no anchor queued, resync takes its own
+      // (`getBlockHeight` at confirmed), pays exact until finality is
+      // LANDING_MARGIN_BLOCKS past it, and only then drops the record if the
+      // finalized chain still has no account (a lagging read finds the
+      // channel and rewrites the record). Nothing from the 402, such as the
+      // record's `openSlot` or `withdrawDelay`, decides it.
       addResyncTarget(wallet, {
         key,
         channelId: record.channelId,
         channelConfig: record.channelConfig,
         cumulative: parseAtomic(record.chargedCumulativeAmount),
         knownDeposit: deposit,
-        // No deposit is in doubt: nothing can still land in a reclaimed account.
-        anchorHeight: 0,
         reason: "channel_unusable",
       });
       throw new ChannelResyncRequiredError(record.channelId);

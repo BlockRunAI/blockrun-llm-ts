@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Fixed — a reclaimed channel is dropped on the SDK's own chain evidence
+
+- 3.24.7 dropped a stored channel whose account was missing at finalized once
+  the finalized slot passed the record's `openSlot` + withdraw delay. Both
+  values come from the 402 (`extra.recentSlot`, `extra.withdrawDelay`), so a
+  stale `recentSlot` could drop a channel opened seconds earlier and not yet
+  finalized, forgetting a funded channel and opening a second. Now an account
+  missing at finalized is read again at `confirmed`: present means not
+  finalized yet (top-up as before); gone there too queues a re-read with no
+  anchor, so resync takes its own block height, pays exact until finality is
+  300 blocks past it (about two minutes), and only then drops the record. A
+  channel closed within a day of its open is no longer stuck for up to a day.
+
 ## [3.24.7] - 2026-10-26
 
 ### Fixed — a channel the facilitator closed is reopened, not topped up

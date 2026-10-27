@@ -215,7 +215,11 @@ src/
   finalized and refuses (exact + `deposit_unrecorded` re-read) when the chain holds more deposit than
   the record; a closing/closed or not-ours channel (payer, operator, mint) queues a `channel_unusable`
   target and throws `ChannelResyncRequiredError`, so `createPayload()` re-reads at once (closed →
-  record dropped → fresh open; foreign → `channel_unreadable`, exact): never a deposit into it. Only `value: null` is absent; any other undecodable account throws
+  record dropped → fresh open; foreign → `channel_unreadable`, exact): never a deposit into it. An
+  account absent at finalized is re-read at `confirmed`: present → not finalized yet, lifetime cap;
+  absent too (closed + reclaimed, e.g. PayAI's 3-day `idleCloseSeconds`) → `channel_unusable` target
+  with NO anchor, so `resync()` takes its own and pays exact until finality is past it, then drops the
+  record; never the record's `openSlot` / `withdrawDelay` (they come from the 402's `extra`). Only `value: null` is absent; any other undecodable account throws
   `ChannelUnreadableError` → `channel_unreadable` (record kept, exact).
 - **Crash safety.** With the file store, `journalDeposit()` writes a `DepositIntent` to
   `FileIntentJournal` (`<store>.deposit-intents` = full store path + suffix, one per store; never a name

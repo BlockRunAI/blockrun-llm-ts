@@ -145,7 +145,8 @@ function rpcResult(
   params: unknown[] = [],
   chain: Map<string, ReturnType<typeof channelAccount>> = new Map(),
   scannable = false,
-  clock: { blockHeight: number; blockhashValid: boolean } = { blockHeight: 400_000_000, blockhashValid: true }
+  clock: { blockHeight: number; blockhashValid: boolean } = { blockHeight: 400_000_000, blockhashValid: true },
+  reclaimed: Set<string> = new Set()
 ): unknown {
   const context = { slot: 400_000_000 };
   switch (method) {
@@ -159,6 +160,12 @@ function rpcResult(
     case "getAccountInfo": {
       const address = params[0] as string;
       if (address === USDC) return { context, value: mintAccount() };
+      const { commitment } = (params[1] ?? {}) as { commitment?: string };
+      // At confirmed commitment the fake chain shows every channel it has not
+      // finalized (yet), unless its account was closed and reclaimed.
+      if (commitment === "confirmed" && !chain.has(address) && !reclaimed.has(address)) {
+        return { context, value: channelAccount({ payer: FEE_PAYER, operator: FEE_PAYER, deposit: 0n }) };
+      }
       return { context, value: chain.get(address) ?? null };
     }
     case "getLatestBlockhash":
@@ -269,8 +276,10 @@ describe("SolanaLLMClient batch-settlement", () => {
   let chain: Map<string, ReturnType<typeof channelAccount>>;
   /** Whether getProgramAccounts (the scheme's discovery scan) sees them. Many RPCs refuse that call. */
   let scannable: boolean;
-  /** RPC methods that answer HTTP 500. */
+  /** RPC methods (or `method:commitment`) that answer HTTP 500. */
   let rpcDown: Set<string>;
+  /** Accounts closed and reclaimed: gone at confirmed commitment too. */
+  let reclaimed: Set<string>;
   /** The chain's block height, and whether the RPC calls a blockhash still valid. */
   let rpcClock: { blockHeight: number; blockhashValid: boolean };
 
@@ -282,6 +291,7 @@ describe("SolanaLLMClient batch-settlement", () => {
     chain = new Map();
     scannable = false;
     rpcDown = new Set();
+    reclaimed = new Set();
     rpcClock = { blockHeight: 400_000_000, blockhashValid: true };
     gateway = [];
     gatewayCalls = [];
@@ -292,8 +302,9 @@ describe("SolanaLLMClient batch-settlement", () => {
         const { id, method, params } = JSON.parse(String(init?.body));
         rpcMethods.push(method);
         rpcCalls.push({ method, params, init });
-        if (rpcDown.has(method)) return new Response("upstream down", { status: 500 });
-        return new Response(JSON.stringify({ jsonrpc: "2.0", id, result: rpcResult(method, params, chain, scannable, rpcClock) }), {
+        const commitment = (params?.[1] as { commitment?: string } | undefined)?.commitment;
+        if (rpcDown.has(method) || rpcDown.has(`${method}:${commitment}`)) return new Response("upstream down", { status: 500 });
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id, result: rpcResult(method, params, chain, scannable, rpcClock, reclaimed) }), {
           headers: { "content-type": "application/json" },
         });
       }
@@ -1555,44 +1566,82 @@ describe("SolanaLLMClient batch-settlement", () => {
       expect(storedRecord()).toMatchObject({ chargedCumulativeAmount: "30000", deposit: journaled.expectDeposit });
     });
 
-    it("drops a stored channel whose account is gone (closed and reclaimed), signs no top-up into it, and opens afresh", async () => {
+    it("pays exact for a stored channel whose account is gone (closed and reclaimed), then drops it and opens afresh once finality is past its own anchor", async () => {
       const c = kept({ maxDeposit: "$1" });
       const exact = stubExact(c);
       const channelId = await openChannel(c);
-      expect(Number(storedRecord()?.channelConfig?.openSlot)).toBeGreaterThan(0);
-      // Days later the facilitator closed the idle channel and reclaimed its account: getAccountInfo answers null.
+      // Days later the facilitator closed the idle channel and reclaimed its account: gone at every commitment.
       chain.delete(channelId);
-      rpcClock.blockHeight += 3 * 216_000;
+      reclaimed.add(channelId);
       let journaled: Record<string, any> = {};
       gateway.push(
         // A ceiling the stored record cannot cover: it would be a top-up.
         () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 }),
+        () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 }),
+        () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
         async (_url, init) => {
           const payment = decodePayment(init);
           expect(payment.payload.type).toBe("deposit");
-          // A fresh open: the reclaimed address may be reused, but no top-up of the old record.
-          expect(channelIdOf(payment)).toBe(channelId);
           [journaled] = Object.values(JSON.parse(fs.readFileSync(path.join(tmp, "channels.json.deposit-intents"), "utf8")).intents) as Array<Record<string, any>>;
           return servedWithVoucher(operator, channelIdOf(payment), 30000n, 30000n);
         }
       );
 
+      // No top-up is signed into the missing channel: exact, record kept, until finality passes the SDK's own anchor.
       await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(events.at(-1)).toMatchObject({ type: "fallback", reason: "channel_resync_pending" });
+      expect(storedRecord()?.channelId).toBe(channelId);
+      // The absence was checked at confirmed commitment too.
+      expect(channelReads(channelId).some((r) => r.commitment === "confirmed")).toBe(true);
 
-      expect(journaled).toMatchObject({ kind: "open", cumulative: "0" });
-      expect(exact).not.toHaveBeenCalled();
-      expect(events).toEqual([
-        expect.objectContaining({ type: "resync", reason: "channel_unusable", detail: expect.stringContaining("record dropped") }),
+      rpcClock.blockHeight += 300;
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exact).toHaveBeenCalledTimes(2);
+      expect(events.at(-1)).toMatchObject({ type: "fallback", reason: "channel_resync_pending" });
+
+      rpcClock.blockHeight += 1;
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exact).toHaveBeenCalledTimes(2);
+      expect(events.filter((e) => e.type === "resync")).toEqual([
+        expect.objectContaining({ reason: "channel_unusable", detail: expect.stringContaining("record dropped") }),
       ]);
+      // A fresh open, never a top-up of the closed channel.
+      expect(journaled).toMatchObject({ kind: "open", cumulative: "0" });
       expect(storedRecord()).toMatchObject({ chargedCumulativeAmount: "30000", deposit: journaled.expectDeposit });
+      // The anchor is the SDK's own block height read, once; the deciding read no older than the finality that proved it.
+      expect(rpcCalls.filter((r) => r.method === "getBlockHeight")).toHaveLength(1);
+      const finalizedReads = channelReads(channelId).filter((r) => r.commitment === "finalized");
+      expect(finalizedReads.some((r) => r.minContextSlot === rpcClock.blockHeight + 1_000)).toBe(true);
     });
 
-    it("keeps a just-opened channel the finalized chain does not show yet (no reopen)", async () => {
+    it("never drops a stored channel on a 402's openSlot: a channel gone from every commitment waits out the SDK's own anchor", async () => {
       const c = kept({ maxDeposit: "$1" });
       const exact = stubExact(c);
       const channelId = await openChannel(c);
+      // A 402 that named an ancient recentSlot (or a huge finalized slot) proves nothing about this channel.
+      expect(Number(storedRecord()?.channelConfig?.openSlot)).toBeGreaterThan(0);
       chain.delete(channelId);
-      // Within the withdraw delay of the open: absence may only mean "not finalized yet".
+      reclaimed.add(channelId);
+      rpcClock.blockHeight += 3 * 216_000;
+      gateway.push(
+        () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(events.at(-1)).toMatchObject({ type: "fallback", reason: "channel_resync_pending" });
+      expect(storedRecord()?.channelId).toBe(channelId);
+    });
+
+    it("keeps a just-opened channel the finalized chain does not show yet: a top-up, no resync, no exact", async () => {
+      const c = kept({ maxDeposit: "$1" });
+      const exact = stubExact(c);
+      const channelId = await openChannel(c);
+      // Confirmed, not finalized yet: not on the finalized chain, not reclaimed.
+      expect(chain.has(channelId)).toBe(false);
       gateway.push(
         () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
         async (_url, init) => {
@@ -1605,6 +1654,24 @@ describe("SolanaLLMClient batch-settlement", () => {
       await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
       expect(exact).not.toHaveBeenCalled();
       expect(events.filter((e) => e.type === "resync")).toEqual([]);
+      expect(rpcCalls.filter((r) => r.method === "getBlockHeight")).toHaveLength(0);
+      expect(storedRecord()?.channelId).toBe(channelId);
+    });
+
+    it("pays exact and keeps the record when the confirmed read of a channel missing at finalized fails", async () => {
+      const c = kept({ maxDeposit: "$1" });
+      const exact = stubExact(c);
+      const channelId = await openChannel(c);
+      rpcDown.add("getAccountInfo:confirmed");
+      gateway.push(
+        () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(events.at(-1)).toMatchObject({ type: "fallback", reason: "channel_resync_failed" });
+      expect(events.filter((e) => e.type === "resync")).toEqual([]);
+      expect(storedRecord()?.channelId).toBe(channelId);
     });
 
     it.each([
