@@ -1479,6 +1479,8 @@ function checkChannelLayout(): Promise<void> {
  * transaction, and any block that did is finalized and visible.
  */
 const LANDING_MARGIN_BLOCKS = 300;
+/** Solana's target slot time; converts a channel's withdraw delay to slots. */
+const SECONDS_PER_SLOT = 0.4;
 
 /** The larger of two optional amounts. */
 function maxOf(a: bigint | undefined, b: bigint | undefined): bigint | undefined {
@@ -3863,8 +3865,40 @@ export class SolanaBatchPayer {
         `could not read channel ${record.channelId} before topping it up: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    // Not at finalized commitment (yet): keep the lifetime cap.
-    if (channel === undefined) return;
+    if (channel === undefined) {
+      // No account at finalized commitment. A confirmed record opened more
+      // than a withdraw delay ago names a channel that was closed and its
+      // account reclaimed (the facilitator closes channels left idle, PayAI's
+      // `idleCloseSeconds`, and a forced close waits out the withdraw delay):
+      // a top-up into it is refused, and every call would fall back to exact.
+      // Re-read it through resync, which drops the record, and the call goes
+      // on as with no channel (a fresh open if it fits). A younger open (it may
+      // not be finalized yet), a record with no open slot, or a failed slot
+      // read keeps the lifetime cap.
+      const openSlot = Number((record.channelConfig as { openSlot?: unknown }).openSlot);
+      const delaySlots = Math.ceil((record.channelConfig.withdrawDelay ?? 86_400) / SECONDS_PER_SLOT);
+      let finalizedSlot: number;
+      try {
+        const epoch = (await rpcRequest(this.init.rpcUrl, "getEpochInfo", [{ commitment: "finalized" }], this.init.rpcHeaders)) as {
+          absoluteSlot?: unknown;
+        };
+        finalizedSlot = rpcInteger(epoch.absoluteSlot, "getEpochInfo absoluteSlot");
+      } catch {
+        return;
+      }
+      if (!Number.isSafeInteger(openSlot) || openSlot <= 0 || finalizedSlot <= openSlot + delaySlots) return;
+      addResyncTarget(wallet, {
+        key,
+        channelId: record.channelId,
+        channelConfig: record.channelConfig,
+        cumulative: parseAtomic(record.chargedCumulativeAmount),
+        knownDeposit: deposit,
+        // No deposit is in doubt: nothing can still land in a reclaimed account.
+        anchorHeight: 0,
+        reason: "channel_unusable",
+      });
+      throw new ChannelResyncRequiredError(record.channelId);
+    }
     if (
       !channel.open ||
       channel.payer !== (await this.init.address()) ||

@@ -1555,6 +1555,58 @@ describe("SolanaLLMClient batch-settlement", () => {
       expect(storedRecord()).toMatchObject({ chargedCumulativeAmount: "30000", deposit: journaled.expectDeposit });
     });
 
+    it("drops a stored channel whose account is gone (closed and reclaimed), signs no top-up into it, and opens afresh", async () => {
+      const c = kept({ maxDeposit: "$1" });
+      const exact = stubExact(c);
+      const channelId = await openChannel(c);
+      expect(Number(storedRecord()?.channelConfig?.openSlot)).toBeGreaterThan(0);
+      // Days later the facilitator closed the idle channel and reclaimed its account: getAccountInfo answers null.
+      chain.delete(channelId);
+      rpcClock.blockHeight += 3 * 216_000;
+      let journaled: Record<string, any> = {};
+      gateway.push(
+        // A ceiling the stored record cannot cover: it would be a top-up.
+        () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("deposit");
+          // A fresh open: the reclaimed address may be reused, but no top-up of the old record.
+          expect(channelIdOf(payment)).toBe(channelId);
+          [journaled] = Object.values(JSON.parse(fs.readFileSync(path.join(tmp, "channels.json.deposit-intents"), "utf8")).intents) as Array<Record<string, any>>;
+          return servedWithVoucher(operator, channelIdOf(payment), 30000n, 30000n);
+        }
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      expect(journaled).toMatchObject({ kind: "open", cumulative: "0" });
+      expect(exact).not.toHaveBeenCalled();
+      expect(events).toEqual([
+        expect.objectContaining({ type: "resync", reason: "channel_unusable", detail: expect.stringContaining("record dropped") }),
+      ]);
+      expect(storedRecord()).toMatchObject({ chargedCumulativeAmount: "30000", deposit: journaled.expectDeposit });
+    });
+
+    it("keeps a just-opened channel the finalized chain does not show yet (no reopen)", async () => {
+      const c = kept({ maxDeposit: "$1" });
+      const exact = stubExact(c);
+      const channelId = await openChannel(c);
+      chain.delete(channelId);
+      // Within the withdraw delay of the open: absence may only mean "not finalized yet".
+      gateway.push(
+        () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("deposit");
+          expect(channelIdOf(payment)).toBe(channelId);
+          return servedWithVoucher(operator, channelId, 30000n, 30000n);
+        }
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exact).not.toHaveBeenCalled();
+      expect(events.filter((e) => e.type === "resync")).toEqual([]);
+    });
+
     it.each([
       ["owned by another program", (acct: ReturnType<typeof channelAccount>) => ({ ...acct, owner: TOKEN_PROGRAM })],
       ["too short for a channel", (acct: ReturnType<typeof channelAccount>) => ({ ...acct, data: [Buffer.alloc(40).toString("base64"), "base64"] })],
