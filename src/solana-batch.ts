@@ -2032,6 +2032,12 @@ interface SentPayment {
   kind: BatchPayloadKind;
   /** The scheme's storage key for the channel it pays into, when known. */
   key?: string;
+  /**
+   * The record's saved reclaim anchor ({@link savedReclaimAnchor}), read
+   * before the payment was built: the scheme rewrites the record while it
+   * builds and settles one, without fields it does not know.
+   */
+  reclaimAnchor?: number;
   /** When it was first sent (ms since the epoch). */
   sentAt: number;
   /** How many times it has been sent. */
@@ -3186,6 +3192,9 @@ export class SolanaBatchPayer {
                 wallet.refusedFor = outcome.errorReason;
               }
             }
+          } else if (built.key && outcome.reason === "payment_required" && outcome.refusedForMs === undefined) {
+            // A plain 402 to an authorization: the channel may be gone.
+            await this.recheckRefusedChannel(wallet, built.key, built.reclaimAnchor);
           }
           sent = undefined;
           release();
@@ -3490,6 +3499,14 @@ export class SolanaBatchPayer {
 
   /** Build a new batch payment for a 402: the payload, its headers and its kind. */
   private async buildPayment(wallet: WalletBatch, paymentRequired: PaymentRequired): Promise<SentPayment> {
+    const acceptKey = channelKeyOf(trustedBatchAccept(paymentRequired, this.init.options.operators));
+    let reclaimAnchor: number | undefined;
+    try {
+      const stored = acceptKey ? await wallet.book.base.get(acceptKey) : undefined;
+      reclaimAnchor = stored ? savedReclaimAnchor(stored) : undefined;
+    } catch {
+      // Only costs restarting a reclaim wait.
+    }
     const { http, payload } = await this.createPayload(wallet, paymentRequired);
     // An embedder's after-hook refused the payment once it was signed: roll it
     // back unsent (the scheme already recorded it as pending) and refuse.
@@ -3516,7 +3533,16 @@ export class SolanaBatchPayer {
       const record = known?.record;
       kind = record && (record.pending === undefined || record.hasConfirmedState) ? "top-up" : "open";
     }
-    return { http, payload, headers, kind, key: known?.key, sentAt: Date.now(), sends: 0 };
+    return {
+      http,
+      payload,
+      headers,
+      kind,
+      key: known?.key,
+      ...(reclaimAnchor !== undefined && known?.key === acceptKey ? { reclaimAnchor } : {}),
+      sentAt: Date.now(),
+      sends: 0,
+    };
   }
 
   /**
@@ -3821,6 +3847,103 @@ export class SolanaBatchPayer {
   }
 
   /**
+   * Queue a re-read of a stored channel whose account is gone at finalized
+   * and at confirmed commitment (closed, its account reclaimed), anchored at
+   * the SDK's own `getBlockHeight` at confirmed. The anchor is saved in the
+   * record (`reclaimAnchorHeight`), so a short-lived process finishes the
+   * wait instead of starting it over; a failed read leaves resync to take it,
+   * and a failed save only costs that. resync pays exact until finality is
+   * LANDING_MARGIN_BLOCKS past the anchor, then drops the record if the
+   * finalized chain still has no account (a lagging read finds the channel
+   * and rewrites the record, without the anchor).
+   */
+  private async queueReclaimed(
+    wallet: WalletBatch,
+    key: string,
+    record: StoredRecord,
+    channelId: string,
+    savedAnchor?: number,
+  ): Promise<void> {
+    let anchorHeight = savedReclaimAnchor(record) ?? savedAnchor;
+    if (anchorHeight === undefined) {
+      try {
+        anchorHeight = rpcInteger(
+          await rpcRequest(this.init.rpcUrl, "getBlockHeight", [{ commitment: "confirmed" }], this.init.rpcHeaders),
+          "getBlockHeight",
+        );
+      } catch {
+        // resync takes the anchor itself.
+      }
+    }
+    if (anchorHeight !== undefined && savedReclaimAnchor(record) !== anchorHeight) {
+      try {
+        await wallet.book.set(key, { ...record, reclaimAnchorHeight: anchorHeight });
+      } catch {
+        // Only saves re-anchoring after a restart.
+      }
+    }
+    addResyncTarget(wallet, {
+      key,
+      channelId,
+      channelConfig: record.channelConfig,
+      cumulative: parseAtomic(record.chargedCumulativeAmount),
+      knownDeposit: parseAtomic(record.deposit),
+      ...(anchorHeight !== undefined ? { anchorHeight } : {}),
+      reason: "channel_unusable",
+    });
+  }
+
+  /**
+   * After the gateway refused an authorization with a plain 402 (no receipt,
+   * not an admission refusal), check the channel it paid into. That is how
+   * the gateway answers an authorization into a channel the facilitator
+   * closed (its verify rejects it), and a channel with deposit to spare is
+   * otherwise never read again: every call would sign another authorization
+   * into it and pay exact. A channel the finalized chain shows closing,
+   * closed or not this wallet's is re-read through resync (record dropped,
+   * or kept and paid exact); one gone at every commitment is queued as
+   * {@link queueReclaimed}; an open one of this wallet's, or one only at
+   * confirmed (not finalized yet), is left as it is. A queued re-read is run
+   * at once. Best effort: a failed read changes nothing, and the next
+   * refusal checks again.
+   */
+  private async recheckRefusedChannel(wallet: WalletBatch, key: string, savedAnchor?: number): Promise<void> {
+    try {
+      const record = await wallet.book.get(key);
+      if (!record || record.pending || typeof record.channelId !== "string" || wallet.resyncs.has(key)) return;
+      const channelId = record.channelId;
+      const channel = await readChannelAccount(this.init.rpcUrl, channelId, this.init.rpcHeaders);
+      if (channel !== undefined) {
+        if (
+          channel.open &&
+          channel.payer === (await this.init.address()) &&
+          channel.authorizedSigner === record.channelConfig.payerAuthorizer &&
+          channel.mint === record.channelConfig.token
+        ) {
+          return;
+        }
+        addResyncTarget(wallet, {
+          key,
+          channelId,
+          channelConfig: record.channelConfig,
+          cumulative: parseAtomic(record.chargedCumulativeAmount),
+          knownDeposit: parseAtomic(record.deposit),
+          reason: "channel_unusable",
+        });
+      } else {
+        if ((await readChannelAccount(this.init.rpcUrl, channelId, this.init.rpcHeaders, { commitment: "confirmed" })) !== undefined) return;
+        await this.queueReclaimed(wallet, key, record, channelId, savedAnchor);
+      }
+      // Settle it now, as a top-up's read does: a process making one call per
+      // run would otherwise exit before the next call's resync ever drops it.
+      await this.resync(wallet);
+    } catch {
+      // Best effort: the call already pays exact. A re-read still pending
+      // (the wait is not over, or the chain could not be read) stays queued.
+    }
+  }
+
+  /**
    * When this payment will top up the wallet's channel, read how much of its
    * deposit is already settled on-chain (at `finalized` commitment, so never
    * more than will stay settled), so `maxDeposit` caps the escrow still at
@@ -3903,33 +4026,7 @@ export class SolanaBatchPayer {
       // so a short-lived process does not start the wait over on every run.
       // Nothing from the 402, such as the record's `openSlot` or
       // `withdrawDelay`, decides it.
-      let anchorHeight = savedReclaimAnchor(record);
-      if (anchorHeight === undefined) {
-        try {
-          anchorHeight = rpcInteger(
-            await rpcRequest(this.init.rpcUrl, "getBlockHeight", [{ commitment: "confirmed" }], this.init.rpcHeaders),
-            "getBlockHeight",
-          );
-        } catch {
-          // resync takes the anchor itself.
-        }
-        if (anchorHeight !== undefined) {
-          try {
-            await wallet.book.set(key, { ...record, reclaimAnchorHeight: anchorHeight });
-          } catch {
-            // Only saves re-anchoring after a restart.
-          }
-        }
-      }
-      addResyncTarget(wallet, {
-        key,
-        channelId: record.channelId,
-        channelConfig: record.channelConfig,
-        cumulative: parseAtomic(record.chargedCumulativeAmount),
-        knownDeposit: deposit,
-        ...(anchorHeight !== undefined ? { anchorHeight } : {}),
-        reason: "channel_unusable",
-      });
+      await this.queueReclaimed(wallet, key, record, record.channelId);
       throw new ChannelResyncRequiredError(record.channelId);
     }
     if (
