@@ -461,6 +461,12 @@ no account) and the next call opens a fresh channel. The height is saved in the
 channel file, so a process that exits and restarts finishes the same wait
 rather than starting it over. Nothing in the 402 can shorten that wait.
 
+The same check runs when a payment into a channel that still has deposit to
+spare is refused with a plain 402 (how the gateway answers a payment into a
+channel its facilitator closed): that call pays `exact`, and the channel is
+read at once. An open channel of yours is kept; a closed one is dropped; one
+whose account is gone goes through the wait above.
+
 Only an absent account counts as "no channel": an account at that address that
 cannot be read as your channel (another owner, layout, encoding, payer,
 operator or mint) keeps the record and pays `exact` (`channel_unreadable`), and

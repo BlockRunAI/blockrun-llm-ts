@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Fixed — a reclaimed channel with deposit to spare is re-read when refused
+
+- The chain was read only before a top-up, so a reclaimed channel whose record
+  still had deposit to spare got an authorization signed into it on every call.
+  The gateway refuses those at verify with a plain 402, and every call paid
+  exact. Now an authorization refused with a plain 402 (no receipt, not an
+  admission refusal) re-reads its channel at once: open and the wallet's → kept;
+  closing, closed or not the wallet's → re-read through resync; gone at
+  finalized and confirmed → the same anchored wait as a top-up (exact for about
+  two minutes, then the record is dropped and the next call opens afresh).
+  The saved anchor is read before the payment is built (the scheme rewrites the
+  record without it), so a process that makes one call per run still finishes
+  the wait. Closes the known gap noted in 3.24.8.
+
 ### Fixed — a paid call the gateway did not settle is booked at $0
 
 - The gateways now serve some paid requests without settling them and say so:

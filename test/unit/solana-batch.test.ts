@@ -1691,6 +1691,131 @@ describe("SolanaLLMClient batch-settlement", () => {
       expect(storedRecord().reclaimAnchorHeight).toBeUndefined();
     });
 
+    /** How the gateway answers an authorization its facilitator rejects at verify (a closed channel): a plain 402. */
+    const verifyRejected = () => new Response(JSON.stringify({ error: "PAYMENT_INVALID", message: "channel_not_found" }), { status: 402 });
+
+    it("re-reads a reclaimed channel with deposit to spare after its authorization is refused, then drops it and opens afresh", async () => {
+      const c = kept({ maxDeposit: "$1" });
+      const exact = stubExact(c);
+      const channelId = await openChannel(c);
+      chain.delete(channelId);
+      reclaimed.add(channelId);
+      const anchor = rpcClock.blockHeight;
+      let journaled: Record<string, any> = {};
+      gateway.push(
+        // 5000 fits the 25000 deposit: an authorization, no top-up read.
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        (_url, init) => {
+          expect(decodePayment(init).payload.type).toBe("authorization");
+          return verifyRejected();
+        },
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 }),
+        // The wait is not over: exact, and no authorization is signed into it.
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 }),
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("deposit");
+          [journaled] = Object.values(JSON.parse(fs.readFileSync(path.join(tmp, "channels.json.deposit-intents"), "utf8")).intents) as Array<Record<string, any>>;
+          return servedWithVoucher(operator, channelIdOf(payment), 5000n, 5000n);
+        }
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(events.at(-1)).toMatchObject({ type: "fallback", reason: "payment_required" });
+      expect(storedRecord()).toMatchObject({ channelId, reclaimAnchorHeight: anchor });
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exact).toHaveBeenCalledTimes(2);
+      expect(events.at(-1)).toMatchObject({ type: "fallback", reason: "channel_resync_pending" });
+
+      rpcClock.blockHeight += 301;
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exact).toHaveBeenCalledTimes(2);
+      expect(events.filter((e) => e.type === "resync")).toEqual([
+        expect.objectContaining({ reason: "channel_unusable", detail: expect.stringContaining("record dropped") }),
+      ]);
+      expect(journaled).toMatchObject({ kind: "open", cumulative: "0" });
+      expect(rpcCalls.filter((r) => r.method === "getBlockHeight")).toHaveLength(1);
+    });
+
+    it("drops a reclaimed channel with deposit to spare even when every process makes one call", async () => {
+      const first = kept({ maxDeposit: "$1" });
+      stubExact(first);
+      const channelId = await openChannel(first);
+      chain.delete(channelId);
+      reclaimed.add(channelId);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        verifyRejected,
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+      await expect(first.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(storedRecord().reclaimAnchorHeight).toBe(rpcClock.blockHeight);
+
+      // The next run, after finality passed the saved anchor: its one call is refused again and settles the re-read.
+      __resetBatchWalletsForTests();
+      rpcClock.blockHeight += 301;
+      const second = kept({ maxDeposit: "$1" });
+      stubExact(second);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        verifyRejected,
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+      await expect(second.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(events.filter((e) => e.type === "resync")).toEqual([
+        expect.objectContaining({ reason: "channel_unusable", detail: expect.stringContaining("record dropped") }),
+      ]);
+      expect(fs.existsSync(path.join(tmp, "channels.json")) ? Object.keys(JSON.parse(fs.readFileSync(path.join(tmp, "channels.json"), "utf8"))) : []).toEqual([]);
+      expect(rpcCalls.filter((r) => r.method === "getBlockHeight")).toHaveLength(1);
+    });
+
+    it("keeps a live channel whose authorization was refused for another reason, and pays into it again", async () => {
+      const c = kept({ maxDeposit: "$1" });
+      const exact = stubExact(c);
+      const channelId = await openChannel(c);
+      chain.set(channelId, channelAccount({ payer: await c.getWalletAddress(), operator: operator.address, deposit: 25000n }));
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        verifyRejected,
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 }),
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("authorization");
+          expect(channelIdOf(payment)).toBe(channelId);
+          return servedWithVoucher(operator, channelId, 6000n, 5000n);
+        }
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(events.filter((e) => e.type === "resync")).toEqual([]);
+      expect(storedRecord()).toMatchObject({ channelId, chargedCumulativeAmount: "6000" });
+      expect(storedRecord().reclaimAnchorHeight).toBeUndefined();
+      expect(rpcCalls.filter((r) => r.method === "getBlockHeight")).toHaveLength(0);
+    });
+
+    it("drops a refused channel the finalized chain shows closed, with no wait", async () => {
+      const c = kept({ maxDeposit: "$1" });
+      stubExact(c);
+      const channelId = await openChannel(c);
+      chain.set(channelId, channelAccount({ payer: await c.getWalletAddress(), operator: operator.address, deposit: 25000n, status: 3 }));
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        verifyRejected,
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(events.filter((e) => e.type === "resync")).toEqual([
+        expect.objectContaining({ reason: "channel_unusable", detail: expect.stringContaining("closing or closed; record dropped") }),
+      ]);
+      expect(rpcCalls.filter((r) => r.method === "getBlockHeight")).toHaveLength(0);
+    });
+
     it("never drops a stored channel on a 402's openSlot: a channel gone from every commitment waits out the SDK's own anchor", async () => {
       const c = kept({ maxDeposit: "$1" });
       const exact = stubExact(c);
