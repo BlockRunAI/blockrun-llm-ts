@@ -11,6 +11,17 @@
   now share one default: `BLOCKRUN_CHAT_TIMEOUT` (seconds) when set, else
   600 s; the `timeout` option still overrides it.
 
+### Fixed — batch deposits sign with a finalized blockhash
+
+- When a batch 402 names no `recentBlockhash`, `@x402/svm` built a deposit
+  (open or top-up) with a blockhash read at @solana/kit's default `confirmed`
+  commitment. PayAI's verifier runs behind the tip and can reject it as
+  `BlockhashNotFound`: the deposit is refused and the call pays exact. The SDK
+  now adds a blockhash read at `finalized` from your RPC (cached 10 s per RPC
+  URL) to its copy of the 402 when the payment will likely carry a deposit.
+  A blockhash the 402 names is kept; authorizations read nothing; a failed read
+  leaves the scheme's own read in place.
+
 ## [3.24.9] - 2026-10-27
 
 ### Fixed — a reclaimed channel with deposit to spare is re-read when refused

@@ -422,6 +422,15 @@ are configured the SDK adds them through a thin wrapper around the global
 payment. The RPC must support `finalized` commitment and `minContextSlot`
 (standard on current Solana RPCs); one that does not keeps calls on `exact`.
 
+A deposit (open or top-up) is a Solana transaction, and its blockhash comes
+from the 402 when the gateway names one. When it does not, the SDK reads the
+latest blockhash at `finalized` commitment from your RPC (reused for 10 s) and
+adds it to its copy of the 402, so the facilitator's verifier, which runs
+behind the chain tip, knows it. Without that, `@x402/svm` reads one at
+`confirmed`, which the verifier can reject as `BlockhashNotFound`: the deposit
+is refused and the call pays `exact`. Authorizations sign no transaction and
+read nothing.
+
 ## A funded channel is never forgotten
 
 A refused or rate-limited open or top-up that charged nothing leaves the saved

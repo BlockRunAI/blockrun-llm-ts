@@ -1555,6 +1555,74 @@ function withoutClientSignedBatch(paymentRequired: PaymentRequired): PaymentRequ
   return accepts.some(clientSignedBatch) ? { ...paymentRequired, accepts: accepts.filter((accept) => !clientSignedBatch(accept)) } : paymentRequired;
 }
 
+/**
+ * How long a finalized blockhash fetched for batch deposits is reused. A
+ * blockhash is valid for ~150 blocks (~60 s); a finalized one is already
+ * ~13 s old, and the default RPC caches `getLatestBlockhash` for 30 s, so a
+ * 10 s reuse keeps it inside the window (the exact path's BLOCKHASH_TTL_MS).
+ */
+const DEPOSIT_BLOCKHASH_TTL_MS = 10_000;
+/** How many RPC endpoints keep a cached deposit blockhash. */
+const MAX_DEPOSIT_BLOCKHASH_ENDPOINTS = 8;
+const depositBlockhashes = new Map<string, { blockhash: string; lastValidBlockHeight: number; fetchedAt: number }>();
+
+/**
+ * The latest blockhash at `finalized` commitment, cached per RPC URL for
+ * {@link DEPOSIT_BLOCKHASH_TTL_MS}.
+ */
+async function finalizedBlockhash(
+  rpcUrl: string,
+  rpcHeaders?: Record<string, string>,
+): Promise<{ blockhash: string; lastValidBlockHeight: number }> {
+  const cached = depositBlockhashes.get(rpcUrl);
+  if (cached && Date.now() - cached.fetchedAt < DEPOSIT_BLOCKHASH_TTL_MS) return cached;
+  const result = (await rpcRequest(rpcUrl, "getLatestBlockhash", [{ commitment: "finalized" }], rpcHeaders)) as {
+    value?: { blockhash?: unknown; lastValidBlockHeight?: unknown };
+  };
+  const blockhash = result.value?.blockhash;
+  if (typeof blockhash !== "string" || !blockhash) throw new Error("getLatestBlockhash returned no blockhash");
+  const entry = {
+    blockhash,
+    lastValidBlockHeight: rpcInteger(result.value?.lastValidBlockHeight, "getLatestBlockhash lastValidBlockHeight"),
+    fetchedAt: Date.now(),
+  };
+  depositBlockhashes.delete(rpcUrl);
+  depositBlockhashes.set(rpcUrl, entry);
+  while (depositBlockhashes.size > MAX_DEPOSIT_BLOCKHASH_ENDPOINTS) {
+    depositBlockhashes.delete(depositBlockhashes.keys().next().value as string);
+  }
+  return entry;
+}
+
+/**
+ * A copy of the 402 whose batch accepts that name no `recentBlockhash` carry
+ * `blockhash` (and its `lastValidBlockHeight`). `@x402/svm` builds a deposit
+ * transaction from the 402's `extra.recentBlockhash` when there is one, else
+ * from `getLatestBlockhash` at @solana/kit's default `confirmed` commitment,
+ * and the facilitator's verifier, which lags the tip, rejects a blockhash it
+ * has not seen (`BlockhashNotFound`): the deposit is refused and the call pays
+ * exact. A finalized blockhash is one every verifier knows. Additive only: an
+ * accept that names its own blockhash is left as it is, and `@x402/core`
+ * matches the echoed accept against the gateway's as a superset.
+ */
+function withDepositBlockhash(
+  paymentRequired: PaymentRequired,
+  blockhash: { blockhash: string; lastValidBlockHeight: number },
+): PaymentRequired {
+  const accepts = paymentRequired.accepts ?? [];
+  const lacking = (accept: (typeof accepts)[number]) =>
+    accept.scheme === BATCH_SCHEME && !(accept.extra as { recentBlockhash?: unknown } | undefined)?.recentBlockhash;
+  if (!accepts.some(lacking)) return paymentRequired;
+  return {
+    ...paymentRequired,
+    accepts: accepts.map((accept) =>
+      lacking(accept)
+        ? { ...accept, extra: { ...accept.extra, recentBlockhash: blockhash.blockhash, lastValidBlockHeight: blockhash.lastValidBlockHeight } }
+        : accept,
+    ),
+  };
+}
+
 /** The x402 `payment-identifier` extension: a client-chosen id the gateway can store a paid response under. */
 const PAYMENT_IDENTIFIER = "payment-identifier";
 
@@ -3837,12 +3905,42 @@ export class SolanaBatchPayer {
       const http = (await this.build(wallet)).http;
       try {
         await this.prepareTopUp(wallet, paymentRequired);
-        return { http, payload: await http.createPaymentPayload(withPaymentIdentifier(withoutClientSignedBatch(paymentRequired))) };
+        const required = await this.withDepositBlockhash(wallet, withoutClientSignedBatch(paymentRequired));
+        return { http, payload: await http.createPaymentPayload(withPaymentIdentifier(required)) };
       } catch (err) {
         if (pass > 0 || !isResyncRequired(err) || wallet.resyncs.size === 0) throw err;
       } finally {
         wallet.topUp = undefined;
       }
+    }
+  }
+
+  /**
+   * The 402 to build this payment from: with a finalized blockhash
+   * ({@link withDepositBlockhash}) when the payment will likely carry a
+   * deposit (no usable record for the trusted accept's channel, so an open,
+   * or a top-up {@link prepareTopUp} just sized). An authorization signs no
+   * transaction and costs no RPC read. Best effort: a failed read leaves the
+   * 402 as it is, and `@x402/svm` fetches its own blockhash.
+   */
+  private async withDepositBlockhash(wallet: WalletBatch, paymentRequired: PaymentRequired): Promise<PaymentRequired> {
+    const accept = trustedBatchAccept(paymentRequired, this.init.options.operators);
+    const key = accept ? channelKeyOf(accept) : undefined;
+    if (!accept || (accept.extra as { recentBlockhash?: unknown } | undefined)?.recentBlockhash) return paymentRequired;
+    let deposit = wallet.topUp !== undefined;
+    if (!deposit) {
+      try {
+        const record = key ? await wallet.book.base.get(key) : undefined;
+        deposit = !record || typeof record.channelId !== "string" || record.pending !== undefined;
+      } catch {
+        deposit = true;
+      }
+    }
+    if (!deposit) return paymentRequired;
+    try {
+      return withDepositBlockhash(paymentRequired, await finalizedBlockhash(this.init.rpcUrl, this.init.rpcHeaders));
+    } catch {
+      return paymentRequired;
     }
   }
 
@@ -4238,6 +4336,7 @@ export class SolanaBatchPayer {
  */
 export function __resetBatchWalletsForTests(): void {
   registry.wallets.clear();
+  depositBlockhashes.clear();
   sleep = realSleep;
   layoutChecked = undefined;
   releaseHeldLocks();
