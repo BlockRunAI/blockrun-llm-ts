@@ -302,7 +302,8 @@ describe("SolanaLLMClient batch-settlement", () => {
         const { id, method, params } = JSON.parse(String(init?.body));
         rpcMethods.push(method);
         rpcCalls.push({ method, params, init });
-        const commitment = (params?.[1] as { commitment?: string } | undefined)?.commitment;
+        const commitment =
+          (params?.[1] as { commitment?: string } | undefined)?.commitment ?? (params?.[0] as { commitment?: string } | undefined)?.commitment;
         if (rpcDown.has(method) || rpcDown.has(`${method}:${commitment}`)) return new Response("upstream down", { status: 500 });
         return new Response(JSON.stringify({ jsonrpc: "2.0", id, result: rpcResult(method, params, chain, scannable, rpcClock, reclaimed) }), {
           headers: { "content-type": "application/json" },
@@ -840,6 +841,101 @@ describe("SolanaLLMClient batch-settlement", () => {
       await c.chat("openai/gpt-4o-mini", "gm");
       return channelId;
     }
+
+    describe("deposits sign with a finalized blockhash", () => {
+      const blockhashReads = () =>
+        rpcCalls.filter((r) => r.method === "getLatestBlockhash").map((r) => (r.params?.[0] as { commitment?: string } | undefined)?.commitment);
+
+      it("opens with a finalized blockhash when the 402 names none, never kit's confirmed default", async () => {
+        const c = kept();
+        stubExact(c);
+        let accepted: Record<string, any> = {};
+        gateway.push(
+          () => quote402([exactAccept(), batchAccept(operator.address)]),
+          async (_url, init) => {
+            const payment = decodePayment(init);
+            expect(payment.payload.type).toBe("deposit");
+            accepted = payment.accepted;
+            return servedWithVoucher(operator, channelIdOf(payment), 1000n, 1000n);
+          }
+        );
+        await c.chat("openai/gpt-4o-mini", "gm");
+        expect(blockhashReads()).toEqual(["finalized"]);
+        expect(accepted.extra).toMatchObject({ recentBlockhash: "9T1tBhLxWWKf1XhD9deySUK2tNcmGQhBsR2tMKFLgFUL", lastValidBlockHeight: 430_673_687 });
+      });
+
+      it("tops up with a finalized blockhash", async () => {
+        const c = kept({ maxDeposit: "$1" });
+        stubExact(c);
+        const channelId = await openChannel(c);
+        chain.set(channelId, channelAccount({ payer: await c.getWalletAddress(), operator: operator.address, deposit: 25000n }));
+        rpcCalls.length = 0;
+        __resetBatchWalletsForTests();
+        const again = kept({ maxDeposit: "$1" });
+        stubExact(again);
+        gateway.push(
+          () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
+          async (_url, init) => {
+            const payment = decodePayment(init);
+            expect(payment.payload.type).toBe("deposit");
+            return servedWithVoucher(operator, channelId, 31000n, 30000n);
+          }
+        );
+        await again.chat("openai/gpt-4o-mini", "gm");
+        expect(blockhashReads()).toEqual(["finalized"]);
+      });
+
+      it("reads no blockhash for an authorization", async () => {
+        const c = kept();
+        stubExact(c);
+        const channelId = await openChannel(c);
+        rpcCalls.length = 0;
+        gateway.push(
+          () => quote402([exactAccept(), batchAccept(operator.address)]),
+          async (_url, init) => {
+            expect(decodePayment(init).payload.type).toBe("authorization");
+            return servedWithVoucher(operator, channelId, 6000n, 5000n);
+          }
+        );
+        await c.chat("openai/gpt-4o-mini", "gm");
+        expect(blockhashReads()).toEqual([]);
+      });
+
+      it("keeps a blockhash the 402 names, and reads none", async () => {
+        const c = kept();
+        stubExact(c);
+        const accept = batchAccept(operator.address);
+        Object.assign(accept.extra, { recentBlockhash: "GHtXQBsoZHVnNFa9YevAzFr17DJjgHXk3ycTKD5xD3Zi", lastValidBlockHeight: 500_000_000 });
+        let accepted: Record<string, any> = {};
+        gateway.push(
+          () => quote402([exactAccept(), accept]),
+          async (_url, init) => {
+            const payment = decodePayment(init);
+            accepted = payment.accepted;
+            return servedWithVoucher(operator, channelIdOf(payment), 1000n, 1000n);
+          }
+        );
+        await c.chat("openai/gpt-4o-mini", "gm");
+        expect(blockhashReads()).toEqual([]);
+        expect(accepted.extra).toMatchObject({ recentBlockhash: "GHtXQBsoZHVnNFa9YevAzFr17DJjgHXk3ycTKD5xD3Zi", lastValidBlockHeight: 500_000_000 });
+      });
+
+      it("falls back to the scheme's own read when the finalized read fails", async () => {
+        const c = kept();
+        stubExact(c);
+        rpcDown.add("getLatestBlockhash:finalized");
+        gateway.push(
+          () => quote402([exactAccept(), batchAccept(operator.address)]),
+          async (_url, init) => {
+            const payment = decodePayment(init);
+            expect(payment.payload.type).toBe("deposit");
+            return servedWithVoucher(operator, channelIdOf(payment), 1000n, 1000n);
+          }
+        );
+        await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+        expect(blockhashReads()).toEqual(["finalized", "confirmed"]);
+      });
+    });
 
     it("keeps a healthy channel when its top-up is refused", async () => {
       const c = kept({ maxDeposit: "$1" });

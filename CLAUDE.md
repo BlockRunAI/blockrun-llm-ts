@@ -264,6 +264,12 @@ src/
   global-`fetch` wrapper (installed only when headers exist) adds them to requests for exactly
   that URL inside the scope. The scope store and hook marker live on `globalThis` under
   versioned `Symbol.for` keys so two loaded copies (CJS + ESM) share one hook. Headers are part of the per-wallet config key.
+- **Deposit blockhash is finalized.** `@x402/svm`'s `resolveBlockhash` uses the 402's
+  `extra.recentBlockhash`, else kit's `getLatestBlockhash` at `confirmed`, which PayAI's lagging
+  verifier rejects (`BlockhashNotFound`). When a deposit is likely (no usable record, or a top-up
+  `prepareTopUp` sized), `withDepositBlockhash()` adds a `finalized` one (cached 10 s per RPC URL) to
+  the SDK's copy of the 402. Additive only: never replaces the 402's own; `@x402/core` matches the
+  echoed accept as a superset. A failed read leaves the 402 as is.
 - Only `requestWithPayment` (non-stream chat) uses it. Streams have no `PAYMENT-RESPONSE` to
   reconcile, and media jobs are charged on a later poll — keep both on `exact` unless the
   gateway contract changes.
