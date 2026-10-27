@@ -193,7 +193,10 @@ src/
   atomic, so `payWith()` checks `holdsChannelFile()` (pid + token + the lock file's dev:ino:mtime)
   before EVERY batch payment and pays exact (`channel_store_locked`) when ownership was lost. Only a
   `WalletBatch` is memoised in `wallet()`; refusals (except `wallet_config_conflict`) and failures are
-  re-asked next call. `payWith()` re-checks the close fence right before taking `busy`. Match errors from the shared book by `name`, not `instanceof`. One
+  re-asked next call. A store another live process owns is `channel_store_locked`: exact by default;
+`batch.onLocked: "wait"` re-asks `wallet()` every 500 ms up to `lockWaitMs` (one `backoff` event), `"throw"` (or a
+wait run out, or a lost lock when not `"exact"`) → `{kind:"failed"}` with `BatchChannelLockedError` (`"unpaid"`,
+nothing signed). The lock is per process, not per call (issue #96 tracks sharing). `payWith()` re-checks the close fence right before taking `busy`. Match errors from the shared book by `name`, not `instanceof`. One
   batch request in flight per wallet; concurrent calls pay `exact`, they do not queue (they only wait
   out a 429 cooldown). `parseRetryAfter` drops a non-finite or > 1 day value (default backoff);
   `coolDown()` caps `wallet.cooldownUntil` at now + `maxWaitMs`, while the call itself weighs the full

@@ -312,7 +312,7 @@ stderr, each time it happens:
 
 | Event type | `reason` values |
 | --- | --- |
-| `backoff` | `rate_limited`, `cooldown`, `in_doubt` |
+| `backoff` | `rate_limited`, `cooldown`, `in_doubt`, `channel_store_locked` (`onLocked: "wait"`) |
 | `recovered` | the backoff reason it followed (`rate_limited`, `cooldown`, `in_doubt`), `served_unpaid_on_rechallenge`, or `batch_cancelled` |
 | `fallback` | `not_offered`, `client_signed_not_supported`, `channel_busy`, `untrusted_operator`, `deposit_over_cap`, `channel_pending`, `closed_during_call`, `peer_dependency_missing`, `payment_creation_failed`, `wallet_config_conflict`, `channel_store_locked`, `deposit_journal_unreadable`, `deposit_journal_failed`, `channel_resync_pending`, `channel_resync_failed`, `channel_unreadable`, `payment_required`, `admission_refused`, `rate_limited`, or one of the recognised refusal codes (`batch_payer_not_allowed`, `batch_payer_not_admitted`, `batch_admission_paused`, `batch_server_signed_only`, `batch_unavailable`, `batch_channel_limit`, `PAYMENT_VERIFICATION_UNAVAILABLE`) |
 | `resync` | `deposit_unanswered`, `deposit_failed`, `deposit_rate_limited`, `deposit_refused`, `receipt_missing`, `receipt_unreconciled`, `orphaned_deposit`, `deposit_unrecorded`, `channel_unusable` |
@@ -356,7 +356,22 @@ holding its pid, in the same format earlier releases write and read, so a
 process still on an older version that shares the channel store (say, during
 a rolling upgrade) sees the lock as live too; a random ownership token sits
 beside it in `<lock>.owner`. Other processes pay `exact` until that process
-exits. A lock that names the current process but was not taken by this SDK
+exits (`channel_store_locked`), so a worker pool, PM2/cluster workers or
+parallel runs on one wallet get batch in one process only: give each worker
+its own wallet, or route calls through one process.
+
+`batch.onLocked` picks what such a call does instead:
+
+| `onLocked` | A call while another process owns the store |
+| --- | --- |
+| `"exact"` (default) | pays `exact`; a `fallback` event, reason `channel_store_locked` |
+| `"wait"` | one `backoff` event (`channel_store_locked`, `retryAfterMs` = `lockWaitMs`), then tries the lock every 500 ms; pays with batch once the owner exits, or raises `BatchChannelLockedError` when `batch.lockWaitMs` (default 60000) runs out |
+| `"throw"` | raises `BatchChannelLockedError` at once |
+
+`BatchChannelLockedError` (`wallet`, `ownerPid`, `waitedMs`) is raised before
+anything is signed: its retry disposition is `"unpaid"`, so `fallbackModels`
+and `smartChat()` may move on (and meet the same lock). A process that loses
+its lock to another owner raises it too unless `onLocked` is `"exact"`. A lock that names the current process but was not taken by this SDK
 version is never treated as stale; if no process uses it (say, a crashed
 process whose pid was reused), delete the `.lock` and `.lock.owner` files.
 
