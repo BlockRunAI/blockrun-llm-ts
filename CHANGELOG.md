@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Fixed — a channel the facilitator closed is reopened, not topped up
+
+- When a stored batch channel's account no longer exists on-chain (PayAI closes
+  channels idle for 3 days, `idleCloseSeconds`, and reclaims the account), a
+  call that needed a top-up treated the missing account as "not finalized yet"
+  and signed a top-up into the closed channel. The gateway refused it with a
+  bare 402 and every later call fell back to exact, at 1.5–4.5× the metered
+  price, until the local channel file was removed by hand. A confirmed record
+  opened more than its withdraw delay ago whose account is gone is now dropped
+  through resync, and the call opens a fresh channel. A younger open keeps the
+  previous behaviour (it may not be finalized yet). blockrun-sol #507.
+
 ## [3.24.6] - 2026-10-26
 
 ### Changed — router-core fd6d03d
