@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.24.9] - 2026-10-27
+
 ### Fixed — a reclaimed channel with deposit to spare is re-read when refused
 
 - The chain was read only before a top-up, so a reclaimed channel whose record
