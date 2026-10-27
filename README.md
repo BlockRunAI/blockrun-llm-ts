@@ -723,6 +723,7 @@ await client.closeBatchChannel();
 - **Never pays twice.** Anything that goes wrong before a batch payment is sent falls back to `exact`. Once one is sent, a call whose payment may have been charged throws `BatchPaymentUnresolvedError` and is never paid again (no new payment, no `exact`, no fallback model).
 - **Non-streaming chat only.** `chat`, `chatCompletion`, `smartChat` and `smartChatCompletion` use batch; `stream()` and media jobs pay `exact`.
 - **One channel per wallet.** All clients for a wallet share one channel, saved to `~/.blockrun/solana-batch/<wallet>.json` (mode `0600`) so a restart reuses it.
+- **One process per wallet.** The process that opens the channel holds its store's lock until it exits. Other processes on that wallet (worker pools, PM2/cluster workers, parallel runs) pay `exact`, reported as `channel_store_locked`. Give each worker its own wallet, or route calls through one process. `batch.onLocked: "wait"` waits up to `batch.lockWaitMs` (default 60 s) for the lock, and `"throw"` raises `BatchChannelLockedError` (unpaid, nothing signed) instead of paying `exact`.
 - **Observable.** Every fallback, backoff, recovery and re-read writes one stderr line; `batch.onEvent` and `client.getBatchStats()` expose the same events and counters.
 
 The full runtime contract (the answer-by-answer table, payment-identifier

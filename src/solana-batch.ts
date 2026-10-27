@@ -115,6 +115,27 @@ export interface SolanaBatchOptions {
    */
   channelStore?: string | false;
   /**
+   * What a call does when another live process owns this wallet's channel
+   * store (`channel_store_locked`). One process per wallet pays with batch:
+   * it holds the store's lock until it exits, so worker pools, PM2/cluster
+   * workers or parallel runs on one wallet must each use their own wallet
+   * (or route their calls through one process).
+   * - `"exact"` (default): the call pays with `exact`, as before.
+   * - `"wait"`: the call waits up to {@link lockWaitMs} for the lock (the
+   *   owner has to exit), then pays with batch, or raises
+   *   {@link BatchChannelLockedError} once the wait runs out.
+   * - `"throw"`: the call raises {@link BatchChannelLockedError} at once.
+   *
+   * The error is raised before anything is signed, so it is `"unpaid"`:
+   * `fallbackModels` (and `smartChat()`'s chain) may move on, and will meet
+   * the same lock. A process that loses its lock to another owner raises it
+   * too unless `onLocked` is `"exact"` (waiting cannot give it back).
+   * Locks between clients of one process do not apply: they share a channel.
+   */
+  onLocked?: "exact" | "wait" | "throw";
+  /** Most time, in ms, one call waits for the lock under `onLocked: "wait"`. Default 60000. */
+  lockWaitMs?: number;
+  /**
    * How a call rides out an HTTP 429 (rate limited, or channel capacity
    * exhausted) on a batch payment before it pays with `exact`. The call waits
    * for `Retry-After` (seconds or an HTTP date), or 1s, 2s, 4s... with jitter
@@ -171,6 +192,12 @@ export const DEFAULT_BATCH_RATE_LIMIT = { maxAttempts: 3, maxWaitMs: 60_000 } as
 /** Default {@link SolanaBatchOptions.inDoubt}. */
 export const DEFAULT_BATCH_IN_DOUBT = { maxWaitMs: 300_000 } as const;
 
+/** Default {@link SolanaBatchOptions.lockWaitMs}. */
+export const DEFAULT_BATCH_LOCK_WAIT_MS = 60_000;
+
+/** How often a call under `onLocked: "wait"` tries the lock again. */
+const LOCK_POLL_MS = 500;
+
 /**
  * One observable batch-settlement event.
  *
@@ -185,7 +212,10 @@ export const DEFAULT_BATCH_IN_DOUBT = { maxWaitMs: 300_000 } as const;
  *   (`reason: "rate_limited"`) or because another call for the wallet hit one
  *   (`reason: "cooldown"`), or before each replay of a payment in doubt that
  *   carries a payment identifier (`reason: "in_doubt"`, or `rate_limited`
- *   after a 429), with the answer's `status` and the wait in `retryAfterMs`.
+ *   after a 429), with the answer's `status` and the wait in `retryAfterMs`;
+ *   or, once, when a call starts waiting up to `lockWaitMs` for another
+ *   process's channel store lock (`reason: "channel_store_locked"`,
+ *   `onLocked: "wait"`).
  * - `recovered`: a call that backed off was then paid with batch (`reason:
  *   "in_doubt"` when the replay of a payment in doubt resolved it), or its
  *   fresh challenge after the wait was served without a payment (`reason:
@@ -382,6 +412,30 @@ export class BatchCloseDeferredError extends BlockrunError {
     this.reason = init.reason;
     this.wallet = init.wallet;
     this.channelIds = init.channelIds ?? [];
+  }
+}
+
+/**
+ * Batch is on, another owner holds this wallet's channel store, and the
+ * client's `batch.onLocked` is `"wait"` (the wait ran out) or `"throw"`.
+ * Raised before anything is signed: nothing was paid for the call, and its
+ * {@link RetryDisposition} is `"unpaid"`.
+ */
+export class BatchChannelLockedError extends BlockrunError {
+  /** The paying wallet's address. */
+  readonly wallet: string;
+  /** The live owner's pid, when the SDK knows it. */
+  readonly ownerPid?: number;
+  /** How long this call waited for the lock, in ms (0 unless `onLocked` is `"wait"`). */
+  readonly waitedMs: number;
+
+  constructor(init: { wallet: string; detail: string; ownerPid?: number; waitedMs: number }) {
+    super(`batch-settlement unavailable for wallet ${init.wallet}: ${init.detail}`);
+    this.name = "BatchChannelLockedError";
+    this.wallet = init.wallet;
+    if (init.ownerPid !== undefined) this.ownerPid = init.ownerPid;
+    this.waitedMs = init.waitedMs;
+    withDisposition(this, "unpaid");
   }
 }
 
@@ -2541,6 +2595,8 @@ function intentTarget(intent: DepositIntent): ResyncTarget {
 interface WalletRefusal {
   reason: "wallet_config_conflict" | "channel_store_locked" | "deposit_journal_unreadable";
   detail: string;
+  /** `channel_store_locked`: the live owner's pid. */
+  ownerPid?: number;
 }
 
 /**
@@ -2558,6 +2614,8 @@ export class SolanaBatchPayer {
   private readonly maxAttempts: number;
   private readonly maxWaitMs: number;
   private readonly inDoubtMaxWaitMs: number;
+  private readonly onLocked: "exact" | "wait" | "throw";
+  private readonly lockWaitMs: number;
   private readonly counters: SolanaBatchStats = {
     fallbacks: 0,
     fallbacksByReason: {},
@@ -2592,6 +2650,14 @@ export class SolanaBatchPayer {
     this.inDoubtMaxWaitMs = inDoubt?.maxWaitMs ?? DEFAULT_BATCH_IN_DOUBT.maxWaitMs;
     if (!Number.isFinite(this.inDoubtMaxWaitMs) || this.inDoubtMaxWaitMs < 0) {
       throw new Error("batch.inDoubt.maxWaitMs must be a finite number of ms >= 0");
+    }
+    this.onLocked = init.options.onLocked ?? "exact";
+    if (this.onLocked !== "exact" && this.onLocked !== "wait" && this.onLocked !== "throw") {
+      throw new Error('batch.onLocked must be "exact", "wait" or "throw"');
+    }
+    this.lockWaitMs = init.options.lockWaitMs ?? DEFAULT_BATCH_LOCK_WAIT_MS;
+    if (!Number.isFinite(this.lockWaitMs) || this.lockWaitMs < 0) {
+      throw new Error("batch.lockWaitMs must be a finite number of ms >= 0");
     }
   }
 
@@ -2636,6 +2702,7 @@ export class SolanaBatchPayer {
         if (owner !== undefined) {
           return {
             reason: "channel_store_locked",
+            ownerPid: owner,
             detail:
               owner === process.pid
                 ? `channel store ${file} is in use by another copy of @blockrun/llm in this process ` +
@@ -3064,13 +3131,24 @@ export class SolanaBatchPayer {
     const unavailable = batchUnavailable(paymentRequired);
     if (unavailable) return this.fallback(unavailable);
     let wallet: WalletBatch | WalletRefusal;
+    let waitedMs = 0;
     try {
       wallet = await this.wallet();
+      if ("reason" in wallet && wallet.reason === "channel_store_locked" && this.onLocked === "wait") {
+        const started = Date.now();
+        wallet = await this.waitForLock(wallet);
+        waitedMs = Date.now() - started;
+      }
     } catch (err) {
       // Nothing was sent (say, the channel store's directory is not writable).
       return this.fallback(creationFailure(err));
     }
-    if ("reason" in wallet) return this.fallback({ reason: wallet.reason, detail: wallet.detail });
+    if ("reason" in wallet) {
+      if (wallet.reason === "channel_store_locked" && this.onLocked !== "exact") {
+        return this.lockedOut(wallet.detail, wallet.ownerPid, waitedMs);
+      }
+      return this.fallback({ reason: wallet.reason, detail: wallet.detail });
+    }
     if (closesAtStart !== undefined && wallet.closes !== closesAtStart) {
       return this.fallback({
         reason: "closed_during_call",
@@ -3085,6 +3163,42 @@ export class SolanaBatchPayer {
     } finally {
       wallet.active -= 1;
     }
+  }
+
+  /**
+   * `onLocked: "wait"`: try the wallet's channel store again every
+   * {@link LOCK_POLL_MS} until its owner lets go of it or `lockWaitMs` runs
+   * out. Reported once as a `backoff` event (`channel_store_locked`).
+   */
+  private async waitForLock(refusal: WalletRefusal): Promise<WalletBatch | WalletRefusal> {
+    const deadline = Date.now() + this.lockWaitMs;
+    let current: WalletBatch | WalletRefusal = refusal;
+    if (this.lockWaitMs > 0) {
+      await this.report({
+        type: "backoff",
+        reason: "channel_store_locked",
+        retryAfterMs: this.lockWaitMs,
+        detail: refusal.detail,
+      });
+    }
+    while ("reason" in current && current.reason === "channel_store_locked") {
+      const left = deadline - Date.now();
+      if (left <= 0) break;
+      await sleep(Math.min(LOCK_POLL_MS, left));
+      current = await this.wallet();
+    }
+    return current;
+  }
+
+  /** `onLocked` other than `"exact"`: the call's `"unpaid"` error, nothing signed. */
+  private async lockedOut(detail: string, ownerPid: number | undefined, waitedMs: number): Promise<BatchAttempt> {
+    const error = new BatchChannelLockedError({
+      wallet: await this.init.address(),
+      detail,
+      waitedMs,
+      ...(ownerPid !== undefined ? { ownerPid } : {}),
+    });
+    return { kind: "failed", error };
   }
 
   /**
@@ -3200,11 +3314,9 @@ export class SolanaBatchPayer {
         }
         if (wallet.busy) return fallback({ reason: "channel_busy", attempt: budget.attempt });
         if (wallet.file && !holdsChannelFile(wallet.file)) {
-          return fallback({
-            reason: "channel_store_locked",
-            attempt: budget.attempt,
-            detail: `this process no longer holds the lock on ${wallet.file}; another owner may be paying into its channels`,
-          });
+          const detail = `this process no longer holds the lock on ${wallet.file}; another owner may be paying into its channels`;
+          if (this.onLocked !== "exact") return this.lockedOut(detail, undefined, 0);
+          return fallback({ reason: "channel_store_locked", attempt: budget.attempt, detail });
         }
         wallet.busy = true;
         holding = true;

@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added — `batch.onLocked`: wait or fail instead of paying exact (issue #96)
+
+- Batch pays in one process per wallet: the process that opened the channel
+  holds its store's lock until it exits, and other processes on the wallet
+  paid `exact` (1.5–2.5x the metered price), seen only as a
+  `channel_store_locked` fallback. The README now says so. New
+  `batch.onLocked: "exact" | "wait" | "throw"` (default `"exact"`, unchanged)
+  and `batch.lockWaitMs` (default 60000): `"wait"` waits for the lock and then
+  pays with batch, `"throw"` raises the new `BatchChannelLockedError`
+  (`"unpaid"`, nothing signed), as does `"wait"` once its wait runs out.
+  Exported: `BatchChannelLockedError`, `DEFAULT_BATCH_LOCK_WAIT_MS`.
+
 ## [3.24.10] - 2026-10-27
 
 ### Fixed — SolanaLLMClient waits as long as LLMClient (issue #93)

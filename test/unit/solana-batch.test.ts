@@ -16,7 +16,9 @@ import { SolanaLLMClient } from "../../src/solana-client";
 import {
   __resetBatchWalletsForTests,
   __setBatchSleepForTests,
+  BatchChannelLockedError,
   BatchCloseDeferredError,
+  DEFAULT_BATCH_LOCK_WAIT_MS,
   BatchPaymentUnresolvedError,
   FileIntentJournal,
   ChannelResyncRequiredError,
@@ -807,6 +809,106 @@ describe("SolanaLLMClient batch-settlement", () => {
     fs.unlinkSync(`${store}.lock`);
     await c.chat("openai/gpt-4o-mini", "gm");
     expect(exact).toHaveBeenCalledTimes(1);
+  });
+
+  describe("onLocked", () => {
+    const store = () => path.join(tmp, "channels.json");
+    let events: SolanaBatchEvent[];
+
+    beforeEach(() => {
+      events = [];
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      // Another live process owns the channel file.
+      fs.writeFileSync(`${store()}.lock`, String(process.ppid));
+    });
+
+    it('"throw" raises an unpaid BatchChannelLockedError before anything is signed', async () => {
+      const c = client({ onLocked: "throw", onEvent: (e) => events.push(e) });
+      const exact = stubExact(c);
+      gateway.push(() => quote402([exactAccept(), batchAccept(operator.address)]));
+
+      const err = await c.chat("openai/gpt-4o-mini", "gm").catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(BatchChannelLockedError);
+      expect(err).toMatchObject({ wallet: await c.getWalletAddress(), ownerPid: process.ppid, waitedMs: 0 });
+      expect((err as Error).message).toContain(`in use by process ${process.ppid}`);
+      expect(retryDisposition(err)).toBe("unpaid");
+      expect(exact).not.toHaveBeenCalled();
+      // Only the unpaid challenge was sent.
+      expect(gatewayCalls).toHaveLength(1);
+      expect(c.getBatchStats().fallbacks).toBe(0);
+    });
+
+    it('"wait" pays with batch once the owner lets go of the lock', async () => {
+      let polls = 0;
+      __setBatchSleepForTests(async () => {
+        // The owner exits after the second poll.
+        if (++polls === 2) fs.unlinkSync(`${store()}.lock`);
+      });
+      const c = client({ onLocked: "wait", onEvent: (e) => events.push(e) });
+      const exact = stubExact(c);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("deposit");
+          return servedWithVoucher(operator, channelIdOf(payment), 1000n, 1000n);
+        }
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+
+      expect(exact).not.toHaveBeenCalled();
+      expect(polls).toBe(2);
+      expect(events).toEqual([
+        expect.objectContaining({ type: "backoff", reason: "channel_store_locked", retryAfterMs: DEFAULT_BATCH_LOCK_WAIT_MS }),
+      ]);
+      expect(fs.readFileSync(`${store()}.lock`, "utf8")).toBe(String(process.pid));
+    });
+
+    it('"wait" raises BatchChannelLockedError when lockWaitMs runs out, and never pays exact', async () => {
+      let slept = 0;
+      __setBatchSleepForTests(async (ms) => {
+        slept += ms;
+        vi.setSystemTime(Date.now() + ms);
+      });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const c = client({ onLocked: "wait", lockWaitMs: 2_000, onEvent: (e) => events.push(e) });
+        const exact = stubExact(c);
+        gateway.push(() => quote402([exactAccept(), batchAccept(operator.address)]));
+
+        const err = await c.chat("openai/gpt-4o-mini", "gm").catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(BatchChannelLockedError);
+        expect((err as BatchChannelLockedError).waitedMs).toBeGreaterThanOrEqual(2_000);
+        expect(slept).toBe(2_000);
+        expect(exact).not.toHaveBeenCalled();
+        expect(gatewayCalls).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('"exact" (the default) keeps paying exact and reports the fallback', async () => {
+      const c = client({ onEvent: (e) => events.push(e) });
+      const exact = stubExact(c);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+
+      await c.chat("openai/gpt-4o-mini", "gm");
+
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(events).toEqual([expect.objectContaining({ type: "fallback", reason: "channel_store_locked" })]);
+    });
+
+    it("rejects an unknown onLocked or a bad lockWaitMs", () => {
+      expect(() => client({ onLocked: "queue" as never })).toThrow(/batch.onLocked/);
+      expect(() => client({ lockWaitMs: -1 })).toThrow(/batch.lockWaitMs/);
+      expect(() => client({ lockWaitMs: Number.POSITIVE_INFINITY })).toThrow(/batch.lockWaitMs/);
+    });
   });
 
   describe("channel retention", () => {
