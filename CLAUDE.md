@@ -218,8 +218,10 @@ src/
   record dropped → fresh open; foreign → `channel_unreadable`, exact): never a deposit into it. An
   account absent at finalized is re-read at `confirmed`: present → not finalized yet, lifetime cap;
   absent too (closed + reclaimed, e.g. PayAI's 3-day `idleCloseSeconds`) → `channel_unusable` target
-  with NO anchor, so `resync()` takes its own and pays exact until finality is past it, then drops the
-  record; never the record's `openSlot` / `withdrawDelay` (they come from the 402's `extra`). Only `value: null` is absent; any other undecodable account throws
+  anchored at the SDK's own `getBlockHeight(confirmed)`, saved as the record's `reclaimAnchorHeight`
+  so a short-lived process does not restart the wait; exact until finality is past it, then the record
+  is dropped (a lagging read rewrites it, anchor cleared); never the record's `openSlot` /
+  `withdrawDelay` (they come from the 402's `extra`). Only `value: null` is absent; any other undecodable account throws
   `ChannelUnreadableError` → `channel_unreadable` (record kept, exact).
 - **Crash safety.** With the file store, `journalDeposit()` writes a `DepositIntent` to
   `FileIntentJournal` (`<store>.deposit-intents` = full store path + suffix, one per store; never a name

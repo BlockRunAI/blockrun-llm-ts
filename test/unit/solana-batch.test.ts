@@ -1617,6 +1617,80 @@ describe("SolanaLLMClient batch-settlement", () => {
       expect(finalizedReads.some((r) => r.minContextSlot === rpcClock.blockHeight + 1_000)).toBe(true);
     });
 
+    it("keeps the reclaim anchor across a restart, so short-lived processes finish the wait instead of starting it over", async () => {
+      const first = kept({ maxDeposit: "$1" });
+      const exactFirst = stubExact(first);
+      const channelId = await openChannel(first);
+      chain.delete(channelId);
+      reclaimed.add(channelId);
+      const anchor = rpcClock.blockHeight;
+      gateway.push(
+        () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+      await expect(first.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exactFirst).toHaveBeenCalledTimes(1);
+      expect(events.at(-1)).toMatchObject({ type: "fallback", reason: "channel_resync_pending" });
+      expect(storedRecord()).toMatchObject({ channelId, reclaimAnchorHeight: anchor });
+
+      // A new process, after finality passed the first one's anchor: no new anchor, no new wait.
+      __resetBatchWalletsForTests();
+      rpcClock.blockHeight += 301;
+      const second = kept({ maxDeposit: "$1" });
+      const exactSecond = stubExact(second);
+      let journaled: Record<string, any> = {};
+      gateway.push(
+        () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("deposit");
+          [journaled] = Object.values(JSON.parse(fs.readFileSync(path.join(tmp, "channels.json.deposit-intents"), "utf8")).intents) as Array<Record<string, any>>;
+          return servedWithVoucher(operator, channelIdOf(payment), 30000n, 30000n);
+        }
+      );
+      await expect(second.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(exactSecond).not.toHaveBeenCalled();
+      expect(events.filter((e) => e.type === "resync")).toEqual([
+        expect.objectContaining({ reason: "channel_unusable", detail: expect.stringContaining("record dropped") }),
+      ]);
+      expect(journaled).toMatchObject({ kind: "open", cumulative: "0" });
+      expect(storedRecord().reclaimAnchorHeight).toBeUndefined();
+      expect(rpcCalls.filter((r) => r.method === "getBlockHeight")).toHaveLength(1);
+    });
+
+    it("drops the saved reclaim anchor when a lagging read finds the channel after all", async () => {
+      const c = kept({ maxDeposit: "$1" });
+      stubExact(c);
+      const channelId = await openChannel(c);
+      reclaimed.add(channelId);
+      gateway.push(
+        () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 })
+      );
+      await c.chat("openai/gpt-4o-mini", "gm");
+      expect(storedRecord().reclaimAnchorHeight).toBe(rpcClock.blockHeight);
+
+      // The channel was there all along; the reads lagged.
+      reclaimed.delete(channelId);
+      chain.set(channelId, channelAccount({ payer: await c.getWalletAddress(), operator: operator.address, deposit: 25000n }));
+      rpcClock.blockHeight += 301;
+      gateway.push(
+        () => quote402([exactAccept("30000"), batchAccept(operator.address, "30000")]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("deposit");
+          expect(channelIdOf(payment)).toBe(channelId);
+          return servedWithVoucher(operator, channelId, 31000n, 30000n);
+        }
+      );
+      await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
+      expect(events.filter((e) => e.type === "resync")).toEqual([
+        expect.objectContaining({ reason: "channel_unusable", detail: expect.stringContaining("record rewritten") }),
+      ]);
+      expect(storedRecord()).toMatchObject({ channelId });
+      expect(storedRecord().reclaimAnchorHeight).toBeUndefined();
+    });
+
     it("never drops a stored channel on a 402's openSlot: a channel gone from every commitment waits out the SDK's own anchor", async () => {
       const c = kept({ maxDeposit: "$1" });
       const exact = stubExact(c);

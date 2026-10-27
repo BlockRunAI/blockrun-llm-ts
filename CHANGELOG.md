@@ -10,10 +10,12 @@
   stale `recentSlot` could drop a channel opened seconds earlier and not yet
   finalized, forgetting a funded channel and opening a second. Now an account
   missing at finalized is read again at `confirmed`: present means not
-  finalized yet (top-up as before); gone there too queues a re-read with no
-  anchor, so resync takes its own block height, pays exact until finality is
-  300 blocks past it (about two minutes), and only then drops the record. A
-  channel closed within a day of its open is no longer stuck for up to a day.
+  finalized yet (top-up as before); gone there too queues a re-read
+  anchored at the SDK's own block height, which pays exact until finality is
+  300 blocks past it (about two minutes), and only then drops the record. The
+  anchor is saved in the channel file (`reclaimAnchorHeight`), so short-lived
+  processes finish the wait instead of restarting it. A channel closed within
+  a day of its open is no longer stuck for up to a day.
 
 ## [3.24.7] - 2026-10-26
 

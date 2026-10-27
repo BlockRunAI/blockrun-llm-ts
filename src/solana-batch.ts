@@ -1482,6 +1482,17 @@ function checkChannelLayout(): Promise<void> {
  */
 const LANDING_MARGIN_BLOCKS = 300;
 
+/**
+ * The block height this SDK read when it first found a stored channel's
+ * account gone at every commitment ({@link SolanaBatchPayer.prepareTopUp}),
+ * saved in the record so a restart waits out the same finality margin
+ * instead of starting it over. Undefined when absent or malformed.
+ */
+function savedReclaimAnchor(record: StoredRecord): number | undefined {
+  const saved = record.reclaimAnchorHeight;
+  return typeof saved === "number" && Number.isSafeInteger(saved) && saved > 0 ? saved : undefined;
+}
+
 /** The larger of two optional amounts. */
 function maxOf(a: bigint | undefined, b: bigint | undefined): bigint | undefined {
   if (a === undefined) return b;
@@ -3884,18 +3895,39 @@ export class SolanaBatchPayer {
       // and its account reclaimed (the facilitator closes channels left idle,
       // PayAI's `idleCloseSeconds`), and a top-up into it would be refused,
       // every call falling back to exact. Never sign one. Re-read it through
-      // resync instead: with no anchor queued, resync takes its own
-      // (`getBlockHeight` at confirmed), pays exact until finality is
-      // LANDING_MARGIN_BLOCKS past it, and only then drops the record if the
-      // finalized chain still has no account (a lagging read finds the
-      // channel and rewrites the record). Nothing from the 402, such as the
-      // record's `openSlot` or `withdrawDelay`, decides it.
+      // resync instead, anchored at the SDK's own `getBlockHeight` at
+      // confirmed: calls pay exact until finality is LANDING_MARGIN_BLOCKS
+      // past it, and only then is the record dropped if the finalized chain
+      // still has no account (a lagging read finds the channel and rewrites
+      // the record, without the anchor). The anchor is saved in the record,
+      // so a short-lived process does not start the wait over on every run.
+      // Nothing from the 402, such as the record's `openSlot` or
+      // `withdrawDelay`, decides it.
+      let anchorHeight = savedReclaimAnchor(record);
+      if (anchorHeight === undefined) {
+        try {
+          anchorHeight = rpcInteger(
+            await rpcRequest(this.init.rpcUrl, "getBlockHeight", [{ commitment: "confirmed" }], this.init.rpcHeaders),
+            "getBlockHeight",
+          );
+        } catch {
+          // resync takes the anchor itself.
+        }
+        if (anchorHeight !== undefined) {
+          try {
+            await wallet.book.set(key, { ...record, reclaimAnchorHeight: anchorHeight });
+          } catch {
+            // Only saves re-anchoring after a restart.
+          }
+        }
+      }
       addResyncTarget(wallet, {
         key,
         channelId: record.channelId,
         channelConfig: record.channelConfig,
         cumulative: parseAtomic(record.chargedCumulativeAmount),
         knownDeposit: deposit,
+        ...(anchorHeight !== undefined ? { anchorHeight } : {}),
         reason: "channel_unusable",
       });
       throw new ChannelResyncRequiredError(record.channelId);
