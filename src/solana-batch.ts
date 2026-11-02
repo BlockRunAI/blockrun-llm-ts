@@ -64,7 +64,7 @@ import { AsyncLocalStorage } from "async_hooks";
 import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
-import bs58 from "bs58";
+import { bs58 } from "./bs58";
 import { paths as corePaths } from "@blockrun/core";
 import { APIError, BlockrunError, PaymentError, withDisposition, type PaymentRequired, type PaymentRequirement } from "./types";
 import { sanitizeErrorResponse } from "./validation";
