@@ -398,6 +398,13 @@ export type ResponseFormat =
   | { type: "json_object" }
   | { type: "json_schema"; json_schema: Record<string, unknown> };
 
+/**
+ * `reasoning_effort` values. The gateway passes the value through, and each
+ * model accepts its own subset; xhigh/max exist on a few (e.g. Reflection
+ * Beam, Z.ai GLM), none/minimal only on models that can stop reasoning.
+ */
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
 export interface ChatOptions {
   /** System prompt */
   system?: string;
@@ -415,6 +422,15 @@ export interface ChatOptions {
   responseFormat?: ResponseFormat;
   /** Up to 4 stop sequences (forwarded natively / mapped to stop_sequences) */
   stop?: string | string[];
+  /**
+   * Reasoning effort for reasoning models, sent as `reasoning_effort`. Omitted
+   * when unset, so the model's own default applies (some default to their
+   * HIGHEST effort, e.g. Reflection Beam defaults to "max"). Accepted values
+   * are per model; the gateway maps "none"/"minimal" to the lowest effort a
+   * model accepts when it cannot turn reasoning off. Reasoning tokens bill as
+   * output tokens.
+   */
+  reasoningEffort?: ReasoningEffort;
   /**
    * Models to try in order if the primary returns a transient error
    * (timeout, network, 5xx). 4xx and PaymentError still propagate
@@ -443,6 +459,15 @@ export interface ChatCompletionOptions {
   responseFormat?: ResponseFormat;
   /** Up to 4 stop sequences (forwarded natively / mapped to stop_sequences) */
   stop?: string | string[];
+  /**
+   * Reasoning effort for reasoning models, sent as `reasoning_effort`. Omitted
+   * when unset, so the model's own default applies (some default to their
+   * HIGHEST effort, e.g. Reflection Beam defaults to "max"). Accepted values
+   * are per model; the gateway maps "none"/"minimal" to the lowest effort a
+   * model accepts when it cannot turn reasoning off. Reasoning tokens bill as
+   * output tokens.
+   */
+  reasoningEffort?: ReasoningEffort;
   /**
    * Models to try in order if the primary returns a transient error
    * (timeout, network, 5xx). 4xx and PaymentError still propagate

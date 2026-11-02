@@ -428,6 +428,7 @@ export class SolanaLLMClient {
       searchParameters: options?.searchParameters,
       responseFormat: options?.responseFormat,
       stop: options?.stop,
+      reasoningEffort: options?.reasoningEffort,
       fallbackModels: options?.fallbackModels,
     });
     return result.choices[0].message.content || "";
@@ -465,6 +466,7 @@ export class SolanaLLMClient {
       if (options?.toolChoice !== undefined) body.tool_choice = options.toolChoice;
       if (options?.responseFormat !== undefined) body.response_format = options.responseFormat;
       if (options?.stop !== undefined) body.stop = options.stop;
+      if (options?.reasoningEffort !== undefined) body.reasoning_effort = options.reasoningEffort;
       return body;
     };
     const chain = [model, ...(options?.fallbackModels ?? [])];
@@ -589,6 +591,7 @@ export class SolanaLLMClient {
       toolChoice: options.toolChoice,
       responseFormat: options.responseFormat,
       stop: options.stop,
+      reasoningEffort: options.reasoningEffort,
       timeout: options.timeout,
       // An explicit caller-supplied chain wins over the routed one.
       fallbackModels: options.fallbackModels ?? decision.fallbacks,

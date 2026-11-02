@@ -259,6 +259,7 @@ export class LLMClient {
       searchParameters: options?.searchParameters,
       responseFormat: options?.responseFormat,
       stop: options?.stop,
+      reasoningEffort: options?.reasoningEffort,
       fallbackModels: options?.fallbackModels,
     });
 
@@ -352,6 +353,7 @@ export class LLMClient {
       searchParameters: options?.searchParameters,
       responseFormat: options?.responseFormat,
       stop: options?.stop,
+      reasoningEffort: options?.reasoningEffort,
       // An explicit caller-supplied chain wins over the routed one.
       fallbackModels: options?.fallbackModels ?? decision.fallbacks,
     });
@@ -394,6 +396,7 @@ export class LLMClient {
       toolChoice: options.toolChoice,
       responseFormat: options.responseFormat,
       stop: options.stop,
+      reasoningEffort: options.reasoningEffort,
       timeout: options.timeout,
       // An explicit caller-supplied chain wins over the routed one.
       fallbackModels: options.fallbackModels ?? decision.fallbacks,
@@ -502,6 +505,7 @@ export class LLMClient {
       if (options?.toolChoice !== undefined) body.tool_choice = options.toolChoice;
       if (options?.responseFormat !== undefined) body.response_format = options.responseFormat;
       if (options?.stop !== undefined) body.stop = options.stop;
+      if (options?.reasoningEffort !== undefined) body.reasoning_effort = options.reasoningEffort;
       return body;
     };
 
@@ -943,6 +947,7 @@ export class LLMClient {
     if (options?.toolChoice !== undefined) body.tool_choice = options.toolChoice;
     if (options?.responseFormat !== undefined) body.response_format = options.responseFormat;
     if (options?.stop !== undefined) body.stop = options.stop;
+    if (options?.reasoningEffort !== undefined) body.reasoning_effort = options.reasoningEffort;
 
     const cacheKey = `/v1/chat/completions:${requestModel}`;
     const requestBody = JSON.stringify(body);

@@ -634,6 +634,17 @@ console.log(res.usage?.server_side_tool_usage);  // { x_posts_fetched, ... }
 console.log(res.costUsd, res.settlement);        // what you paid, and the tx
 ```
 
+Reasoning models take `reasoningEffort` on any chat call. Unset, the model's
+own default applies, and some default to their highest effort (Reflection Beam
+defaults to `"max"`); reasoning tokens bill as output:
+
+```typescript
+const quick = await client.chatCompletion('reflection/beam-1.0-501b-a23b', messages, {
+  reasoningEffort: 'low',   // none | minimal | low | medium | high | xhigh | max, per model
+  maxTokens: 8192,          // reasoning counts toward max_tokens
+});
+```
+
 `costUsd`, `settlement` and the per-call `timeout` work the same on `LLMClient`
 (Base / Arc). Both clients default to a 600 s request timeout
 (`BLOCKRUN_CHAT_TIMEOUT`, in seconds, overrides it; the `timeout` option, in
