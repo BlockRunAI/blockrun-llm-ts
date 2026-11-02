@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Added — `reasoningEffort` on chat calls
+
+- `chat`, `chatCompletion`, `smartChat`, `smartChatCompletion` and
+  `chatCompletionStream` (`LLMClient`), and `chat`, `chatCompletion`,
+  `smartChat` and `smartChatCompletion` (`SolanaLLMClient`) take `reasoningEffort`
+  (`"none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"`), sent
+  as `reasoning_effort`. The OpenAI-compatible wrapper maps `reasoning_effort`.
+  Unset means the field is not sent and the model's own default applies, as
+  before.
+- Before this there was no way to choose it from the SDK, so every call ran
+  at the model's default. For some reasoning models that is the most
+  expensive setting: Reflection Beam (`reflection/beam-1.0-501b-a23b`) defaults
+  to `"max"`, and reasoning tokens bill as output. New exported type:
+  `ReasoningEffort`.
+
 ## [3.25.0] - 2026-10-27
 
 ### Added — `batch.onLocked`: wait or fail instead of paying exact (issue #96)

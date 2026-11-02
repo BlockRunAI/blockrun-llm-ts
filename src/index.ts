@@ -59,6 +59,7 @@ export {
   type ChatOptions,
   type ChatCompletionOptions,
   type ResponseFormat,
+  type ReasoningEffort,
   // Tool calling types
   type FunctionDefinition,
   type Tool,

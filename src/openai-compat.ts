@@ -29,6 +29,7 @@ import type {
   Tool,
   ToolCall,
   ToolChoice,
+  ReasoningEffort,
 } from "./types";
 
 // OpenAI-compatible types
@@ -64,6 +65,7 @@ export interface OpenAIChatCompletionParams {
   user?: string;
   tools?: Tool[];
   tool_choice?: ToolChoice;
+  reasoning_effort?: ReasoningEffort;
 }
 
 export interface OpenAIChatCompletionChoice {
@@ -207,6 +209,7 @@ class ChatCompletions {
         toolChoice: params.tool_choice,
         responseFormat: params.response_format,
         stop: params.stop,
+        reasoningEffort: params.reasoning_effort,
       }
     );
 
@@ -225,6 +228,7 @@ class ChatCompletions {
         toolChoice: params.tool_choice,
         responseFormat: params.response_format,
         stop: params.stop,
+        reasoningEffort: params.reasoning_effort,
       }
     );
     return new StreamingResponse(response, params.model);
