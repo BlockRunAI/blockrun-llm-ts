@@ -18,7 +18,7 @@
  * Solana (sol.blockrun.ai) only — the Base gateway does not read these headers.
  */
 import { createPrivateKey, createPublicKey, sign as ed25519Sign } from "crypto";
-import bs58 from "bs58";
+import { bs58 } from "./bs58";
 
 /** The job types the gateway accepts a poll proof for. Music jobs are `audio`. */
 export type PollKind = "video" | "audio" | "image";

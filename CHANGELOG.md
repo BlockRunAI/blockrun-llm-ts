@@ -4,6 +4,17 @@
 
 ## [3.26.0] - 2026-11-02
 
+### Fixed — bs58 under the CommonJS build (batch settlement, poll ownership)
+
+- `require("@blockrun/llm")` consumers got `bs58` as `{ default: codec }`
+  (bs58 v6's CJS entry + the bundler's node-mode interop), so every
+  `bs58.encode` threw. Batch settlement could not read its channel before a
+  top-up (`channel_resync_failed: import_bs582.default.encode is not a
+  function`) and fell back to `exact`; the Solana `x-poll-*` ownership headers
+  threw the same way. ESM consumers were unaffected. Verified on mainnet
+  through the packed CJS build: before the fix, Beam calls fell back to
+  `exact`; after it, they settle via batch.
+
 ### Added — `reasoningEffort` on chat calls
 
 - `chat`, `chatCompletion`, `smartChat`, `smartChatCompletion` and
