@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.26.0] - 2026-11-02
+
 ### Added — `reasoningEffort` on chat calls
 
 - `chat`, `chatCompletion`, `smartChat`, `smartChatCompletion` and
