@@ -4,7 +4,7 @@
 
 ### Cut your LLM bill by <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->%. One line of TypeScript.
 
-The smart-routing SDK for <!-- br:models.chatVisible -->90<!-- /br:models.chatVisible --> models — every request goes to the cheapest model that can handle it,
+The smart-routing SDK for <!-- br:models.chatVisible -->91<!-- /br:models.chatVisible --> models — every request goes to the cheapest model that can handle it,
 paid with an API key or per-request USDC on Solana, Base or Arc. No vendor lock-in.
 
 [![npm](https://img.shields.io/npm/v/@blockrun/llm.svg?style=flat-square)](https://www.npmjs.com/package/@blockrun/llm)
@@ -44,7 +44,7 @@ console.log(r.response);         // the proof
 ## Why This SDK
 
 - 🧠 **Smart routing that pays for itself.** The bundled [Router Core V3](https://github.com/BlockRunAI/router-core) engine (shared with [ClawRouter](https://github.com/BlockRunAI/ClawRouter)) classifies every request locally in <1ms across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions and routes to the cheapest capable model.
-- 🆓 **<!-- br:models.free -->7<!-- /br:models.free --> genuinely free models.** $0 in and out, including two 1M-context Nemotrons, two that accept images, and free coding models from Cohere and Poolside.
+- 🆓 **<!-- br:models.free -->8<!-- /br:models.free --> genuinely free models.** $0 in and out, including two 1M-context Nemotrons, two that accept images, and free coding models from Cohere and Poolside.
 - 🔐 **Two ways to connect.** A **BlockRun API key** billed against account credit ([sign up](https://user.blockrun.ai), [create a key](https://user.blockrun.ai/dashboard/keys), [add credit](https://user.blockrun.ai/dashboard/credits)), or a wallet signature with x402 micropayments and no account at all. Same code either way.
 - 💸 **Pay per request in USDC.** x402 micropayments on Solana, Base or Arc. Agents can fund and pay their own way.
 - 🛡️ **Automatic failover.** Transient errors (timeouts, 429, 5xx) before payment walk the router's ranked fallback chain instead of failing your request; a failure after a payment was sent never buys a second model.
@@ -56,8 +56,8 @@ console.log(r.response);         // the proof
 |                    | OpenAI SDK     | OpenRouter        | LiteLLM          | **@blockrun/llm**                                                       |
 | ------------------ | -------------- | ----------------- | ---------------- | ----------------------------------------------------------------------- |
 | **Cost routing**   | ✗ one vendor   | Manual selection  | Manual selection | **Automatic — <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->% cheaper** |
-| **Models**         | GPT only       | 200+              | 100+ (BYO keys)  | **<!-- br:models.chatVisible -->90<!-- /br:models.chatVisible -->, one credential** |
-| **Free tier**      | ✗              | Rate-limited      | ✗                | **<!-- br:models.free -->7<!-- /br:models.free --> models, no signup**  |
+| **Models**         | GPT only       | 200+              | 100+ (BYO keys)  | **<!-- br:models.chatVisible -->91<!-- /br:models.chatVisible -->, one credential** |
+| **Free tier**      | ✗              | Rate-limited      | ✗                | **<!-- br:models.free -->8<!-- /br:models.free --> models, no signup**  |
 | **Auth**           | API key        | Account + API key | Your API keys    | **API key *or* wallet signature**                                       |
 | **Payment**        | Card + invoice | Credit card       | BYO keys         | **Account credit or USDC per-request**                                  |
 | **Agent-ready**    | ✗              | ✗                 | ✗                | **✓ — one key, or agents fund their own wallet**                        |
@@ -351,7 +351,7 @@ const reply = await client.chat('nvidia/nemotron-3.5-lightning', 'hello', {
 
 | Profile | Strategy | Savings vs Opus 5 | Best For |
 |---------|----------|-------------------|----------|
-| `eco` | Cheapest capable model — ranks the <!-- br:models.free -->7<!-- /br:models.free -->-model free tier first | **<!-- br:savings.ecoVsBaselinePct -->98<!-- /br:savings.ecoVsBaselinePct -->%** | Cost-sensitive production, zero-cost testing |
+| `eco` | Cheapest capable model — ranks the <!-- br:models.free -->8<!-- /br:models.free -->-model free tier first | **<!-- br:savings.ecoVsBaselinePct -->98<!-- /br:savings.ecoVsBaselinePct -->%** | Cost-sensitive production, zero-cost testing |
 | `auto` | Best balance of cost and quality (default) | **<!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->%** | General use |
 | `premium` | Highest-quality model per tier | 0% | Quality-critical tasks |
 
@@ -1826,7 +1826,7 @@ to pick up security fixes.
 ## Frequently Asked Questions
 
 ### What is @blockrun/llm?
-A TypeScript SDK that cuts LLM costs by <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->% on a realistic workload with built-in smart routing: every request goes to the cheapest of <!-- br:models.chatVisible -->90<!-- /br:models.chatVisible --> models (OpenAI, Anthropic, Google, xAI, DeepSeek, Moonshot, and more) that can handle it, paid with an account API key or per-request USDC via x402 on Solana, Base or Arc.
+A TypeScript SDK that cuts LLM costs by <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->% on a realistic workload with built-in smart routing: every request goes to the cheapest of <!-- br:models.chatVisible -->91<!-- /br:models.chatVisible --> models (OpenAI, Anthropic, Google, xAI, DeepSeek, Moonshot, and more) that can handle it, paid with an account API key or per-request USDC via x402 on Solana, Base or Arc.
 
 ### What is smart routing?
 Router Core V3, bundled into the SDK: the same deterministic engine that powers ClawRouter. It analyzes each request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions locally, in under 1ms, and picks the cheapest capable model. Use `smartChat()`, `smartChatCompletion()`, or the `blockrun/auto` model alias. See [Smart Routing](#smart-routing-router-core-v3).
