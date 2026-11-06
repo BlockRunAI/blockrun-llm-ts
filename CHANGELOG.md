@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.26.1] - 2026-11-06
+
 ### Fixed — `MusicClient.generate()` returned an empty result for slow tracks
 
 - A track past the gateway's inline window answers `202` + `poll_url`. The
