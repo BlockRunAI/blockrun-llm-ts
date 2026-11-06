@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed — `MusicClient.generate()` returned an empty result for slow tracks
+
+- A track past the gateway's inline window answers `202` + `poll_url`. The
+  client returned that job pointer as the result, with no `data` and no error,
+  so the caller had no track and nothing was charged. It now polls with the same
+  payment header until the track is ready, as `ImageClient` does. Dropped
+  connections and 502/503/504 keep polling, because a repeat poll of a settled
+  job returns it with no second charge.
+- `getSpending()` now books the amount actually signed, once the track arrives.
+  It used to book a fixed $0.1575 at submit, whatever the price or outcome.
+
 ## [3.26.0] - 2026-11-02
 
 ### Fixed — bs58 under the CommonJS build (batch settlement, poll ownership)
