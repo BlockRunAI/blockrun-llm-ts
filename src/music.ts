@@ -41,6 +41,17 @@ import {
 const DEFAULT_API_URL = "https://blockrun.ai/api";
 const DEFAULT_MODEL = "minimax/music-2.5+";
 const DEFAULT_TIMEOUT = 210_000; // music gen takes 1-3 min
+const POLL_INTERVAL_MS = 5_000;
+const POLL_MAX_DURATION_MS = 300_000; // Tracks take 1-3 min, and POST already waited up to 60s.
+const TRANSIENT_POLL_STATUSES = new Set([502, 503, 504]);
+
+/** Fields a job response carries that a finished track's response does not. */
+interface MusicJobFields {
+  status?: string;
+  poll_url?: string;
+  error?: string;
+  payment?: { tx_hash?: string };
+}
 
 /**
  * BlockRun Music Generation Client.
@@ -213,20 +224,101 @@ export class MusicClient {
       throw new APIError(`API error after payment: ${retryResponse.status}`, retryResponse.status, sanitizeErrorResponse(errorBody));
     }
 
-    const data = await retryResponse.json() as MusicResponse;
+    const costUsd = Number(details.amount) / 1e6;
+    const data = await retryResponse.json() as MusicResponse & MusicJobFields;
 
-    // Track spending
-    // A skipped settlement (X-Settlement-Skipped / X-Payment-Waived) moved nothing: book nothing.
-    if (!settlementSkipped(retryResponse)) {
-      this.sessionCalls++;
-      this.sessionTotalUsd += 0.1575;
+    // A track past the server's inline window answers 202 + poll_url. That is a
+    // job pointer, not a track, and nothing has been charged yet.
+    if (retryResponse.status === 202 || data.status === "queued" || data.status === "in_progress") {
+      if (!data.poll_url) {
+        throw new APIError(
+          `Server returned ${retryResponse.status} but no poll_url to follow.`,
+          retryResponse.status,
+          sanitizeErrorResponse(data)
+        );
+      }
+      return this.pollMusicJob(data.poll_url, paymentPayload, costUsd);
     }
 
-    // Attach tx hash from response header if present
-    const txHash = retryResponse.headers.get("x-payment-receipt") || retryResponse.headers.get("X-Payment-Receipt");
-    if (txHash) data.txHash = txHash;
+    return this.finishPaidResponse(retryResponse, data, costUsd);
+  }
 
+  private finishPaidResponse(response: Response, data: MusicResponse, costUsd: number): MusicResponse {
+    // A skipped settlement (X-Settlement-Skipped / X-Payment-Waived) moved nothing: book nothing.
+    if (!settlementSkipped(response)) {
+      this.sessionCalls++;
+      this.sessionTotalUsd += costUsd;
+    }
+
+    const txHash = response.headers.get("x-payment-receipt");
+    if (txHash) data.txHash = txHash;
     return data;
+  }
+
+  /**
+   * Poll a slow track until it completes, sending the SAME payment header each
+   * time: the server binds the payer to the job and settles on the first poll
+   * that sees it completed.
+   *
+   * Network errors and 502/503/504 keep polling. A response lost on the settling
+   * poll would otherwise drop a track that was paid for, and polling again returns
+   * it as already settled, with no second charge.
+   */
+  private async pollMusicJob(
+    pollPath: string,
+    paymentHeader: string,
+    costUsd: number
+  ): Promise<MusicResponse> {
+    const pollUrl = pollPath.startsWith("/api/")
+      ? `${this.apiUrl.replace(/\/api$/, "")}${pollPath}`
+      : `${this.apiUrl}${pollPath.startsWith("/") ? "" : "/"}${pollPath}`;
+
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < POLL_MAX_DURATION_MS) {
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+
+      let pollResp: Response;
+      try {
+        pollResp = await this.fetchWithTimeout(pollUrl, {
+          method: "GET",
+          headers: { "PAYMENT-SIGNATURE": paymentHeader },
+        });
+      } catch {
+        continue;
+      }
+
+      if (pollResp.status === 202 || TRANSIENT_POLL_STATUSES.has(pollResp.status)) continue;
+
+      const pollBody = (await pollResp.json().catch(() => ({}))) as MusicResponse & MusicJobFields;
+
+      if (!pollResp.ok) {
+        throw new APIError(
+          `API error during poll of ${pollPath}: ${pollResp.status}`,
+          pollResp.status,
+          sanitizeErrorResponse(pollBody)
+        );
+      }
+
+      if (pollBody.status === "failed") {
+        throw new APIError(
+          pollBody.error || "Upstream music generation failed",
+          200,
+          sanitizeErrorResponse(pollBody)
+        );
+      }
+
+      if (pollBody.data) {
+        if (!pollBody.txHash && pollBody.payment?.tx_hash) pollBody.txHash = pollBody.payment.tx_hash;
+        return this.finishPaidResponse(pollResp, pollBody, costUsd);
+      }
+    }
+
+    throw new APIError(
+      `Music generation did not finish within ${POLL_MAX_DURATION_MS / 1000}s. ` +
+        `The job may still complete: poll poll_url with the same payment header before paying again.`,
+      504,
+      { error: "poll_timeout", poll_url: pollPath }
+    );
   }
 
   private async fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {

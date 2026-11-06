@@ -341,7 +341,7 @@ const SITES: Site[] = [
   },
   {
     name: "MusicClient generate",
-    expectUsd: 0.1575,
+    expectUsd: QUOTE_USD,
     run: async (headers) => {
       const client = new MusicClient({ privateKey: TEST_PRIVATE_KEY });
       stubFetch((c) => (c.paid ? json({ data: [{ url: "u" }] }, headers) : challenge(`${API}/v1/audio/generations`)));
