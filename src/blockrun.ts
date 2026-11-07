@@ -65,6 +65,7 @@ import {
 import {
   validatePrivateKey,
   validateApiUrl,
+  paymentFactsNote,
   sanitizeErrorResponse,
 } from "./validation";
 
@@ -262,7 +263,7 @@ export class BlockrunClient {
 
       if (lastStatus === "failed") {
         throw new APIError(
-          `Upstream job failed: ${(pollData.error as string) || "unknown"}`,
+          `Upstream job failed: ${(pollData.error as string) || "unknown"}${paymentFactsNote(pollData)}`,
           pollResp.status,
           sanitizeErrorResponse(pollData)
         );

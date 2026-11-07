@@ -56,6 +56,7 @@ import { pollJobIdFromUrl, signPollOwnership, type PollKind } from "./poll-owner
 import { BATCH_SCHEME, SolanaBatchPayer, withPaymentIdentifier, type Rechallenge, type SolanaBatchOptions, type SolanaBatchStats } from "./solana-batch";
 import type { PaymentRequired } from "./types";
 import {
+  paymentFactsNote,
   sanitizeErrorResponse,
   validateApiUrl,
   validateMaxTokens,
@@ -817,7 +818,8 @@ export class SolanaLLMClient {
    *
    * The POST is verified, not charged. The job is then polled with a wallet
    * signature (no payment) until it finishes, and ONE payment is signed for
-   * the finished video; a failed job is never charged. If the gateway does not
+   * the finished video; a job that fails before completing is not charged. A paid
+   * job can still fail, and its APIError then carries `payment_status`. If the gateway does not
    * accept poll signatures for the job, it is polled with a payment per poll
    * instead, which is likewise only charged on completion.
    *
@@ -1265,7 +1267,8 @@ export class SolanaLLMClient {
    *   cost at POST; this loop only fetches the result and never signs a payment.
    *   A batch-billed image job still answers its proof poll with 402: that job
    *   falls back to the per-poll payment below.
-   * - video: settles on completion, and a failed job is never charged. A
+   * - video: settles on completion. A job that fails before completing is not
+   *   charged; one that fails after payment says so in `payment_status`. A
    *   finished, unpaid job answers the proof poll with 402 `{status:"completed"}`
    *   and a normal x402 challenge; ONE payment is signed from that challenge and
    *   the same poll is re-sent with it. The cost is recorded here, on delivery.
@@ -1322,7 +1325,7 @@ export class SolanaLLMClient {
     const failIfFailed = (data: Record<string, unknown>, status: number): void => {
       if (lastStatus === "failed") {
         throw new APIError(
-          `Upstream job failed: ${(data.error as string) || "unknown"}`,
+          `Upstream job failed: ${(data.error as string) || "unknown"}${paymentFactsNote(data)}`,
           status,
           sanitizeErrorResponse(data)
         );

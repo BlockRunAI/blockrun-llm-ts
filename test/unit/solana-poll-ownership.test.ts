@@ -191,6 +191,24 @@ describe("Solana video: polls prove ownership, the finished video is paid once",
     expect(client.getSpending().calls).toBe(1);
   });
 
+  it("a paid job that fails says it was paid, and signs nothing more", async () => {
+    const calls = stubFetch(() => res(502, {
+      status: "failed",
+      error: "could not be stored",
+      payment_status: "settled",
+      tx_hash: "SETTLE_TX",
+      payment_note: "Do not pay for it again.",
+    }));
+    const client = new SolanaLLMClient({ privateKey: SOL_KEY });
+    const failure = await follow(client)(
+      { id: "v", poll_url: "/api/v1/videos/generations/v?model=m&duration=5" }, 10_000, "video", 1
+    ).catch((e: unknown) => e) as { message: string; response: Record<string, unknown> };
+    expect(failure.message).toContain("Payment settled (tx SETTLE_TX). Do not pay");
+    expect(failure.response).toMatchObject({ payment_status: "settled", tx_hash: "SETTLE_TX" });
+    expect(signed).toHaveLength(0);
+    expect(calls).toHaveLength(1);
+  });
+
   it("pending polls never invoke the payment signer", async () => {
     let n = 0;
     const calls = stubFetch(() => (++n < 5
