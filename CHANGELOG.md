@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.26.2] - 2026-11-07
+
 ### Fixed — a failed job says what happened to the payment
 
 - A failed job or request now keeps `payment_status`, `tx_hash` and `payment_note`
