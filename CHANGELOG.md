@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed — a failed job says what happened to the payment
+
+- A failed job or request now keeps `payment_status`, `tx_hash` and `payment_note`
+  on `APIError.response`, and a failed job's message says whether the payment
+  settled. A paid job can still fail, and the error said nothing about the money,
+  so a caller could pay for it again. The Solana video docs no longer say a failed
+  job is never charged.
+
 ## [3.26.1] - 2026-11-06
 
 ### Fixed — `MusicClient.generate()` returned an empty result for slow tracks

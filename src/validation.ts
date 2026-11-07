@@ -226,6 +226,29 @@ export function validateApiUrl(url: string): void {
  * });
  * // Returns: { message: "Invalid model", code: undefined }
  */
+/**
+ * Whether money moved on a failed call. A paid job can still fail, and a caller
+ * who only sees the error may pay for it again, so these survive sanitizing.
+ */
+const PAYMENT_FACT_FIELDS = ["payment_status", "tx_hash", "payment_note"] as const;
+
+/**
+ * One sentence on what a failed response says about the payment. Empty when the
+ * response says nothing, or names a status this SDK doesn't know: no statement
+ * is safer than a wrong one about money.
+ */
+export function paymentFactsNote(errorBody: unknown): string {
+  if (typeof errorBody !== "object" || errorBody === null) return "";
+  const { payment_status: status, tx_hash: txHash } = errorBody as Record<string, unknown>;
+  if (status === "settled") {
+    const tx = typeof txHash === "string" && txHash ? ` (tx ${txHash})` : "";
+    return `. Payment settled${tx}. Do not pay for this job again.`;
+  }
+  if (status === "unknown") return ". Payment state unknown. Check your wallet before paying again.";
+  if (status === "not_charged" || status === "settlement_failed") return ". No payment was taken.";
+  return "";
+}
+
 export function sanitizeErrorResponse(errorBody: unknown): unknown {
   // If not an object, return generic error
   if (typeof errorBody !== "object" || errorBody === null) {
@@ -264,6 +287,9 @@ export function sanitizeErrorResponse(errorBody: unknown): unknown {
     code: typeof body.code === "string" ? body.code : undefined,
     ...(detail ? { detail } : {}),
     ...(typeof body.hint === "string" ? { hint: body.hint } : {}),
+    ...Object.fromEntries(
+      PAYMENT_FACT_FIELDS.filter((field) => typeof body[field] === "string").map((field) => [field, body[field]])
+    ),
   };
 }
 

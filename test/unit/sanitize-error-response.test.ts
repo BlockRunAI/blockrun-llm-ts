@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sanitizeErrorResponse } from "../../src/validation.js";
+import { paymentFactsNote, sanitizeErrorResponse } from "../../src/validation.js";
 
 /**
  * A sanitized error must still say what went wrong — and whether money moved.
@@ -70,5 +70,44 @@ describe("sanitizeErrorResponse", () => {
   it("falls back when the body has no error string", () => {
     const out = sanitizeErrorResponse({ foo: "bar" }) as Record<string, unknown>;
     expect(out.message).toBe("API request failed");
+  });
+});
+
+describe("payment facts on a failed response", () => {
+  const paidFailure = {
+    status: "failed",
+    error: "Video generated but could not be stored",
+    payment_status: "settled",
+    tx_hash: "5abcTX",
+    payment_note: "Do not pay for it again.",
+    poll_auth: { charges: "never" },
+  };
+
+  it("keeps the payment facts and nothing else new", () => {
+    expect(sanitizeErrorResponse(paidFailure)).toEqual({
+      message: "Video generated but could not be stored",
+      code: undefined,
+      payment_status: "settled",
+      tx_hash: "5abcTX",
+      payment_note: "Do not pay for it again.",
+    });
+  });
+
+  it("drops a payment fact that is not a string", () => {
+    expect(sanitizeErrorResponse({ error: "Failed", tx_hash: { a: 1 } })).not.toHaveProperty("tx_hash");
+  });
+
+  it("states each status it knows", () => {
+    expect(paymentFactsNote({ payment_status: "settled", tx_hash: "5abc" })).toContain("settled (tx 5abc)");
+    expect(paymentFactsNote({ payment_status: "settled" })).toContain("Do not pay");
+    expect(paymentFactsNote({ payment_status: "unknown" })).toContain("wallet");
+    expect(paymentFactsNote({ payment_status: "not_charged" })).toContain("No payment");
+    expect(paymentFactsNote({ payment_status: "settlement_failed" })).toContain("No payment");
+  });
+
+  it("makes no claim it cannot support", () => {
+    expect(paymentFactsNote({ error: "Failed" })).toBe("");
+    expect(paymentFactsNote({ payment_status: "settled_optimistic" })).toBe("");
+    expect(paymentFactsNote("not an object")).toBe("");
   });
 });
