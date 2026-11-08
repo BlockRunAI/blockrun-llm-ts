@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [3.26.4] - 2026-11-08
+
+### Fixed — router-core 273c2af (2026-11 router audit)
+
+- Bump @blockrun/router-core to 273c2af. Smart routing (`smartChat()`,
+  `blockrun/auto` · `eco` · `premium`) picks up the audit fixes, and its
+  decisions again match the Python SDK's port exactly:
+  - Chinese debug, refactor, extraction and proof prompts are no longer
+    classified as chat. Japanese prompts no longer get the Mandarin
+    extraction band.
+  - With tools attached, a bare language name ("java coffee prices online")
+    is no longer routed to the code-agent pool.
+  - Tool-name verbs, airline reservation ids and the multi-step signal no
+    longer fire on look-alike text ("add" in "address", "CANCEL", a
+    sentence ending in a number). Full-width `？` now counts as a question.
+  - An unpriced candidate no longer outranks priced ones on cost. NaN
+    prices and malformed performance data no longer leak NaN into costs or
+    the ranking. `calculateModelCost` reports no savings for an unpriced
+    model.
+  - `toRoutingCatalog` keeps the bundled vision evidence (Haiku 4.5, Sonnet
+    4.6) and the fail-closed vision overrides instead of reading only the
+    catalog's category tags.
+  - Capability snapshot synced to the 2026-11-08 catalog. `moonshot/kimi-k3`
+    is retained; DeepSeek chat, reasoner and V4.1 Flash stay text-only until
+    an image probe confirms the catalog's new vision tag.
+
 ## [3.26.3] - 2026-11-07
 
 ### Fixed — only `exact` payment options are signed
