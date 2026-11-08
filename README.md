@@ -341,7 +341,7 @@ try {
 
 // Manually pass a fallback chain to chat() / chatCompletion()
 const reply = await client.chat('nvidia/nemotron-3.5-lightning', 'hello', {
-  fallbackModels: ['nvidia/nemotron-3-ultra-550b', 'cohere/north-mini-code'],
+  fallbackModels: ['nvidia/nemotron-3-ultra-550b', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning'],
 });
 // If nemotron-3.5-lightning times out, the SDK retries against the next model
 // and logs each hop to stderr: "[@blockrun/llm] <from> -> <to> (...)".
@@ -928,13 +928,16 @@ prefix, or let `routingProfile: 'eco'` rank them first.
 | `nvidia/nemotron-3.5-lightning` | 1M | Thinking-mode reasoning at 1M context |
 | `nvidia/nemotron-3-ultra-550b` | 1M | Largest free model — 550B, 1M context |
 | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Multimodal reasoning — text + images |
-| `nvidia/llama-3.2-11b-vision` | 128K | Vision-language — accepts images |
-| `nvidia/muse-glimmer-30b` | 128K | Chat, reasoning and coding |
-| `cohere/north-mini-code` | 256K | Compact coding model, sub-second responses |
+| `nvidia/nemotron-3.5-bolt` | 128K | Free vision — verified on real image probes on Base and Solana |
 | `poolside/laguna-xs-2.1` | 128K | Coding model |
 
 A free model can be briefly marked unavailable in the live catalog while the
 gateway's health check holds it back; it stays on the free tier.
+
+`nvidia/llama-3.2-11b-vision`, `cohere/north-mini-code` and `nvidia/muse-glimmer-30b`
+still answer, but
+since 2026-11 the gateway serves them with a different model. Don't pin them;
+use `nemotron-3.5-bolt` for free image input.
 
 <details>
 <summary><strong>Paid chat models</strong> — OpenAI, Anthropic, Google, DeepSeek, xAI, Moonshot, MiniMax, Z.ai, Qwen, Mistral, Tencent, Poolside, Xiaomi</summary>
