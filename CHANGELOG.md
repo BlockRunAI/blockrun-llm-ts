@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.26.3] - 2026-11-07
+
 ### Fixed — only `exact` payment options are signed
 
 - `extractPaymentDetails` took the 402's first option whatever its scheme, and
