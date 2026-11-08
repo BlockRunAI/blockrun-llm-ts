@@ -605,9 +605,19 @@ export function extractPaymentDetails(
   extra?: { name?: string; version?: string; feePayer?: string };
   resource?: ResourceInfo;
 } {
-  const accepts = paymentRequired.accepts || [];
-  if (accepts.length === 0) {
+  const offered = paymentRequired.accepts || [];
+  if (offered.length === 0) {
     throw new Error("No payment options in payment required response");
+  }
+  // Every caller signs an exact transfer. sol.blockrun.ai also offers
+  // batch-settlement and a Base gateway may offer upto; signing exact against
+  // those terms is refused at best, and against upto pays its ceiling. An option
+  // with no scheme is exact (v1).
+  const accepts = offered.filter((opt) => !opt.scheme || opt.scheme === "exact");
+  if (accepts.length === 0) {
+    throw new Error(
+      `This client signs the exact scheme, but the 402 only offers ${offered.map((opt) => JSON.stringify(opt.scheme)).join(", ")}`
+    );
   }
 
   // If preferred network specified, try to find matching option

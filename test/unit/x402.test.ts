@@ -184,6 +184,27 @@ describe("x402 Payment Protocol", () => {
   });
 
   describe("extractPaymentDetails", () => {
+    it("selects the exact option whatever order the gateway lists it in", () => {
+      const details = extractPaymentDetails({
+        x402Version: 2,
+        accepts: [
+          { scheme: "upto", network: "eip155:8453", amount: "9000", asset: "0xa", payTo: "0xb", maxTimeoutSeconds: 300 },
+          { scheme: "exact", network: "eip155:8453", amount: "1000", asset: "0xa", payTo: "0xb", maxTimeoutSeconds: 300 },
+        ],
+      } as never);
+      expect(details.amount).toBe("1000");
+      expect(details.scheme).toBe("exact");
+    });
+
+    it("refuses a 402 that offers no exact option instead of signing it as one", () => {
+      expect(() =>
+        extractPaymentDetails({
+          x402Version: 2,
+          accepts: [{ scheme: "batch-settlement", network: "solana:x", amount: "1", asset: "m", payTo: "p", maxTimeoutSeconds: 300 }],
+        } as never)
+      ).toThrow(/exact/);
+    });
+
     it("should extract payment details", () => {
       const paymentRequired = {
         x402Version: 2,
