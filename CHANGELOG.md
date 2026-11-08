@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed — only `exact` payment options are signed
+
+- `extractPaymentDetails` took the 402's first option whatever its scheme, and
+  every caller signs an exact transfer. A gateway listing `upto` or
+  `batch-settlement` first would have had an exact payment signed against its
+  terms, against `upto` for the ceiling. It now selects an `exact` option (or one
+  with no scheme, v1) in any position, and throws when there is none.
+
 ## [3.26.2] - 2026-11-07
 
 ### Fixed — a failed job says what happened to the payment
