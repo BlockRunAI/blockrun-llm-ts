@@ -44,7 +44,7 @@ console.log(r.response);         // the proof
 ## Why This SDK
 
 - 🧠 **Smart routing that pays for itself.** The bundled [Router Core V3](https://github.com/BlockRunAI/router-core) engine (shared with [ClawRouter](https://github.com/BlockRunAI/ClawRouter)) classifies every request locally in <1ms across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions and routes to the cheapest capable model.
-- 🆓 **<!-- br:models.free -->8<!-- /br:models.free --> genuinely free models.** $0 in and out, including two 1M-context Nemotrons, two that accept images, and free coding models from Cohere and Poolside.
+- 🆓 **<!-- br:models.free -->9<!-- /br:models.free --> genuinely free models.** $0 in and out, including two 1M-context Nemotrons, two that accept images, and free coding models from Cohere and Poolside.
 - 🔐 **Two ways to connect.** A **BlockRun API key** billed against account credit ([sign up](https://user.blockrun.ai), [create a key](https://user.blockrun.ai/dashboard/keys), [add credit](https://user.blockrun.ai/dashboard/credits)), or a wallet signature with x402 micropayments and no account at all. Same code either way.
 - 💸 **Pay per request in USDC.** x402 micropayments on Solana, Base or Arc. Agents can fund and pay their own way.
 - 🛡️ **Automatic failover.** Transient errors (timeouts, 429, 5xx) before payment walk the router's ranked fallback chain instead of failing your request; a failure after a payment was sent never buys a second model.
@@ -57,7 +57,7 @@ console.log(r.response);         // the proof
 | ------------------ | -------------- | ----------------- | ---------------- | ----------------------------------------------------------------------- |
 | **Cost routing**   | ✗ one vendor   | Manual selection  | Manual selection | **Automatic — <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->% cheaper** |
 | **Models**         | GPT only       | 200+              | 100+ (BYO keys)  | **<!-- br:models.chatVisible -->91<!-- /br:models.chatVisible -->, one credential** |
-| **Free tier**      | ✗              | Rate-limited      | ✗                | **<!-- br:models.free -->8<!-- /br:models.free --> models, no signup**  |
+| **Free tier**      | ✗              | Rate-limited      | ✗                | **<!-- br:models.free -->9<!-- /br:models.free --> models, no signup**  |
 | **Auth**           | API key        | Account + API key | Your API keys    | **API key *or* wallet signature**                                       |
 | **Payment**        | Card + invoice | Credit card       | BYO keys         | **Account credit or USDC per-request**                                  |
 | **Agent-ready**    | ✗              | ✗                 | ✗                | **✓ — one key, or agents fund their own wallet**                        |
@@ -351,7 +351,7 @@ const reply = await client.chat('nvidia/nemotron-3.5-lightning', 'hello', {
 
 | Profile | Strategy | Savings vs Opus 5 | Best For |
 |---------|----------|-------------------|----------|
-| `eco` | Cheapest capable model — ranks the <!-- br:models.free -->8<!-- /br:models.free -->-model free tier first | **<!-- br:savings.ecoVsBaselinePct -->98<!-- /br:savings.ecoVsBaselinePct -->%** | Cost-sensitive production, zero-cost testing |
+| `eco` | Cheapest capable model — ranks the <!-- br:models.free -->9<!-- /br:models.free -->-model free tier first | **<!-- br:savings.ecoVsBaselinePct -->98<!-- /br:savings.ecoVsBaselinePct -->%** | Cost-sensitive production, zero-cost testing |
 | `auto` | Best balance of cost and quality (default) | **<!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->%** | General use |
 | `premium` | Highest-quality model per tier | 0% | Quality-critical tasks |
 
