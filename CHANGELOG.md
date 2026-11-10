@@ -11,14 +11,29 @@
   attack through oversized arrays (fixed in zod 4.6.6). 2.30 depends on
   zod `^4.6.6`, so wallets that install the batch peers no longer pull in zod 3.
 - `@solana/kit` peer is now `>=8.0.0`, which `@x402/svm` 2.30 requires.
+- **Peer ranges narrowed.** Batch users on `@x402/*` 2.28 or `@solana/kit` 5–7
+  must upgrade both. Apps that don't use batch are unaffected at runtime,
+  but npm 7+ refuses the install (ERESOLVE) when the app already has kit 5–7
+  installed for its own code; upgrade kit or install with `--legacy-peer-deps`.
 - Batch payments are unchanged unless the gateway opts in: with no
   `transactionVersions` in the 402's `extra`, the scheme still builds v0
-  transactions. The channel storage key, the channel account layout (256
-  bytes, rent payer at 216), `resolveDepositAmount` and `loadChannel` are the
-  same as in 2.28, so the escrow cap, refund loading and layout guard work
-  as before. New in 2.30: the scheme refuses an accept whose fee payer
-  is the wallet itself, and checks a server's corrective voucher state
-  through `checkCorrectiveState`.
+  transactions (`CLIENT_SUPPORTED_TRANSACTION_VERSIONS` is `[0, 1]`). The
+  channel storage key, the channel account layout (256 bytes, rent payer at
+  216), `resolveDepositAmount` and `loadChannel` are the same as in 2.28, so
+  the escrow cap, refund preloading and layout guard work as before.
+- New in 2.30, all refused before anything is signed, so the call pays
+  `exact` instead (unpaid): an accept whose fee payer is the wallet itself, and
+  a malformed `extra.transactionVersions`. Corrective voucher state is checked
+  more strictly (`checkCorrectiveState`); a rejected one is resynced from the
+  chain as before.
+- Refund lookup: when `close()` runs without the channel preloaded, a
+  server-signed refund now reads the stored record before scanning the chain.
+  A record that still needs a resync therefore fails `close()` with
+  `ChannelResyncRequiredError` instead of falling through to the scan. Nothing
+  is signed or forgotten; retry once the RPC can settle the record.
+- `@x402/core` 2.30's client code is unchanged from 2.28. Its headers must now
+  decode to a JSON object, network IDs must match CAIP-2 exactly, and a 402
+  may list at most 1,024 accepts; BlockRun's 402s already comply.
 - Upgrade: `npm install @x402/core@~2.30.0 @x402/svm@~2.30.0 @solana/kit@^8`.
 
 ## [3.26.4] - 2026-11-08
