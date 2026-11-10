@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.26.5] - 2026-11-09
+
 ### Fixed — Solana exact payments sign on the 402's quoted blockhash
 
 - When a Solana `exact` 402 carries `extra.recentBlockhash`, the payment
