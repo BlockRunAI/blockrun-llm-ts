@@ -2,7 +2,13 @@
 
 ## [Unreleased]
 
-## [3.27.0] - 2026-11-09
+## [4.0.0] - 2026-11-10
+
+### Breaking — batch-settlement peers narrowed
+
+Major version because the optional peer ranges narrow: `@x402/core` /
+`@x402/svm` `~2.28.0` → `~2.30.0` and `@solana/kit` `>=5.1.0` → `>=8.0.0`.
+The SDK API is unchanged. Details and upgrade steps below.
 
 ### Security — x402 2.30, zod 4
 
