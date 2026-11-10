@@ -8,6 +8,7 @@
 import { signTypedData } from "viem/accounts";
 import type { PaymentRequired, ResourceInfo } from "./types";
 import { loadSolanaWeb3, loadSplToken } from "./solana-deps.js";
+import { bs58 } from "./bs58";
 
 // Chain and token constants
 export const BASE_CHAIN_ID = 8453;
@@ -204,6 +205,30 @@ async function getBlockhashEntry(
   return entry;
 }
 
+/**
+ * The blockhash a 402 quotes in `extra.recentBlockhash`, or null when it quotes
+ * none or something that is not a blockhash.
+ *
+ * A gateway can quote the blockhash it wants the payment built on: one at
+ * `finalized` commitment, which every verifier in a lagging pool has already
+ * seen, and the one its own checks (a payment-window bound, a proof tied to
+ * the quote) are computed against. The batch scheme already signs on this
+ * value via `@x402/svm`; the exact scheme did not.
+ *
+ * Only a string that decodes from base58 to exactly 32 bytes is taken. Any
+ * other value is ignored and the payment is built exactly as it would be with
+ * no quote, so a malformed 402 cannot make a payment unbuildable.
+ */
+export function quotedBlockhash(extra: Record<string, unknown> | undefined): string | null {
+  const value = extra?.recentBlockhash;
+  if (typeof value !== "string" || value.length === 0) return null;
+  try {
+    return bs58.decode(value).length === 32 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Test seam: drop cached state so a test starts from a cold client. */
 export function __resetSolanaPaymentCaches(): void {
   blockhashCache.clear();
@@ -358,6 +383,11 @@ export interface CreateSolanaPaymentOptions {
   resourceUrl?: string;
   resourceDescription?: string;
   maxTimeoutSeconds?: number;
+  /**
+   * The 402 accept's `extra`, echoed back as `accepted.extra`. When it carries
+   * a valid `recentBlockhash`, the transaction is signed on that blockhash
+   * instead of one fetched from `rpcUrl`.
+   */
   extra?: Record<string, unknown>;
   extensions?: Record<string, unknown>;
   rpcUrl?: string;
@@ -492,7 +522,18 @@ export async function createSolanaPaymentPayload(
     return null;
   };
 
-  let entry = await getBlockhashEntry(connection, rpcUrl, options.forceFreshBlockhash ?? false);
+  // A blockhash the 402 quotes is the one the payment is signed on. It never
+  // enters `blockhashCache`: it belongs to this 402, and a later payment with
+  // no quote must still get the client's own latest blockhash. It DOES go
+  // through `issuedFor`, which is keyed by blockhash alone, so two payments on
+  // one quoted hash still differ in bytes, as do a quoted and a fetched
+  // payment that happen to share a hash. `forceFreshBlockhash` does not
+  // override a quote: a stale-blockhash re-sign re-reads the NEW 402, whose
+  // quote is the gateway's current one.
+  const quoted = quotedBlockhash(options.extra);
+  let entry: BlockhashEntry = quoted
+    ? { blockhash: quoted, fetchedAt: Date.now() }
+    : await getBlockhashEntry(connection, rpcUrl, options.forceFreshBlockhash ?? false);
   let serializedTx = findDistinctTx(entry);
 
   if (serializedTx === null) {
@@ -502,7 +543,9 @@ export async function createSolanaPaymentPayload(
     // record of what was issued against it is keyed by that blockhash, so it
     // survives. The search therefore has to run again over whatever comes back
     // rather than restarting at the default price, which on an unchanged
-    // blockhash would rebuild the very first transaction.
+    // blockhash would rebuild the very first transaction. With a quoted hash
+    // whose range is spent, the fallback is the same: the client's own current
+    // blockhash, i.e. the payment as it was built before quotes were honoured.
     entry = await getBlockhashEntry(connection, rpcUrl, true);
     serializedTx = findDistinctTx(entry);
   }
