@@ -532,7 +532,7 @@ interface BuiltClient {
   load: (key: string) => Promise<void>;
 }
 
-const INSTALL_HINT = "npm install @x402/core@~2.28.0 @x402/svm@~2.28.0 @solana/kit";
+const INSTALL_HINT = "npm install @x402/core@~2.30.0 @x402/svm@~2.30.0 @solana/kit@^8";
 
 async function load<T>(pkg: string, importer: () => Promise<T>): Promise<T> {
   try {
@@ -1337,7 +1337,7 @@ export function dropOrphanedPending(
 const PAYMENT_CHANNELS_PROGRAM_ID = "CHNLxYvVA28MJP9PrFuDXccuoGXAx7jBacfLEkahyGsX";
 
 /**
- * Byte layout of a channel account, as `@x402/svm` 2.28 decodes it:
+ * Byte layout of a channel account, as `@x402/svm` 2.30 decodes it:
  * discriminator u8, version u8, bump u8, status u8, salt u64, deposit u64,
  * settled u64, payoutWatermark u64, closureStartedAt i64, payerWithdrawnAt
  * i64, gracePeriod u32, distributionHash [32], payer, payee,
@@ -2275,7 +2275,7 @@ type DepositSizer = (
 let warnedNoSizer = false;
 
 /**
- * The scheme's storage key for an accept's channel, as `@x402/svm` 2.28
+ * The scheme's storage key for an accept's channel, as `@x402/svm` 2.30
  * builds it (`channelKey`): network, asset, receiver, fee payer, withdraw
  * delay, receiver authorizer, voucher signer, operator. Undefined when the
  * accept lacks the parts. If upstream ever changes the format, the key

@@ -176,7 +176,9 @@ describe("createSolanaPaymentPayload with a quoted blockhash", () => {
     for (let i = 0; i < 65; i++) expect(signedBlockhash(await pay(extra))).toBe(QUOTED);
     const overflow = await pay(extra);
     expect(signedBlockhash(overflow)).toBe(FETCHED);
-  });
+    // 66 real ed25519 signatures: 2-8 s under a parallel full-suite run, past
+    // vitest's 5 s default (it timed out on main at 8.2 s), so allow 30 s.
+  }, 30_000);
 });
 
 // Every SolanaLLMClient path that signs an exact payment re-requests the
