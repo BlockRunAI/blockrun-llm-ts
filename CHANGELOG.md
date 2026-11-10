@@ -42,6 +42,23 @@ The SDK API is unchanged. Details and upgrade steps below.
   may list at most 1,024 accepts; BlockRun's 402s already comply.
 - Upgrade: `npm install @x402/core@~2.30.0 @x402/svm@~2.30.0 @solana/kit@^8`.
 
+## [3.26.5] - 2026-11-09
+
+### Fixed — Solana exact payments sign on the 402's quoted blockhash
+
+- When a Solana `exact` 402 carries `extra.recentBlockhash`, the payment
+  transaction is now signed on that blockhash instead of one the SDK fetched
+  from its own RPC. The gateway can quote a `finalized` blockhash that every
+  facilitator verifier has already seen, and can bind its own checks to it.
+  The batch scheme already did this.
+- Only a string that decodes from base58 to 32 bytes is used; anything else
+  is ignored and the payment is built exactly as before. With no quote the
+  transaction is byte-for-byte unchanged.
+- A quoted blockhash never enters the client's own blockhash cache, and the
+  duplicate-transaction guard covers it, so two same-priced payments on one
+  quoted hash still produce distinct transactions.
+- A stale-blockhash re-sign signs on the new 402's quote.
+
 ## [3.26.4] - 2026-11-08
 
 ### Fixed — router-core 273c2af (2026-11 router audit)
