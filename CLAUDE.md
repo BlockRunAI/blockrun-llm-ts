@@ -114,7 +114,7 @@ src/
 
 - User docs: `docs/solana-batch.md` holds the full runtime contract; the README keeps a summary. Update both on behavior changes.
 - Opt-in via `SolanaLLMClient({ batch: { operators, maxDeposit } })`; drives the official
-  `@x402/svm` 2.28 `BatchSvmScheme` (server-signed/operator mode) through `@x402/core`'s
+  `@x402/svm` 2.30 `BatchSvmScheme` (server-signed/operator mode) through `@x402/core`'s
   `x402HTTPClient`. Peers are optional and lazily imported; tsup keeps them external.
 - **Trust is the caller's:** batch is off unless the caller lists an operator. BlockRun's key is
   exported as `BLOCKRUN_SOL_OPERATOR` (5YKPQUFj…1vm3, production, both channel roles) but is

@@ -703,7 +703,7 @@ operator to sign vouchers against the channel, up to `maxDeposit`.
 Batch mode needs three more optional peers on top of the Solana ones:
 
 ```bash
-npm install @x402/core@~2.28.0 @x402/svm@~2.28.0 @solana/kit
+npm install @x402/core@~2.30.0 @x402/svm@~2.30.0 @solana/kit@^8
 ```
 
 ```typescript

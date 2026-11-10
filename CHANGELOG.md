@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [3.27.0] - 2026-11-09
+
+### Security — x402 2.30, zod 4
+
+- Batch-settlement peers move to `@x402/core` / `@x402/svm` `~2.30.0`.
+  `@x402/core` 2.28 depended on zod 3, which is open to an out-of-memory
+  attack through oversized arrays (fixed in zod 4.6.6). 2.30 depends on
+  zod `^4.6.6`, so wallets that install the batch peers no longer pull in zod 3.
+- `@solana/kit` peer is now `>=8.0.0`, which `@x402/svm` 2.30 requires.
+- Batch payments are unchanged unless the gateway opts in: with no
+  `transactionVersions` in the 402's `extra`, the scheme still builds v0
+  transactions. The channel storage key, the channel account layout (256
+  bytes, rent payer at 216), `resolveDepositAmount` and `loadChannel` are the
+  same as in 2.28, so the escrow cap, refund loading and layout guard work
+  as before. New in 2.30: the scheme refuses an accept whose fee payer
+  is the wallet itself, and checks a server's corrective voucher state
+  through `checkCorrectiveState`.
+- Upgrade: `npm install @x402/core@~2.30.0 @x402/svm@~2.30.0 @solana/kit@^8`.
+
 ## [3.26.4] - 2026-11-08
 
 ### Fixed — router-core 273c2af (2026-11 router audit)

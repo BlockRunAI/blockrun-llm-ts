@@ -50,7 +50,7 @@ In addition to the Solana wallet dependencies (`@solana/web3.js`,
 `@solana/spl-token`), batch mode needs three optional peer dependencies:
 
 ```bash
-npm install @x402/core@~2.28.0 @x402/svm@~2.28.0 @solana/kit
+npm install @x402/core@~2.30.0 @x402/svm@~2.30.0 @solana/kit@^8
 ```
 
 ```typescript

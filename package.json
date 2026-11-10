@@ -1,6 +1,6 @@
 {
   "name": "@blockrun/llm",
-  "version": "3.26.4",
+  "version": "3.27.0",
   "type": "module",
   "description": "TypeScript SDK for BlockRun - every frontier model behind one OpenAI-compatible client. Pay with a BlockRun API key or per-call in USDC. Smart routing picks the cheapest capable model. No rate limits.",
   "main": "dist/index.cjs",
@@ -60,10 +60,10 @@
     "@blockrun/core": "^0.1.0",
     "@blockrun/router-core": "https://codeload.github.com/BlockRunAI/router-core/tar.gz/273c2af0a9abe70212efbad7117b72eb3038cffc",
     "@eslint/js": "^10.0.1",
-    "@solana/kit": "^5.5.1",
+    "@solana/kit": "^8.4.0",
     "@types/node": "^26.4.1",
-    "@x402/core": "2.28.0",
-    "@x402/svm": "2.28.0",
+    "@x402/core": "2.30.0",
+    "@x402/svm": "2.30.0",
     "eslint": "^10.9.1",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
@@ -84,11 +84,11 @@
   },
   "packageManager": "pnpm@9.15.4",
   "peerDependencies": {
-    "@solana/kit": ">=5.1.0",
+    "@solana/kit": ">=8.0.0",
     "@solana/spl-token": "^0.4.15",
     "@solana/web3.js": "^1.98.4",
-    "@x402/core": "~2.28.0",
-    "@x402/svm": "~2.28.0"
+    "@x402/core": "~2.30.0",
+    "@x402/svm": "~2.30.0"
   },
   "peerDependenciesMeta": {
     "@solana/kit": {
