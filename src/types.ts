@@ -936,10 +936,9 @@ export interface VideoGenerateOptions {
   /**
    * Whether the model should produce a synced audio track. Token360 / Seedance
    * only — silently ignored by xAI Grok. When omitted, the gateway defaults to
-   * `true` for text-to-video and `false` for image- or face-conditioned
-   * generation (the t2v / i2v split that matches Token360's quality profile).
-   * Pass an explicit boolean to override. Audio generation may be a paid
-   * surcharge upstream, so callers should expose this as a visible toggle.
+   * `true` for every input: text, image-to-video, first/last frame, reference
+   * images/video/audio and RealFace. Pass `false` for a silent clip. The price
+   * is the same either way.
    */
   generateAudio?: boolean;
   /** Reproducibility seed when supported by the model. */

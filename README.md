@@ -1216,7 +1216,7 @@ const seedance = await client.generate('aerial drone shot over a snowy mountain'
   model: 'bytedance/seedance-2.0',
   aspectRatio: '21:9',
   resolution: '1080p',
-  generateAudio: true,    // omit to use the model's default
+  generateAudio: true,    // Seedance default for every input; false = silent clip
   seed: 42,
   returnLastFrame: true,  // useful for clip chaining
 });
