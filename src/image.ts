@@ -38,6 +38,8 @@ import {
   validateApiUrl,
   sanitizeErrorResponse,
   validateResourceUrl,
+  buildPaymentRejectedError,
+  paymentRejectedErrorFromBody,
 } from "./validation";
 
 const DEFAULT_API_URL = "https://blockrun.ai/api";
@@ -339,9 +341,7 @@ export class ImageClient {
 
     // Check for errors
     if (retryResponse.status === 402) {
-      throw new PaymentError(
-        "Payment was rejected. Check your wallet balance."
-      );
+      throw await buildPaymentRejectedError(retryResponse);
     }
 
     if (!retryResponse.ok) {
@@ -428,6 +428,10 @@ export class ImageClient {
         status?: string;
         error?: string;
       };
+
+      // A refused payment on a poll (settlement failed, or PAYMENT_REPLAY):
+      // the gateway's reason and recovery fields, never a re-sign.
+      if (pollResp.status === 402) throw paymentRejectedErrorFromBody(pollBody, 402);
 
       if (!pollResp.ok) {
         throw new APIError(

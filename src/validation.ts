@@ -9,6 +9,7 @@
  */
 
 import type { Account } from "viem/accounts";
+import { PAYMENT_REPLAY, PaymentError, PaymentReplayError } from "./types";
 
 /**
  * Allowed domains for localhost development.
@@ -384,4 +385,152 @@ export function extractPrivateKey(account: Account): `0x${string}` {
     "Unable to extract private key from account. " +
       "This may indicate an incompatible viem version."
   );
+}
+
+// ---------------------------------------------------------------------------
+// Refused payments: the ONE place a paid request's 402 becomes an error.
+// ---------------------------------------------------------------------------
+
+/**
+ * Fields of a `PAYMENT_REPLAY` body kept verbatim on {@link PaymentReplayError}.
+ * The gateway's shapes (blockrun `src/lib/payment-nonce.ts`):
+ *
+ *   402 {error: "Payment authorization already used", message, code, payer}
+ *   402 {error: "Payment authorization already settled", code, message,
+ *        wallet_auth: {timestamp, message, headers, expires_in}}
+ *   202 {status: "in_progress", object: "generation.job", message, code, payer,
+ *        id, job_id, poll_url, recoverable: true}   (a job POST; not an error)
+ */
+const REPLAY_FIELDS = [
+  "error",
+  "message",
+  "details",
+  "code",
+  "payer",
+  "id",
+  "job_id",
+  "poll_url",
+  "recoverable",
+  "wallet_auth",
+  "status",
+] as const;
+
+function asRecord(body: unknown): Record<string, unknown> {
+  return body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+}
+
+function bodyCode(body: Record<string, unknown>): string | undefined {
+  if (typeof body.code === "string") return body.code;
+  const nested = asRecord(body.error);
+  return typeof nested.code === "string" ? nested.code : undefined;
+}
+
+/**
+ * Does this response body say `code: "PAYMENT_REPLAY"`? The gateway sends it
+ * when the signed authorization was already submitted once. The earlier
+ * request may have been served and charged, so the answer is never "sign a new
+ * payment and try again".
+ */
+export function isPaymentReplay(body: unknown): boolean {
+  return bodyCode(asRecord(body))?.toUpperCase() === PAYMENT_REPLAY;
+}
+
+/**
+ * Does a refusal point at an earlier request's result (`recoverable`,
+ * `poll_url`, `job_id`, `wallet_auth`)? The chat path treats that as replay
+ * evidence even without the code, as the Python SDK does.
+ * @internal
+ */
+export function namesEarlierResult(body: unknown): boolean {
+  const record = asRecord(body);
+  return ["recoverable", "poll_url", "job_id", "wallet_auth"].some((key) => Boolean(record[key]));
+}
+
+function boundedString(value: unknown, max: number): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length < max ? value : undefined;
+}
+
+function replayError(body: Record<string, unknown>, statusCode: number): PaymentReplayError {
+  const detail: Record<string, unknown> = {};
+  for (const key of REPLAY_FIELDS) if (body[key] !== undefined && body[key] !== null) detail[key] = body[key];
+  detail.code = PAYMENT_REPLAY;
+  for (const field of PAYMENT_FACT_FIELDS) if (typeof body[field] === "string") detail[field] = body[field];
+  const serverMessage = typeof body.message === "string" ? body.message : "";
+  const pollUrl = typeof body.poll_url === "string" ? body.poll_url : "";
+  const details = typeof body.details === "string" ? body.details : "";
+  let text =
+    "Payment authorization already used (PAYMENT_REPLAY): an earlier request " +
+    "with this authorization was accepted and may already have been charged. " +
+    "Nothing new was signed; a fresh payment for the same request can charge twice.";
+  if (pollUrl) text += ` Its result can be collected at ${pollUrl}.`;
+  if (serverMessage) text += ` Gateway: ${serverMessage}`;
+  if (details && details !== serverMessage) text += ` (${details})`;
+  return new PaymentReplayError(text, { statusCode, response: detail });
+}
+
+/**
+ * Turn a refused payment's body into the error to throw.
+ *
+ * - `code: "PAYMENT_REPLAY"` (or `replay: true`, for a caller with its own
+ *   evidence) gives a {@link PaymentReplayError} carrying the gateway's
+ *   `message`, `details`, `poll_url`, `job_id`, `wallet_auth` and `payer`
+ *   verbatim. Callers must not answer it by signing again.
+ * - Anything else gives a {@link PaymentError} whose message is the gateway's
+ *   reason. Clients used to throw "Payment was rejected. Check your wallet
+ *   balance." for every 402, which hid `PAYMENT_MALFORMED`, facilitator
+ *   reasons and already-used authorizations behind a balance guess.
+ *
+ * Mirrors the Python SDK's `validation.build_payment_rejected_error`.
+ */
+export function paymentRejectedErrorFromBody(
+  body: unknown,
+  statusCode = 402,
+  options: { replay?: boolean } = {}
+): PaymentError {
+  const record = asRecord(body);
+  if (options.replay ?? isPaymentReplay(record)) return replayError(record, statusCode);
+
+  const sanitized = { ...(sanitizeErrorResponse(record) as Record<string, unknown>) };
+  // The facilitator's `details` enum and `invalidMessage` cause are safe to
+  // surface verbatim; bounded defensively all the same.
+  const details = boundedString(record.details, 256);
+  if (details) sanitized.details = details;
+  const invalidMessage = boundedString(record.invalidMessage, 256);
+  if (invalidMessage) sanitized.invalidMessage = invalidMessage;
+  const reason = boundedString(record.reason, 128);
+  if (reason) sanitized.reason = reason;
+
+  const nested = asRecord(record.error);
+  const title = typeof record.error === "string" ? record.error : typeof nested.message === "string" ? nested.message : "";
+  const serverMessage = typeof record.message === "string" ? record.message : "";
+  let detailPart = details || title;
+  // A flat body's prose `message` beside its short `error` title is the
+  // gateway's actual explanation (PAYMENT_MALFORMED names the bad field).
+  if (!details && serverMessage && serverMessage !== detailPart) {
+    detailPart = detailPart ? `${detailPart}: ${serverMessage}` : serverMessage;
+  }
+  if (invalidMessage) detailPart = detailPart ? `${detailPart} (${invalidMessage})` : invalidMessage;
+  const message = detailPart
+    ? `Payment rejected by gateway: ${detailPart}`
+    : `Payment rejected by gateway (HTTP ${statusCode}); it gave no reason`;
+  return new PaymentError(message, { statusCode, response: sanitized });
+}
+
+/**
+ * Read a refused payment's response and turn it into the error to throw. See
+ * {@link paymentRejectedErrorFromBody}. Consumes the body.
+ */
+export async function buildPaymentRejectedError(
+  response: Response,
+  options: { replay?: (body: unknown) => boolean } = {}
+): Promise<PaymentError> {
+  let body: unknown;
+  try {
+    const text = await response.text();
+    body = text ? (JSON.parse(text) as unknown) : {};
+  } catch {
+    body = {};
+  }
+  const replay = options.replay ? options.replay(body) || undefined : undefined;
+  return paymentRejectedErrorFromBody(body, response.status, { replay });
 }

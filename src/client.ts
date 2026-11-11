@@ -118,6 +118,8 @@ import {
   validateMaxTokens,
   sanitizeErrorResponse,
   validateResourceUrl,
+  buildPaymentRejectedError,
+  namesEarlierResult,
 } from "./validation";
 import { logCost } from "./cost-log";
 import { USER_AGENT } from "./version";
@@ -794,7 +796,7 @@ export class LLMClient {
         body: JSON.stringify(body),
       }, timeoutMs);
       if (retryResp2.status !== 502 && retryResp2.status !== 503) {
-        if (retryResp2.status === 402) throw new PaymentError("Payment was rejected. Check your wallet balance.");
+        if (retryResp2.status === 402) throw await buildPaymentRejectedError(retryResp2, { replay: namesEarlierResult });
         if (!retryResp2.ok) {
           let errorBody: unknown;
           try { errorBody = await retryResp2.json(); } catch { errorBody = { error: "Request failed" }; }
@@ -806,7 +808,7 @@ export class LLMClient {
 
     // Check for errors
     if (retryResponse.status === 402) {
-      throw new PaymentError("Payment was rejected. Check your wallet balance.");
+      throw await buildPaymentRejectedError(retryResponse, { replay: namesEarlierResult });
     }
 
     if (!retryResponse.ok) {
@@ -1047,7 +1049,7 @@ export class LLMClient {
       body: JSON.stringify(body),
     });
 
-    if (streamResp.status === 402) throw new PaymentError("Payment was rejected. Check your wallet balance.");
+    if (streamResp.status === 402) throw await buildPaymentRejectedError(streamResp, { replay: namesEarlierResult });
     if (!streamResp.ok) {
       let errorBody: unknown;
       try { errorBody = await streamResp.json(); } catch { errorBody = { error: "Request failed" }; }
@@ -1190,7 +1192,7 @@ export class LLMClient {
         body: JSON.stringify(body),
       });
       if (retryResp2.status !== 502 && retryResp2.status !== 503) {
-        if (retryResp2.status === 402) throw new PaymentError("Payment was rejected. Check your wallet balance.");
+        if (retryResp2.status === 402) throw await buildPaymentRejectedError(retryResp2, { replay: namesEarlierResult });
         if (!retryResp2.ok) {
           let errorBody: unknown;
           try { errorBody = await retryResp2.json(); } catch { errorBody = { error: "Request failed" }; }
@@ -1202,7 +1204,7 @@ export class LLMClient {
     }
 
     if (retryResponse.status === 402) {
-      throw new PaymentError("Payment was rejected. Check your wallet balance.");
+      throw await buildPaymentRejectedError(retryResponse, { replay: namesEarlierResult });
     }
 
     if (!retryResponse.ok) {
@@ -1349,7 +1351,7 @@ export class LLMClient {
         },
       });
       if (retryResp2.status !== 502 && retryResp2.status !== 503) {
-        if (retryResp2.status === 402) throw new PaymentError("Payment was rejected. Check your wallet balance.");
+        if (retryResp2.status === 402) throw await buildPaymentRejectedError(retryResp2, { replay: namesEarlierResult });
         if (!retryResp2.ok) {
           let errorBody: unknown;
           try { errorBody = await retryResp2.json(); } catch { errorBody = { error: "Request failed" }; }
@@ -1361,7 +1363,7 @@ export class LLMClient {
     }
 
     if (retryResponse.status === 402) {
-      throw new PaymentError("Payment was rejected. Check your wallet balance.");
+      throw await buildPaymentRejectedError(retryResponse, { replay: namesEarlierResult });
     }
 
     if (!retryResponse.ok) {

@@ -1376,9 +1376,78 @@ export class RetiredEndpointError extends BlockrunError {
 }
 
 export class PaymentError extends BlockrunError {
-  constructor(message: string) {
+  /** HTTP status of the refusal, when it came from the gateway. */
+  statusCode?: number;
+  /** The gateway's refusal body, sanitized; recovery fields kept verbatim. */
+  response?: Record<string, unknown>;
+
+  constructor(message: string, options?: { statusCode?: number; response?: Record<string, unknown> }) {
     super(message);
     this.name = "PaymentError";
+    if (options?.statusCode !== undefined) this.statusCode = options.statusCode;
+    if (options?.response !== undefined) this.response = options.response;
+  }
+}
+
+/** The gateway's `code` for a payment authorization it has already seen. */
+export const PAYMENT_REPLAY = "PAYMENT_REPLAY" as const;
+
+/**
+ * The EIP-191 challenge the gateway issues for a settled authorization:
+ * sign `message` with the paying wallet and resend the same request with the
+ * headers named in `headers` (`X-Wallet-Address`, `X-Wallet-Timestamp`,
+ * `X-Wallet-Signature`) to get the earlier request's `poll_url`.
+ */
+export interface WalletAuthChallenge {
+  timestamp: string;
+  message: string;
+  headers: string[];
+  expires_in: number;
+  [key: string]: unknown;
+}
+
+/**
+ * The gateway refused the payment as already used (`code: "PAYMENT_REPLAY"`).
+ *
+ * Not a balance problem. The same signed authorization was already submitted
+ * once (usually a retry or a proxy re-sent it), and that earlier request may
+ * already have been served and charged. The SDK throws this without signing
+ * anything new: a fresh authorization for the same request can be a second
+ * charge.
+ *
+ * Every field the gateway sent is kept verbatim: `serverMessage` / `details`
+ * (its `message` and `details`), `pollUrl` / `jobId` (where the earlier
+ * result can be collected), `walletAuth` (the EIP-191 challenge for a settled
+ * authorization; the SDK does not answer it for you yet) and `payer`.
+ * `response` carries the same fields under the gateway's own key names.
+ * Extends {@link PaymentError}, so existing `instanceof PaymentError` checks
+ * keep working.
+ */
+export class PaymentReplayError extends PaymentError {
+  readonly code = PAYMENT_REPLAY;
+  serverMessage?: string;
+  details?: string;
+  pollUrl?: string;
+  jobId?: string;
+  recoverable?: boolean;
+  walletAuth?: WalletAuthChallenge;
+  payer?: string;
+
+  constructor(message: string, options?: { statusCode?: number; response?: Record<string, unknown> }) {
+    super(message, options);
+    this.name = "PaymentReplayError";
+    const body = options?.response ?? {};
+    const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
+    this.serverMessage = str(body.message);
+    this.details = str(body.details);
+    this.pollUrl = str(body.poll_url);
+    this.jobId = str(body.job_id) ?? str(body.id);
+    if (typeof body.recoverable === "boolean") this.recoverable = body.recoverable;
+    const walletAuth = body.wallet_auth;
+    if (walletAuth && typeof walletAuth === "object" && !Array.isArray(walletAuth)) {
+      this.walletAuth = walletAuth as WalletAuthChallenge;
+    }
+    this.payer = str(body.payer);
   }
 }
 

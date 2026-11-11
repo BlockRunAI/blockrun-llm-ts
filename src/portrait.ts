@@ -46,6 +46,7 @@ import {
   validatePrivateKey,
   validateApiUrl,
   sanitizeErrorResponse,
+  buildPaymentRejectedError,
 } from "./validation";
 
 const DEFAULT_API_URL = "https://blockrun.ai/api";
@@ -205,7 +206,7 @@ export class PortraitClient {
     });
 
     if (retry.status === 402) {
-      throw new PaymentError("Payment was rejected. Check your wallet balance.");
+      throw await buildPaymentRejectedError(retry);
     }
     const data = await this.unwrap<Record<string, unknown>>(retry, true);
 

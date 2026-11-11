@@ -58,6 +58,8 @@ import type { PaymentRequired } from "./types";
 import {
   paymentFactsNote,
   sanitizeErrorResponse,
+  isPaymentReplay,
+  paymentRejectedErrorFromBody,
   validateApiUrl,
   validateMaxTokens,
   validateResourceUrl,
@@ -175,21 +177,31 @@ async function readPaymentFailureBody(response: Response): Promise<string | null
  * @internal Exported for the payment safety regression tests.
  */
 export async function isSafeStaleBlockhashResponse(response: Response): Promise<boolean> {
+  const body = await readPaymentFailure(response);
+  return body !== null && isSafeStaleBlockhashBody(body);
+}
+
+/**
+ * Read a paid request's 402 body once, bounded. Null when it is oversized,
+ * unreadable or not a JSON object.
+ */
+async function readPaymentFailure(response: Response): Promise<Record<string, unknown> | null> {
   const length = Number(response.headers.get("content-length") || "0");
-  if (Number.isFinite(length) && length > MAX_PAYMENT_FAILURE_BYTES) return false;
+  if (Number.isFinite(length) && length > MAX_PAYMENT_FAILURE_BYTES) return null;
 
   const text = await readPaymentFailureBody(response);
-  if (text === null) return false;
+  if (text === null) return null;
 
-  let body: Record<string, unknown>;
   try {
     const parsed = JSON.parse(text) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
-    body = parsed as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
   } catch {
-    return false;
+    return null;
   }
+}
 
+function isSafeStaleBlockhashBody(body: Record<string, unknown>): boolean {
   const nested = body.error && typeof body.error === "object" && !Array.isArray(body.error)
     ? body.error as Record<string, unknown>
     : undefined;
@@ -1432,6 +1444,13 @@ export class SolanaLLMClient {
       failIfFailed(data, paid.status);
       if (paid.status === 200 && lastStatus === "completed") return deliver(data, paid);
 
+      // PAYMENT_REPLAY on a paid poll: the authorization was already used.
+      // Re-polling would sign a fresh payment if the job reads unpaid, which
+      // can be a second charge. Surface it with its recovery fields.
+      if (paid.status === 402 && isPaymentReplay(data)) {
+        throw withDisposition(paymentRejectedErrorFromBody(data, 402, { replay: true }), "paid-or-in-doubt");
+      }
+
       if (paid.status === 402 && kind === "video") {
         if (
           data.error === "Payment verification failed" &&
@@ -1816,11 +1835,14 @@ export class SolanaLLMClient {
    */
   private async assertPaid(response: Response): Promise<void> {
     if (response.status === 402) {
-      if (await isSafeStaleBlockhashResponse(response)) {
+      const body = await readPaymentFailure(response);
+      if (body !== null && isSafeStaleBlockhashBody(body)) {
         // Rejected at verification: nothing settled.
         throw withDisposition(new SafeStaleBlockhashError(), "unpaid");
       }
-      throw withDisposition(new PaymentError("Payment was rejected. Check your Solana USDC balance."), "paid-or-in-doubt");
+      // The gateway's reason, or PaymentReplayError for PAYMENT_REPLAY. Never
+      // re-signed from here.
+      throw withDisposition(paymentRejectedErrorFromBody(body ?? {}, 402), "paid-or-in-doubt");
     }
 
     if (!response.ok) {
