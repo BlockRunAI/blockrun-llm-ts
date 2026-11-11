@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`PAYMENT_REPLAY` is its own error, not "check your wallet balance".** When
+  the gateway refuses a payment as already used (`code: "PAYMENT_REPLAY"`),
+  every paid call (chat, search, image, music, video, speech, voice, phone,
+  price, RPC, portrait, `BlockrunClient`, the Anthropic-compatible client and
+  `SolanaLLMClient`) now throws `PaymentReplayError`, a `PaymentError`
+  subclass exported with the `PAYMENT_REPLAY` constant and the
+  `WalletAuthChallenge` type. It carries the gateway's `message`/`details`
+  (`serverMessage`, `details`) and any `poll_url`, `job_id`,
+  `recoverable`, `wallet_auth` and `payer` verbatim (`pollUrl`, `jobId`,
+  `recoverable`, `walletAuth`, `payer`, and raw on `response`). The SDK
+  signs nothing new for it: the earlier request may already have been
+  charged, and a fresh authorization for the same request can charge twice. A
+  video poll that gets `PAYMENT_REPLAY` no longer treats it as an expired
+  signature and re-signs. Every site goes through one helper,
+  `buildPaymentRejectedError` / `paymentRejectedErrorFromBody` (exported, with
+  `isPaymentReplay`), matching the Python SDK.
+- **Other refused payments say what the gateway said.** A non-replay 402 (for
+  example `PAYMENT_MALFORMED`) throws with the gateway's own reason instead of
+  asserting a balance problem. `PaymentError` now carries `statusCode` and
+  `response`. An image or music poll answered 402 throws `PaymentError`
+  instead of `APIError`.
+
+Not yet: answering a `wallet_auth` challenge automatically (sign it once with
+the paying wallet and resend). Until then, use `PaymentReplayError.walletAuth`.
+
 ## [4.0.0] - 2026-11-10
 
 ### Breaking — batch-settlement peers narrowed

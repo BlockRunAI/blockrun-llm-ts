@@ -47,6 +47,9 @@ import {
   validatePrivateKey,
   validateApiUrl,
   sanitizeErrorResponse,
+  buildPaymentRejectedError,
+  isPaymentReplay,
+  paymentRejectedErrorFromBody,
 } from "./validation";
 
 const DEFAULT_API_URL = "https://blockrun.ai/api";
@@ -352,7 +355,7 @@ export class VideoClient {
     });
 
     if (submitResp.status === 402) {
-      throw new PaymentError("Payment was rejected. Check your wallet balance.");
+      throw await buildPaymentRejectedError(submitResp);
     }
     if (submitResp.status !== 200 && submitResp.status !== 202) {
       await this.throwApiError(submitResp, "Submit failed");
@@ -433,6 +436,12 @@ export class VideoClient {
       }
 
       if (pollResp.status === 402) {
+        // PAYMENT_REPLAY is never an expiry: the authorization was already
+        // used, and a fresh signature here can be a second charge. Surface it
+        // with its recovery fields, sign nothing.
+        if (isPaymentReplay(pollData)) {
+          throw paymentRejectedErrorFromBody(pollData, pollResp.status, { replay: true });
+        }
         // Mid-poll 402 = the signed authorization expired (600s window) on a
         // budget longer than that. Re-challenge + re-sign and keep going. A
         // fresh signature that 402s again is a genuine payment problem.
@@ -447,10 +456,8 @@ export class VideoClient {
             continue;
           }
         }
-        throw new PaymentError(
-          "Payment verification failed mid-poll (not a signature-expiry). " +
-            "Check the wallet balance and that you poll from the wallet that submitted the job."
-        );
+        // A fresh signature that 402s again: the gateway's reason, not a guess.
+        throw paymentRejectedErrorFromBody(pollData, pollResp.status);
       }
 
       if (pollResp.status !== 200 && pollResp.status !== 202 && pollResp.status !== 504) {

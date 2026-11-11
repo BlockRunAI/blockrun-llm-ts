@@ -67,6 +67,7 @@ import {
   validateApiUrl,
   paymentFactsNote,
   sanitizeErrorResponse,
+  buildPaymentRejectedError,
 } from "./validation";
 
 const DEFAULT_API_URL = "https://blockrun.ai/api";
@@ -209,7 +210,7 @@ export class BlockrunClient {
     });
 
     if (submitResp.status === 402) {
-      throw new PaymentError("Payment was rejected. Check your wallet balance.");
+      throw await buildPaymentRejectedError(submitResp);
     }
     if (submitResp.status !== 200 && submitResp.status !== 202) {
       await this.throwApiError(submitResp, `poll submit failed (${submitUrl})`);
@@ -338,9 +339,7 @@ export class BlockrunClient {
         body: requestBody,
       });
       if (streamResp.status === 402) {
-        throw new PaymentError(
-          "Payment was rejected. Check your wallet balance."
-        );
+        throw await buildPaymentRejectedError(streamResp);
       }
       if (!streamResp.ok) {
         await this.throwApiError(streamResp, `stream failed after payment (${url})`);
@@ -442,9 +441,7 @@ export class BlockrunClient {
     const retry = await this.fetchWithTimeout(url, retryInit);
 
     if (retry.status === 402) {
-      throw new PaymentError(
-        "Payment was rejected. Check your wallet balance."
-      );
+      throw await buildPaymentRejectedError(retry);
     }
     if (!retry.ok) {
       await this.throwApiError(retry, `${method} ${url} failed after payment`);

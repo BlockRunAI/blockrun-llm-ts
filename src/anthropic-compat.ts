@@ -7,7 +7,7 @@ import {
   extractPaymentDetails,
 } from './x402.js';
 import { getOrCreateWallet } from './wallet.js';
-import { validatePrivateKey, validateApiUrl, validateResourceUrl } from './validation.js';
+import { validatePrivateKey, validateApiUrl, validateResourceUrl, buildPaymentRejectedError } from './validation.js';
 import { DEFAULT_TIMEOUT } from './client.js';
 
 // ======================================================================
@@ -149,9 +149,7 @@ export class AnthropicClient {
         });
 
         if (response.status === 402) {
-          throw new Error(
-            'Payment was rejected. Check your wallet balance.'
-          );
+          throw await buildPaymentRejectedError(response);
         }
       }
 

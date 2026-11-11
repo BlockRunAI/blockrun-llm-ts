@@ -171,6 +171,9 @@ export {
   // Error classes
   BlockrunError,
   PaymentError,
+  PaymentReplayError,
+  PAYMENT_REPLAY,
+  type WalletAuthChallenge,
   RetiredEndpointError,
   APIError,
   // Whether a failed request may be retried without paying twice
@@ -286,6 +289,10 @@ export {
   validateMaxTokens,
   validateTemperature,
   validateTopP,
+  // Refused payments: PAYMENT_REPLAY and the gateway's reason
+  isPaymentReplay,
+  paymentRejectedErrorFromBody,
+  buildPaymentRejectedError,
 } from "./validation";
 
 // xAI search wire format (snake_case for the gateway) — exported for raw callers.

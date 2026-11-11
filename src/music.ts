@@ -36,6 +36,8 @@ import {
   validatePrivateKey,
   validateApiUrl,
   sanitizeErrorResponse,
+  buildPaymentRejectedError,
+  paymentRejectedErrorFromBody,
 } from "./validation";
 
 const DEFAULT_API_URL = "https://blockrun.ai/api";
@@ -215,7 +217,7 @@ export class MusicClient {
     });
 
     if (retryResponse.status === 402) {
-      throw new PaymentError("Payment was rejected. Check your wallet balance.");
+      throw await buildPaymentRejectedError(retryResponse);
     }
 
     if (!retryResponse.ok) {
@@ -290,6 +292,10 @@ export class MusicClient {
       if (pollResp.status === 202 || TRANSIENT_POLL_STATUSES.has(pollResp.status)) continue;
 
       const pollBody = (await pollResp.json().catch(() => ({}))) as MusicResponse & MusicJobFields;
+
+      // A refused payment on a poll (settlement failed, or PAYMENT_REPLAY):
+      // the gateway's reason and recovery fields, never a re-sign.
+      if (pollResp.status === 402) throw paymentRejectedErrorFromBody(pollBody, 402);
 
       if (!pollResp.ok) {
         throw new APIError(
