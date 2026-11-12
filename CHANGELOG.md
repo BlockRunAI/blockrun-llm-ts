@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-11-12
+
+### Changed — Seedance synced audio defaults on for every input
+
+- `generateAudio` docs: the gateway now turns synced audio on by default for
+  every Seedance input (text, image, first/last frame, reference image, video
+  or audio, RealFace), not only text-to-video. Pass `generateAudio: false` to
+  turn it off. The price does not depend on it.
+
 ### Fixed
 
 - **`PAYMENT_REPLAY` is its own error, not "check your wallet balance".** When
