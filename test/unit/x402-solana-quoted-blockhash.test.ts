@@ -315,3 +315,92 @@ describe("SolanaLLMClient stale-blockhash re-sign uses the new 402's quote", () 
     expect(signedHashes()).toEqual([QUOTE_1, QUOTE_2]);
   });
 });
+
+// sol.blockrun.ai's Modal create 402 quotes a blockhash with its
+// lastValidBlockHeight and an HMAC proof (`blockrunCreateProof`). The gateway
+// checks the payment window only when the signed transaction's blockhash
+// equals the proof's AND `accepted.extra` carries the proof back, so the SDK
+// must do both. Field set copied from a live 402 (2026-11-13).
+describe("SolanaLLMClient Modal create signs on the 402's quoted blockhash", () => {
+  const TEST_BS58_KEY = bs58.encode(PAYER.secretKey);
+  const MODAL_QUOTE = newHash();
+  const PROOF = "eyJibG9ja2hhc2giOiJ4In0.d40a8275c6d49e4fce6060d2787fc4fb14f97da3974b2a0846a027917e35a34b";
+
+  function modal402(extra: Record<string, unknown>): Response {
+    return new Response(
+      JSON.stringify({
+        x402Version: 2,
+        resource: { url: "https://sol.blockrun.ai/api/v1/modal/sandbox/create", description: "Create a sandbox" },
+        accepts: [
+          {
+            scheme: "exact",
+            network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+            amount: "10000",
+            asset: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            payTo: RECIPIENT,
+            maxTimeoutSeconds: 300,
+            extra,
+          },
+        ],
+      }),
+      { status: 402, headers: { "content-type": "application/json" } },
+    );
+  }
+
+  let fetchSpy: ReturnType<typeof vi.fn<typeof fetch>>;
+  const payments = () =>
+    fetchSpy.mock.calls
+      .map((call: Parameters<typeof fetch>) => (call[1]?.headers as Record<string, string> | undefined)?.["PAYMENT-SIGNATURE"])
+      .filter((header): header is string => typeof header === "string");
+
+  beforeEach(() => {
+    fetchSpy = vi.spyOn(globalThis, "fetch") as unknown as ReturnType<typeof vi.fn<typeof fetch>>;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("signs on extra.recentBlockhash and echoes the proof, without asking the RPC", async () => {
+    const extra = {
+      feePayer: FEE_PAYER,
+      description: "Modal API request",
+      mimeType: "application/json",
+      resource: "https://sol.blockrun.ai/api/v1/modal/sandbox/create",
+      recentBlockhash: MODAL_QUOTE,
+      lastValidBlockHeight: "447122559",
+      blockrunCreateProof: PROOF,
+    };
+    fetchSpy
+      .mockResolvedValueOnce(modal402(extra))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ sandbox_id: "sb-1" }), { status: 200, headers: { "content-type": "application/json" } }),
+      );
+    const client = new SolanaLLMClient({ privateKey: TEST_BS58_KEY });
+    await client.modalSandboxCreate({ timeout: 300 });
+
+    const [payment] = payments();
+    expect(payments()).toHaveLength(1);
+    expect(signedBlockhash(payment)).toBe(MODAL_QUOTE);
+    expect(MODAL_QUOTE).not.toBe(FETCHED);
+    expect(rpc.blockhashCalls).toBe(0);
+    const accepted = JSON.parse(atob(payment)).accepted;
+    expect(accepted.extra).toEqual(extra);
+    expect(accepted.amount).toBe("10000");
+    expect(accepted.payTo).toBe(RECIPIENT);
+  });
+
+  it("falls back to its own fetched blockhash when the 402 quotes none", async () => {
+    fetchSpy
+      .mockResolvedValueOnce(modal402({ feePayer: FEE_PAYER }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ sandbox_id: "sb-2" }), { status: 200, headers: { "content-type": "application/json" } }),
+      );
+    const client = new SolanaLLMClient({ privateKey: TEST_BS58_KEY });
+    await client.modalSandboxCreate();
+
+    const [payment] = payments();
+    expect(signedBlockhash(payment)).toBe(FETCHED);
+    expect(rpc.blockhashCalls).toBe(1);
+  });
+});
