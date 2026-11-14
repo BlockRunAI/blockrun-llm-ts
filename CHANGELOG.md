@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Added — `stream()` pays with batch settlement
+
+- With the `batch` option, `SolanaLLMClient.stream()` now pays a stream with
+  batch settlement when the gateway offers it, instead of always paying
+  `exact` at the full `max_tokens` ceiling. It sends
+  `X-BlockRun-Stream-Receipt: 1`; sol.blockrun.ai (live since 2026-11-14)
+  answers with the receipt as a final SSE event, which the SDK reads, removes
+  from the stream your loop sees, and reconciles the channel with. A stream
+  without the event (cut, failed upstream) is looked up at
+  `POST /v1/batch/receipt`.
+- Before this, a streamed call paid `exact`; a hand-rolled batch stream got no
+  receipt at all and the payer booked it as $0, resyncing the channel from
+  chain on the next call.
+
 ## [4.1.0] - 2026-11-12
 
 ### Changed — Seedance synced audio defaults on for every input

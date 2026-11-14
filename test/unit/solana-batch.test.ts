@@ -381,6 +381,111 @@ describe("SolanaLLMClient batch-settlement", () => {
     expect(record.pending).toBeUndefined();
   });
 
+  describe("streams (sol #616: the receipt as a final SSE event)", () => {
+    const CHUNKS = [
+      'data: {"choices":[{"delta":{"content":"g"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"m"}}]}\n\n',
+      'data: {"choices":[],"usage":{"completion_tokens":2}}\n\n',
+    ];
+    async function receiptOf(channelId: string, cumulative: bigint, charged: bigint): Promise<string> {
+      const voucher = await signBatchVoucher(operator, { channelId, maxClaimableAmount: cumulative, expiresAt: 0 });
+      const receipt = { success: true, transaction: "", network: NETWORK, amount: "",
+        extra: { voucher, chargedAmount: charged.toString(), commitmentId: `commit-${cumulative}`, channelState: { channelId, chargedCumulativeAmount: cumulative.toString() } } };
+      return Buffer.from(JSON.stringify(receipt)).toString("base64");
+    }
+    /** An SSE answer sent in small pieces, so events split across chunks. */
+    function sse(text: string): Response {
+      const bytes = new TextEncoder().encode(text);
+      let at = 0;
+      return new Response(new ReadableStream<Uint8Array>({ pull(c) { if (at >= bytes.length) { c.close(); return; } c.enqueue(bytes.slice(at, at + 7)); at += 7; } }),
+        { status: 200, headers: { "content-type": "text/event-stream" } });
+    }
+    const receiptEvent = (paymentResponse: string) => `event: payment-response\ndata: ${JSON.stringify({ type: "payment_response", status: "charged", payment_response: paymentResponse })}\n\n`;
+    const body = { model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "gm" }], stream: true };
+    async function collect(c: SolanaLLMClient): Promise<unknown[]> {
+      const out: unknown[] = [];
+      for await (const chunk of c.stream("/v1/chat/completions", body)) out.push(chunk);
+      return out;
+    }
+    const stored = () => Object.values(JSON.parse(fs.readFileSync(path.join(tmp, "channels.json"), "utf8"))) as Array<Record<string, unknown>>;
+
+    it("pays a stream with batch, asks for the receipt event, hides it from the caller, and books the charge from it", async () => {
+      const c = client({ maxDeposit: "$1" });
+      const exact = stubExact(c);
+      let channelId = "";
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.accepted.scheme).toBe("batch-settlement");
+          expect((init?.headers as Record<string, string>)["X-BlockRun-Stream-Receipt"]).toBe("1");
+          channelId = channelIdOf(payment);
+          return sse(CHUNKS.join("") + receiptEvent(await receiptOf(channelId, 1200n, 1200n)) + "data: [DONE]\n\n");
+        }
+      );
+      const chunks = await collect(c);
+      expect(chunks).toHaveLength(3);
+      expect(JSON.stringify(chunks)).not.toContain("payment_response");
+      await vi.waitFor(() => expect(c.getSpending()).toEqual({ totalUsd: 0.0012, calls: 1 }));
+      expect(exact).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(stored()[0]).toMatchObject({ channelId, chargedCumulativeAmount: "1200" }));
+      expect(stored()[0].pending).toBeUndefined();
+    });
+
+    it("a stream that ends without the event is looked up at /v1/batch/receipt, polling while it is pending", async () => {
+      const c = client({ maxDeposit: "$1" });
+      stubExact(c);
+      let channelId = "";
+      let signed = "";
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => {
+          signed = (init?.headers as Record<string, string>)["PAYMENT-SIGNATURE"];
+          channelId = channelIdOf(decodePayment(init));
+          return sse(CHUNKS.join("")); // cut: no receipt, no [DONE]
+        },
+        async (url, init) => {
+          expect(url).toBe(`${API}/v1/batch/receipt`);
+          expect(JSON.parse(String(init?.body))).toEqual({ paymentHeader: signed });
+          return new Response(JSON.stringify({ status: "pending" }), { headers: { "content-type": "application/json" } });
+        },
+        async () => new Response(JSON.stringify({ status: "charged", payment_response: await receiptOf(channelId, 900n, 900n) }), { headers: { "content-type": "application/json" } })
+      );
+      vi.useFakeTimers({ toFake: ["setTimeout"], shouldAdvanceTime: true });
+      try {
+        expect(await collect(c)).toHaveLength(3);
+        await vi.waitFor(() => expect(c.getSpending()).toEqual({ totalUsd: 0.0009, calls: 1 }), { timeout: 10_000 });
+      } finally { vi.useRealTimers(); }
+      expect(stored()[0]).toMatchObject({ channelId, chargedCumulativeAmount: "900" });
+    });
+
+    it("a caller that stops reading early still gets its charge booked: the payer reads on to the receipt", async () => {
+      const c = client({ maxDeposit: "$1" });
+      stubExact(c);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => sse(CHUNKS.join("") + receiptEvent(await receiptOf(channelIdOf(decodePayment(init)), 700n, 700n)) + "data: [DONE]\n\n")
+      );
+      for await (const _chunk of c.stream("/v1/chat/completions", body)) break;
+      await vi.waitFor(() => expect(c.getSpending()).toEqual({ totalUsd: 0.0007, calls: 1 }));
+    });
+
+    it("a 402 that offers no batch accept streams on exact, as before (no receipt header asked for)", async () => {
+      const c = client({ maxDeposit: "$1" });
+      const exact = stubExact(c);
+      gateway.push(
+        () => quote402([exactAccept()]),
+        async (_url, init) => {
+          expect((init?.headers as Record<string, string>)["PAYMENT-SIGNATURE"]).toBe("exact-payload");
+          expect((init?.headers as Record<string, string>)["X-BlockRun-Stream-Receipt"]).toBeUndefined();
+          return sse(CHUNKS.join("") + "data: [DONE]\n\n");
+        }
+      );
+      expect(await collect(c)).toHaveLength(3);
+      expect(exact).toHaveBeenCalledOnce();
+    });
+  });
+
   describe("configureClient", () => {
     const keyBytes = bs58.decode(TEST_BS58_KEY);
     const paymentRequired = () =>
@@ -693,29 +798,6 @@ describe("SolanaLLMClient batch-settlement", () => {
     await expect(c.chat("openai/gpt-4o-mini", "gm")).resolves.toBe("gm");
     // An unanswered authorization does not touch the chain.
     expect(rpcCalls.filter((r) => r.method === "getAccountInfo" && r.params[0] === channelId)).toHaveLength(0);
-  });
-
-  it("keeps streaming on exact", async () => {
-    const c = client({});
-    const exact = vi
-      .spyOn(c as unknown as { signPaymentFrom402: () => unknown }, "signPaymentFrom402")
-      .mockResolvedValue({ paymentPayload: "exact-payload", costUsd: 0.005 });
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode('data: {"ok":1}\n\ndata: [DONE]\n'));
-        controller.close();
-      },
-    });
-    gateway.push(
-      () => quote402([exactAccept(), batchAccept(operator.address)]),
-      () => new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } })
-    );
-
-    const frames: unknown[] = [];
-    for await (const frame of c.stream("/v1/chat/completions", { stream: true })) frames.push(frame);
-
-    expect(frames).toEqual([{ ok: 1 }]);
-    expect(exact).toHaveBeenCalledTimes(1);
   });
 
   it("shares one channel between clients of the same wallet", async () => {

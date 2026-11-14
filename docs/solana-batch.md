@@ -340,9 +340,22 @@ client.getBatchStats();
 
 ## Scope
 
-Batch covers non-streaming chat: `chat`, `chatCompletion`, `smartChat`, and
-`smartChatCompletion`. `stream()` and the image and media jobs still pay with
+Batch covers chat, buffered and streamed: `chat`, `chatCompletion`, `smartChat`,
+`smartChatCompletion` and `stream()`. The image and media jobs still pay with
 `exact`.
+
+A stream's charge is committed after its headers are sent, so its receipt is
+not a header. `stream()` sends `X-BlockRun-Stream-Receipt: 1`, and the gateway
+sends the receipt as one SSE event (`event: payment-response`) just before
+`data: [DONE]` or `message_stop`. The SDK splits the body: your loop gets its
+branch live with that event removed; the payer reads the other branch to the
+event and reconciles the channel exactly as for a buffered call. A stream that
+ends without the event (cut, failed upstream, an older gateway) is looked up at
+`POST /v1/batch/receipt`, polled while it answers `pending`. The payer's branch
+reads on even when your loop stops early: the model may keep generating after a
+disconnect and is charged for it, and only an open stream brings the receipt
+back. The charge reaches `getSpending()` when the receipt does, which can be
+after your loop ends.
 
 ## One channel per wallet
 

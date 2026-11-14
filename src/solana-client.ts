@@ -53,6 +53,7 @@ import {
 } from "./x402";
 import { solanaKeyToBytes, solanaPublicKey } from "./solana-wallet";
 import { pollJobIdFromUrl, signPollOwnership, type PollKind } from "./poll-ownership";
+import { isEventStream, lookupReceipt, readReceiptEvent, STREAM_RECEIPT_HEADER, withoutReceiptEvent } from "./stream-receipt";
 import { BATCH_SCHEME, SolanaBatchPayer, withPaymentIdentifier, type Rechallenge, type SolanaBatchOptions, type SolanaBatchStats } from "./solana-batch";
 import type { PaymentRequired } from "./types";
 import {
@@ -678,6 +679,10 @@ export class SolanaLLMClient {
    * @returns a response whose body has not been read.
    */
   private async openPaidStream(url: string, requestBody: string): Promise<Response> {
+    // Taken before the first request, as chatCompletion does: a channel close
+    // that completes while this call waits for its 402 keeps it from opening a
+    // new channel.
+    const closesAtStart = await this.batchPayer?.closeFence();
     for (let staleRetries = 0; ; ) {
       const response = await this.fetchWithTimeout(url, {
         method: "POST",
@@ -696,11 +701,15 @@ export class SolanaLLMClient {
       }
 
       try {
-        const { paymentPayload, costUsd } = await this.signPaymentFrom402(
-          url,
-          response,
-          staleRetries > 0
-        );
+        let exactPayment: { paymentPayload: string; costUsd: number };
+        if (this.batchPayer && staleRetries === 0) {
+          const batch = await this.openBatchStream(url, requestBody, await this.readPaymentRequired(response), closesAtStart);
+          if (batch.kind === "stream") return batch.response;
+          exactPayment = await this.signExactPayment(url, batch.paymentRequired, false);
+        } else {
+          exactPayment = await this.signPaymentFrom402(url, response, staleRetries > 0);
+        }
+        const { paymentPayload, costUsd } = exactPayment;
         const paid = await this.fetchWithTimeout(url, {
           method: "POST",
           headers: {
@@ -724,6 +733,93 @@ export class SolanaLLMClient {
         continue;
       }
     }
+  }
+
+  /**
+   * Pay a stream with batch-settlement, when the gateway offers it.
+   *
+   * A stream's charge is committed after its headers are sent, so its receipt
+   * cannot be the `PAYMENT-RESPONSE` header the batch payer reconciles a
+   * buffered call with. The request asks for it as a final SSE event instead
+   * ({@link STREAM_RECEIPT_HEADER}). The body is split in two: the caller gets
+   * its branch at once, live, with the receipt event taken out; the payer reads
+   * the other branch to that event and is handed the answer with the receipt
+   * restored as its header, so the channel advances exactly as it does for a
+   * buffered call. A stream that ends without the event (cut, failed upstream,
+   * an older gateway) is looked up at `POST /v1/batch/receipt`.
+   *
+   * The payer's branch reads to the receipt even when the caller stops early,
+   * so the connection stays open: the gateway charges for what the model
+   * generates either way, and only an open stream brings its receipt back.
+   *
+   * @returns the caller's stream, or the requirements to pay `exact` against
+   *   when batch is unavailable for this call.
+   */
+  private async openBatchStream(
+    url: string,
+    requestBody: string,
+    paymentRequired: PaymentRequired,
+    closesAtStart: number | undefined
+  ): Promise<{ kind: "stream"; response: Response } | { kind: "exact"; paymentRequired: PaymentRequired }> {
+    const headers = { "Content-Type": "application/json", "User-Agent": USER_AGENT, [STREAM_RECEIPT_HEADER]: "1" };
+    let handOff!: (response: Response) => void;
+    const handedOff = new Promise<Response>((resolve) => { handOff = resolve; });
+    const attempt = this.batchPayer!.pay(
+      paymentRequired,
+      async (paymentHeaders) => {
+        const answer = await this.fetchWithTimeout(url, { method: "POST", headers: { ...headers, ...paymentHeaders }, body: requestBody });
+        // An error, or a gateway that answered without streaming: the payer
+        // classifies it as it would any buffered answer.
+        if (!answer.ok || !answer.body || !isEventStream(answer)) return answer;
+        const [forCaller, forPayer] = answer.body.tee();
+        handOff(new Response(withoutReceiptEvent(forCaller), { status: answer.status, statusText: answer.statusText, headers: answer.headers }));
+        let receipt = (await readReceiptEvent(forPayer))?.paymentResponse;
+        const signed = paymentHeaders["PAYMENT-SIGNATURE"];
+        if (receipt === undefined && signed) receipt = (await lookupReceipt(this.apiUrl, signed))?.payment_response;
+        const settled = new Headers(answer.headers);
+        if (receipt) settled.set("PAYMENT-RESPONSE", receipt);
+        return new Response(null, { status: answer.status, statusText: answer.statusText, headers: settled });
+      },
+      // A fresh, unpaid challenge after a 429 wait, as chatCompletion sends.
+      async (): Promise<Rechallenge> => {
+        const challenge = await this.sendUnpaid(url, { method: "POST", headers, body: requestBody });
+        if (challenge.status === 402) {
+          try {
+            return { kind: "challenge", paymentRequired: await this.readPaymentRequired(challenge) };
+          } catch (error) {
+            throw withDisposition(error, "unpaid");
+          }
+        }
+        if (challenge.ok) return { kind: "served", response: challenge };
+        throw await unpaidApiError(challenge);
+      },
+      closesAtStart
+    );
+    // Never left unhandled: once the stream is handed off, the payment settles
+    // in the background, after the caller has started reading.
+    const settled = attempt.then(
+      (outcome) => ({ outcome }) as const,
+      (error: unknown) => ({ error }) as const
+    );
+    const first = await Promise.race([handedOff.then((response) => ({ response }) as const), settled]);
+    if ("response" in first) {
+      void settled.then((result) => {
+        if ("outcome" in result && result.outcome.kind === "paid") this.recordSettlement(result.outcome.chargedUsd, result.outcome.response);
+        // Anything else (an answer the payer could not reconcile) the payer has
+        // already logged, counted and handed to `batch.onEvent`.
+      });
+      return { kind: "stream", response: first.response };
+    }
+    if ("error" in first) throw first.error;
+    const outcome = first.outcome;
+    if (outcome.kind === "paid") {
+      // Paid, but answered without a stream: hand it over as it came.
+      this.recordSettlement(outcome.chargedUsd, outcome.response);
+      return { kind: "stream", response: outcome.response };
+    }
+    if (outcome.kind === "served") return { kind: "stream", response: outcome.response };
+    if (outcome.kind === "failed") throw outcome.error;
+    return { kind: "exact", paymentRequired: outcome.paymentRequired ?? paymentRequired };
   }
 
   /**

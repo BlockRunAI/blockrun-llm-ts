@@ -55,10 +55,12 @@
  * Every fallback, backoff, recovery and raise is logged, counted and handed
  * to `batch.onEvent`, so a batch problem is never silent.
  *
- * Only non-streaming chat completions use it. Streamed responses commit their
- * charge after the headers are sent, so they carry no `PAYMENT-RESPONSE`
- * receipt for the client to reconcile against, and media jobs are charged on a
- * later poll. Both keep paying with `exact`.
+ * Chat completions use it, buffered and streamed. A streamed response commits
+ * its charge after the headers are sent, so its receipt arrives as a final SSE
+ * event (or from `POST /v1/batch/receipt`), and `SolanaLLMClient.stream`
+ * restores it as the `PAYMENT-RESPONSE` header before handing the answer here
+ * (see stream-receipt.ts). Media jobs are charged on a later poll and keep
+ * paying with `exact`.
  */
 import { AsyncLocalStorage } from "async_hooks";
 import { randomUUID } from "crypto";
