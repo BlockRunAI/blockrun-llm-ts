@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-11-14
+
 ### Added — `stream()` pays with batch settlement
 
 - With the `batch` option, `SolanaLLMClient.stream()` now pays a stream with
