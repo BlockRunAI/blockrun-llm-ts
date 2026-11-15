@@ -235,6 +235,8 @@ export {
   BatchPaymentUnresolvedError,
   BatchCloseDeferredError,
   BatchChannelLockedError,
+  BatchChannelBusyError,
+  DEFAULT_BATCH_BUSY_WAIT_MS,
   type BatchUnresolvedReason,
   type BatchPayloadKind,
   type SolanaBatchOptions,

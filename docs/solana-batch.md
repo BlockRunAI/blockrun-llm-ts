@@ -231,13 +231,13 @@ nothing was charged:
 
 - the 402 has no batch accept, offers only client-signed ones (`client_signed_not_supported`), or names an operator outside `operators`;
 - the deposit the call needs does not fit in the room `maxDeposit` leaves;
-- another batch call for the same wallet is in flight;
+- another batch call for the same wallet is in flight (`channel_busy`, under the default `onBusy: "exact"`; see [One call at a time](#one-call-at-a-time));
 - a deposit is in doubt, or a channel record is being re-read from the chain (below);
 - the gateway refuses batch, or a 402 answers the first send (see the table);
 - a recent deposit was refused by a facilitator admission check (`admission_refused`, for the cooldown described in the table);
 - the gateway still answers 429 after the retries `rateLimit` allows, when nothing was charged.
 
-Parallel calls never queue behind the channel, except during a 429 cooldown (below).
+Parallel calls do not queue behind the channel unless `onBusy` is `"wait"`, except during a 429 cooldown (below).
 
 ## Deposit size
 
@@ -312,7 +312,7 @@ stderr, each time it happens:
 
 | Event type | `reason` values |
 | --- | --- |
-| `backoff` | `rate_limited`, `cooldown`, `in_doubt`, `channel_store_locked` (`onLocked: "wait"`) |
+| `backoff` | `rate_limited`, `cooldown`, `in_doubt`, `channel_store_locked` (`onLocked: "wait"`), `channel_busy` (`onBusy: "wait"`) |
 | `recovered` | the backoff reason it followed (`rate_limited`, `cooldown`, `in_doubt`), `served_unpaid_on_rechallenge`, or `batch_cancelled` |
 | `fallback` | `not_offered`, `client_signed_not_supported`, `channel_busy`, `untrusted_operator`, `deposit_over_cap`, `channel_pending`, `closed_during_call`, `peer_dependency_missing`, `payment_creation_failed`, `wallet_config_conflict`, `channel_store_locked`, `deposit_journal_unreadable`, `deposit_journal_failed`, `channel_resync_pending`, `channel_resync_failed`, `channel_unreadable`, `payment_required`, `admission_refused`, `rate_limited`, or one of the recognised refusal codes (`batch_payer_not_allowed`, `batch_payer_not_admitted`, `batch_admission_paused`, `batch_server_signed_only`, `batch_unavailable`, `batch_channel_limit`, `PAYMENT_VERIFICATION_UNAVAILABLE`) |
 | `resync` | `deposit_unanswered`, `deposit_failed`, `deposit_rate_limited`, `deposit_refused`, `receipt_missing`, `receipt_unreconciled`, `orphaned_deposit`, `deposit_unrecorded`, `channel_unusable` |
@@ -388,6 +388,33 @@ and `smartChat()` may move on (and meet the same lock). A process that loses
 its lock to another owner raises it too unless `onLocked` is `"exact"`. A lock that names the current process but was not taken by this SDK
 version is never treated as stale; if no process uses it (say, a crashed
 process whose pid was reused), delete the `.lock` and `.lock.owner` files.
+
+## One call at a time
+
+A channel carries one pending authorization, and each voucher builds on the
+previous call's metered charge, which is known only once that call's answer is
+in. So a wallet pays one batch call at a time: from the payment until the
+answer is reconciled (for `stream()`, until its receipt is read, also when the
+caller stopped reading). The gateway also allows one live channel per payer
+(PayAI's per-merchant cap, `batch_channel_limit`), so a pool of channels per
+wallet is not an option; for parallel batch calls, use one wallet per worker.
+
+`batch.onBusy` picks what a call does while another batch call of the wallet is
+in flight in this process:
+
+| `onBusy` | A call while the wallet is busy |
+| --- | --- |
+| `"exact"` (default) | pays `exact`; a `fallback` event, reason `channel_busy` |
+| `"wait"` | one `backoff` event (`channel_busy`, `retryAfterMs` = `busyWaitMs`), then looks at the wallet every 100 ms; once it is free, starts over from a fresh, unpaid challenge and pays with batch, or raises `BatchChannelBusyError` when `batch.busyWaitMs` (default 60000) runs out |
+| `"throw"` | raises `BatchChannelBusyError` at once |
+
+`BatchChannelBusyError` (`wallet`, `waitedMs`) is raised before anything is
+signed: its retry disposition is `"unpaid"`. Waiting calls are not served in
+arrival order, the wait does not count against `rateLimit.maxWaitMs`, and a
+call whose payment is in doubt can hold the wallet up to `inDoubt.maxWaitMs`
+(300 s by default), longer than the default wait. A queue of N long
+generations takes N times as long: `"wait"` trades latency for price. While
+calls wait, `closeBatchChannel()` defers with `call_in_flight`.
 
 ## State and crash safety
 
