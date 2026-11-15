@@ -37,6 +37,7 @@ src/
 ├── voice.ts             # VoiceClient — AI outbound phone calls
 ├── phone.ts             # PhoneClient — phone lookup + number provisioning
 ├── search.ts            # SearchClient — Grok Live Search
+├── decisions.ts         # decisions() body check — typed judgments (POST /v1/decisions, gpt-6-luna)
 ├── price.ts             # PriceClient — Pyth market data
 ├── surf.ts              # SurfClient — DEPRECATED: gateway retired /v1/surf/* (410); warns once
 ├── rpc.ts               # RpcClient — multi-chain JSON-RPC (Tatum, 40+ chains)
@@ -273,9 +274,10 @@ nothing signed). The lock is per process, not per call (issue #96 tracks sharing
   `prepareTopUp` sized), `withDepositBlockhash()` adds a `finalized` one (cached 10 s per RPC URL) to
   the SDK's copy of the 402. Additive only: never replaces the 402's own; `@x402/core` matches the
   echoed accept as a superset. A failed read leaves the 402 as is.
-- Only `requestWithPayment` (non-stream chat) uses it. Streams have no `PAYMENT-RESPONSE` to
-  reconcile, and media jobs are charged on a later poll — keep both on `exact` unless the
-  gateway contract changes.
+- `requestWithPayment` (buffered chat and `decisions()`, which sol meters on reported input
+  tokens) and `openBatchStream` (streams, receipt from the final SSE event or
+  `POST /v1/batch/receipt`) use it. Media jobs are charged on a later poll — keep them on
+  `exact` unless the gateway contract changes.
 
 ## Supported chains
 

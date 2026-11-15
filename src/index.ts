@@ -129,6 +129,13 @@ export {
   // Search result
   type SearchResult,
   type SearchOptions,
+  type DecisionsRequest,
+  type DecisionsResponse,
+  type DecisionQuestion,
+  type DecisionAnswer,
+  type DecisionChoice,
+  type DecisionLevel,
+  type DecisionInputMessage,
   // Spending tracking
   type Spending,
   type SearchUsage,
@@ -298,3 +305,4 @@ export {
 // xAI search wire format (snake_case for the gateway) — exported for raw callers.
 export { toWireSearchParameters, toWireTools } from "./search-wire";
 export { readSettlement } from "./receipt";
+export { DECISIONS_DEFAULT_MODEL } from "./decisions";

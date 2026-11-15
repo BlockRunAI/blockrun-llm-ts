@@ -55,7 +55,8 @@
  * Every fallback, backoff, recovery and raise is logged, counted and handed
  * to `batch.onEvent`, so a batch problem is never silent.
  *
- * Chat completions use it, buffered and streamed. A streamed response commits
+ * Chat completions use it, buffered and streamed, and so does `decisions()`
+ * (metered on the input tokens the provider reports). A streamed response commits
  * its charge after the headers are sent, so its receipt arrives as a final SSE
  * event (or from `POST /v1/batch/receipt`), and `SolanaLLMClient.stream`
  * restores it as the `PAYMENT-RESPONSE` header before handing the answer here

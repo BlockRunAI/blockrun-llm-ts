@@ -115,6 +115,7 @@ The Anthropic SDK is a runtime dependency because the public compatibility wrapp
 | Enable metered batch settlement | [Batch settlement](#batch-settlement-optional-metered-billing) and the [full reference](https://github.com/BlockRunAI/blockrun-llm-ts/blob/main/docs/solana-batch.md) |
 | Stream tokens, use tools | [Chat, Tools and Streaming](#chat-tools-and-streaming) |
 | Generate media or query data services | [Models and Service APIs](#models-and-service-apis) |
+| Get typed yes/no, choice or score answers | [Decisions](#decisions-typed-judgments) |
 | Use the OpenAI or Anthropic SDK surface | [OpenAI and Anthropic Compatibility](#openai-and-anthropic-compatibility) |
 | Create, find or import a wallet | [Wallets](#wallets) |
 | Configure production credentials safely | [Configuration and Environment Variables](#configuration-and-environment-variables) and [Security](#security) |
@@ -737,9 +738,9 @@ await client.closeBatchChannel();
 - **Explicit trust.** `operators` has no default, and the SDK never learns a trusted key from a 402.
 - **Bounded exposure.** `maxDeposit` caps the escrow deposited and not yet settled on-chain; it is the most the operator could claim without another authorization from you.
 - **Never pays twice.** Anything that goes wrong before a batch payment is sent falls back to `exact`. Once one is sent, a call whose payment may have been charged throws `BatchPaymentUnresolvedError` and is never paid again (no new payment, no `exact`, no fallback model).
-- **Chat, buffered and streamed.** `chat`, `chatCompletion`, `smartChat`, `smartChatCompletion` and `stream()` use batch; media jobs pay `exact`. A stream's receipt arrives as a final SSE event the SDK reads and removes before your loop sees it (it never reaches your chunks), or, for a stream that is cut, from `POST /v1/batch/receipt` afterwards. Its charge is booked in `getSpending()` once that receipt is in, which can be a few seconds after your loop ends: the model may keep generating after a disconnect, and that is charged too.
+- **Chat, buffered and streamed, and Decisions.** `chat`, `chatCompletion`, `smartChat`, `smartChatCompletion`, `stream()` and `decisions()` use batch; media jobs pay `exact`. A stream's receipt arrives as a final SSE event the SDK reads and removes before your loop sees it (it never reaches your chunks), or, for a stream that is cut, from `POST /v1/batch/receipt` afterwards. Its charge is booked in `getSpending()` once that receipt is in, which can be a few seconds after your loop ends: the model may keep generating after a disconnect, and that is charged too.
 - **One channel per wallet.** All clients for a wallet share one channel, saved to `~/.blockrun/solana-batch/<wallet>.json` (mode `0600`) so a restart reuses it.
-- **One call at a time per wallet.** A channel carries one pending authorization, and each voucher builds on the previous call's metered charge, which is known only once that call's answer is in. So the wallet stays busy from payment until the answer is reconciled: the whole generation, and for `stream()` the whole stream (including a stream your loop stopped reading: the SDK keeps reading it to its receipt, because everything generated is charged). A concurrent chat call on the same wallet (`chat`, `chatCompletion`, `smartChat`, `smartChatCompletion`, `stream()`) falls back to `exact` meanwhile, reported as `channel_busy`; it does not queue. For parallel batch calls, give each worker its own wallet ([#98](https://github.com/BlockRunAI/blockrun-llm-ts/issues/98) tracks queueing and multi-channel options).
+- **One call at a time per wallet.** A channel carries one pending authorization, and each voucher builds on the previous call's metered charge, which is known only once that call's answer is in. So the wallet stays busy from payment until the answer is reconciled: the whole generation, and for `stream()` the whole stream (including a stream your loop stopped reading: the SDK keeps reading it to its receipt, because everything generated is charged). A concurrent batch call on the same wallet (`chat`, `chatCompletion`, `smartChat`, `smartChatCompletion`, `stream()`, `decisions()`) falls back to `exact` meanwhile, reported as `channel_busy`; it does not queue. For parallel batch calls, give each worker its own wallet ([#98](https://github.com/BlockRunAI/blockrun-llm-ts/issues/98) tracks queueing and multi-channel options).
 - **One process per wallet.** The process that opens the channel holds its store's lock until it exits. Other processes on that wallet (worker pools, PM2/cluster workers, parallel runs) pay `exact`, reported as `channel_store_locked`. Give each worker its own wallet, or route calls through one process. `batch.onLocked: "wait"` waits up to `batch.lockWaitMs` (default 60 s) for the lock, and `"throw"` raises `BatchChannelLockedError` (unpaid, nothing signed) instead of paying `exact`.
 - **Observable.** Every fallback, backoff, recovery and re-read writes one stderr line; `batch.onEvent` and `client.getBatchStats()` expose the same events and counters.
 
@@ -1374,6 +1375,53 @@ const phone = new PhoneClient();
 const info = await phone.lookup('+14155552671');
 const { phone_number } = await phone.buyNumber({ country: 'US', areaCode: '415' });
 ```
+
+### Decisions (typed judgments)
+
+`decisions()` asks `gpt-6-luna` questions with a fixed answer space and gets one
+typed answer per question back instead of text: a `predicate` (probability that
+it holds), a `choice` (one of your values, with per-value probabilities) or a
+`score` (position on an ordered rubric). Request and response match OpenAI's
+Decisions API. It is on `LLMClient`, `SolanaLLMClient` and the OpenAI wrapper
+(`client.decisions.create()`), with an API key or a wallet.
+
+```typescript
+import { LLMClient } from '@blockrun/llm';
+
+const client = new LLMClient();
+
+const { answers, costUsd } = await client.decisions({
+  input: 'My card was charged twice for one order and nobody answers my emails.',
+  questions: [
+    { type: 'predicate', name: 'urgent', instructions: 'Does this need a reply today?' },
+    {
+      type: 'choice', name: 'team', instructions: 'Which team owns this?',
+      choices: [{ value: 'billing' }, { value: 'shipping' }, { value: 'none', description: 'fits no team' }],
+    },
+    {
+      type: 'score', name: 'anger', instructions: 'How upset is the writer?',
+      levels: [{ label: 'calm' }, { label: 'annoyed' }, { label: 'furious' }], // lowest first
+    },
+  ],
+});
+// [{ type: 'predicate', name: 'urgent', probability: 0.85 },
+//  { type: 'choice', name: 'team', choice: 'billing', probabilities: [...], confidence: 1 },
+//  { type: 'score', name: 'anger', score: 1, probabilities: [...], confidence: 1 }]
+```
+
+Only input tokens are billed. A wallet call pays the 402's quote: an
+upper-bound estimate of the input tokens plus the $0.001 transaction fee. Under
+Solana [batch settlement](#batch-settlement-optional-metered-billing) it pays
+the input tokens the provider reports and no per-call fee instead, so a short
+question costs a few thousandths of a cent. With an API key the account is
+billed on reported tokens.
+
+`input` is a string or messages with text and inline `data:image/*` images
+(hosted image URLs are refused). The gateway caps a call at 64 questions,
+255 choices or levels each, 120,000 characters of text and 8 images, and
+refuses an over-limit request with a 400 before any payment. A `choice` always
+picks one of your values, so give it a `none` value for inputs that fit
+nothing.
 
 ### Standalone Search
 

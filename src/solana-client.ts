@@ -1,5 +1,6 @@
 import { toWireSearchParameters, toWireTools } from "./search-wire";
 import { settlementSkipped, withCost } from "./receipt";
+import { buildDecisionsBody } from "./decisions";
 import { accountErrorDisposition, resolveApiKeyAuth, requireWallet, type ApiKeyAuth, type ApiKeyOptions } from "./api-key.js";
 /**
  * BlockRun Solana LLM Client.
@@ -30,6 +31,8 @@ import type {
   ImageEditOptions,
   Spending,
   SearchResult,
+  DecisionsRequest,
+  DecisionsResponse,
   SearchOptions,
   VideoResponse,
   MusicResponse,
@@ -986,6 +989,23 @@ export class SolanaLLMClient {
     if (options?.toDate !== undefined) body.to_date = options.toDate;
     const data = await this.requestWithPaymentRaw("/v1/search", body);
     return data as unknown as SearchResult;
+  }
+
+  /**
+   * Typed judgments (OpenAI Decisions-compatible, `gpt-6-luna`), paid on
+   * Solana: one typed answer per question instead of text. See
+   * {@link LLMClient.decisions} for the request shape.
+   *
+   * Under `exact` the 402's quote settles (an upper-bound estimate of the
+   * input tokens plus the $0.001 fee). With the `batch` option the call pays
+   * with a channel voucher and is charged the input tokens the provider
+   * reports, with no per-call fee; `costUsd` is that metered charge. It shares
+   * the wallet's channel with chat, one batch call at a time.
+   */
+  async decisions(request: DecisionsRequest): Promise<DecisionsResponse> {
+    const body = buildDecisionsBody(request);
+    const response = await this.requestWithPayment("/v1/decisions", body);
+    return response as unknown as DecisionsResponse;
   }
 
   // ── Prediction Markets (Powered by Predexon) ────────────────────────────
