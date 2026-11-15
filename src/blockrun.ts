@@ -26,7 +26,7 @@ import { readSseFrames } from "./sse";
  *
  *   const br = new BlockrunClient({ privateKey: "0x..." });
  *
- *   // Crypto price (Pyth, free)
+ *   // Crypto price (daily close, free)
  *   const btc = await br.get("/v1/crypto/price/BTC-USD");
  *
  *   // Standalone web search
