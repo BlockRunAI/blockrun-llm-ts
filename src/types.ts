@@ -1147,6 +1147,10 @@ export interface PricePoint {
   category?: string;
   source?: string;
   free?: boolean;
+  /** `false` for the daily-close feeds served today. */
+  realtime?: boolean;
+  /** The gateway's note on the data, e.g. "Daily close, not realtime. ..." */
+  note?: string;
 }
 
 export interface PriceBar {

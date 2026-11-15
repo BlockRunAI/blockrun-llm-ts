@@ -17,6 +17,18 @@
 - New types: `DecisionsRequest`, `DecisionsResponse`, `DecisionQuestion`,
   `DecisionAnswer`, `DecisionChoice`, `DecisionLevel`, `DecisionInputMessage`;
   `DECISIONS_DEFAULT_MODEL`.
+### Fixed — market data
+
+- `PriceClient.price()` keeps the gateway's `realtime` flag and `note` (it
+  dropped them), so a caller can see the data is a daily close.
+- README and TSDoc: market data is crypto / FX / commodity daily closes from
+  Chainlink and Backpack, free, not Pyth and not realtime. Equity `price()` and
+  `history()` answer 501 today (`APIError`); stock symbol lists still work.
+
+### Docs
+
+- README: per-call `costUsd` and timeout rules moved from Solana Support to
+  How Payment Works, since they apply to `LLMClient` too.
 
 ## [4.2.1] - 2026-11-15
 

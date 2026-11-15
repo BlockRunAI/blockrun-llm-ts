@@ -38,7 +38,7 @@ src/
 ├── phone.ts             # PhoneClient — phone lookup + number provisioning
 ├── search.ts            # SearchClient — Grok Live Search
 ├── decisions.ts         # decisions() body check — typed judgments (POST /v1/decisions, gpt-6-luna)
-├── price.ts             # PriceClient — Pyth market data
+├── price.ts             # PriceClient — market data (crypto/FX/commodity daily close, free; stocks 501)
 ├── surf.ts              # SurfClient — DEPRECATED: gateway retired /v1/surf/* (410); warns once
 ├── rpc.ts               # RpcClient — multi-chain JSON-RPC (Tatum, 40+ chains)
 ├── solana-deps.ts       # Lazy loader for the optional Solana peer deps

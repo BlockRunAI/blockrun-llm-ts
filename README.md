@@ -582,7 +582,27 @@ console.log(`Lifetime: $${summary.totalUsd.toFixed(2)} over ${summary.calls} cal
 console.log('By model:', summary.byModel);
 ```
 
-Only `LLMClient` wallet settlements (Base / Arc chat) are appended to
+#### Per-call cost and timeouts
+
+Each paid chat response on `LLMClient` and `SolanaLLMClient` carries what it
+cost. `costUsd` is what the call added to `getSpending()`: the signed price
+under `exact`, the metered `extra.chargedAmount` under Solana batch settlement,
+`0` for a free model; it is undefined in API-key mode (billed to the account).
+`settlement` holds the scheme, the quote and the transaction. When the gateway
+answers a paid request from a free fallback model it skips settlement:
+`costUsd` is `0`, `settlement.skipped` is `"free-fallback"`, and nothing is
+added to `getSpending()`.
+
+Both clients default to a 600 s request timeout (`BLOCKRUN_CHAT_TIMEOUT`, in
+seconds, overrides it; the per-call `timeout` option, in ms, overrides both).
+A call aborted after its payment was sent may already have been charged, so it
+is never paid again automatically; under Solana batch settlement it raises
+`BatchPaymentUnresolvedError` (see
+[Batch settlement](#batch-settlement-optional-metered-billing)).
+
+#### Cost log and on-chain records
+
+Only `LLMClient` wallet settlements (Base / Arc) are appended to
 `~/.blockrun/cost_log.jsonl` automatically. Other clients count their payments
 in their own `getSpending()`. Account usage lives on the
 [Activity](https://user.blockrun.ai/dashboard/activity) page, not in-process.
@@ -648,19 +668,8 @@ const quick = await client.chatCompletion('reflection/beam-1.0-501b-a23b', messa
 });
 ```
 
-`costUsd`, `settlement` and the per-call `timeout` work the same on `LLMClient`
-(Base / Arc). Both clients default to a 600 s request timeout
-(`BLOCKRUN_CHAT_TIMEOUT`, in seconds, overrides it; the `timeout` option, in
-ms, overrides both). A call aborted after its payment was sent may already
-have been charged; under Solana batch settlement such a call raises
-`BatchPaymentUnresolvedError` rather than being paid again (see
-[Batch settlement](#batch-settlement-optional-metered-billing)).
-
-`costUsd` is what the call added to `getSpending()`: the signed price under `exact`, the metered `extra.chargedAmount` under batch settlement,
-`0` for a free model; it is undefined in API-key mode (billed to the account).
-When the gateway answers a paid request from a free fallback model it skips
-settlement: `costUsd` is `0`, `settlement.skipped` is `"free-fallback"`, and
-nothing is added to `getSpending()`.
+`costUsd`, `settlement` and the request timeout work as on `LLMClient`: see
+[Per-call cost and timeouts](#per-call-cost-and-timeouts).
 
 **Setup:**
 1. Export your Solana wallet key: `export SOLANA_WALLET_KEY="your-bs58-key"`
@@ -1445,33 +1454,29 @@ for (const c of result.citations ?? []) console.log(c.url);
 The same endpoint is available as `search()` on `LLMClient` and
 `SolanaLLMClient`.
 
-### Market Data (Pyth)
+### Market Data
 
-`PriceClient` wraps the Pyth-backed market-data endpoints. Crypto, FX and
-commodity are free (price + history + list); 12 global stock markets and the
-`usstock` legacy alias are billed per call for price + history (list is always
-free). Pass `requireWallet: false` to construct a free-only client.
+`PriceClient` wraps the market-data endpoints: crypto, FX and commodity prices,
+history and symbol lists, **free and without a wallet**. They are daily closes,
+not realtime (every response carries `realtime: false`), sourced from Chainlink
+feeds and Backpack.
 
 ```typescript
 import { PriceClient } from '@blockrun/llm';
 
 const p = new PriceClient({ requireWallet: false });
-const btc = await p.price('crypto', 'BTC-USD');
+const btc = await p.price('crypto', 'BTC-USD');      // btc.price, btc.source, btc.realtime === false
 const eur = await p.price('fx', 'EUR-USD');
+const gold = await p.price('commodity', 'XAU-USD');
+const bars = await p.history('crypto', 'ETH-USD', { resolution: 'D', from: 1760000000, to: 1762000000 });
 const symbols = await p.listSymbols('crypto', { query: 'sol', limit: 20 });
-
-// Paid: requires an API key or a wallet
-const p2 = new PriceClient();
-const aapl = await p2.price('stocks', 'AAPL', { market: 'us' });
-const bars = await p2.history('stocks', 'AAPL', {
-  market: 'us',
-  resolution: 'D',
-  from: 1700000000,
-  to: 1710000000,
-});
 ```
 
-Supported `StockMarket` values: `us, hk, jp, kr, gb, de, fr, nl, ie, lu, cn, ca`.
+**Equities are catalog-only for now.** `listSymbols('stocks', { market })` still
+lists the 12 markets' tickers (`us, hk, jp, kr, gb, de, fr, nl, ie, lu, cn, ca`),
+but stock `price()` and `history()` answer `501` (an `APIError` with
+`statusCode` 501): BlockRun does not currently serve equity prices. Nothing is
+charged for them.
 
 ### Prediction Markets (Powered by Predexon)
 

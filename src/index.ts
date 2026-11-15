@@ -152,7 +152,7 @@ export {
   type SmartChatResponse,
   type SmartChatCompletionOptions,
   type SmartChatCompletionResponse,
-  // Pyth market-data types
+  // Market-data types
   type PriceCategory,
   type StockMarket,
   type BarResolution,

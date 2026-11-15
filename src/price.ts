@@ -1,20 +1,23 @@
 import { resolveApiKeyAuth, type ApiKeyAuth } from "./api-key.js";
 /**
- * BlockRun Price Client - Pyth-backed market data via x402.
+ * BlockRun Price Client - market data (daily close, not realtime).
  *
- * Payment gating mirrors CategoryConfig.paid in the backend:
  *   crypto, fx, commodity      → FREE across price + history + list
- *   usstock, stocks/{market}   → PAID for price + history; list always free
+ *                                (Chainlink feeds and Backpack; `realtime: false`)
+ *   usstock, stocks/{market}   → list only. Price and history answer 501
+ *                                (an APIError): equity prices are not served
+ *                                today. The paid-x402 path is kept for when
+ *                                they return.
  *
  * Usage:
  *   import { PriceClient } from "@blockrun/llm";
  *
- *   const p = new PriceClient({ privateKey: "0x..." });
+ *   const p = new PriceClient({ requireWallet: false });
  *   const btc = await p.price("crypto", "BTC-USD");
- *   const aapl = await p.price("stocks", "AAPL", { market: "us" });
- *   const bars = await p.history("stocks", "AAPL", { market: "us",
- *     from: 1700000000, to: 1710000000 });
+ *   const bars = await p.history("crypto", "ETH-USD", { resolution: "D",
+ *     from: 1760000000, to: 1762000000 });
  *   const symbols = await p.listSymbols("crypto", { query: "sol" });
+ *   const tickers = await p.listSymbols("stocks", { market: "us" });
  */
 
 import { privateKeyToAccount } from "viem/accounts";
@@ -102,6 +105,8 @@ export class PriceClient {
       category: data.category as string | undefined,
       source: data.source as string | undefined,
       free: data.free as boolean | undefined,
+      realtime: data.realtime as boolean | undefined,
+      note: data.note as string | undefined,
     };
   }
 
