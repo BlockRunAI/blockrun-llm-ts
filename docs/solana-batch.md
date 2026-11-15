@@ -341,8 +341,9 @@ client.getBatchStats();
 ## Scope
 
 Batch covers chat, buffered and streamed: `chat`, `chatCompletion`, `smartChat`,
-`smartChatCompletion` and `stream()`. The image and media jobs still pay with
-`exact`.
+`smartChatCompletion` and `stream()`, and `decisions()` (metered on the input
+tokens the provider reports, with no per-call fee). The image and media jobs
+still pay with `exact`.
 
 A stream's charge is committed after its headers are sent, so its receipt is
 not a header. `stream()` sends `X-BlockRun-Stream-Receipt: 1`, and the gateway

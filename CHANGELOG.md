@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Added — `decisions()`: typed judgments
+
+- `LLMClient.decisions()`, `SolanaLLMClient.decisions()` and
+  `OpenAI.decisions.create()` call `POST /v1/decisions` (OpenAI
+  Decisions-compatible, `gpt-6-luna`): questions with a fixed answer space
+  (`predicate`, `choice`, `score`) get one typed answer each instead of text.
+  Works with an API key and with a wallet on Base, Arc and Solana. Only input
+  tokens are billed; under Solana batch settlement the call pays the input
+  tokens the provider reports, with no per-call fee (live: $0.000017 for a
+  162-token question vs $0.001027 under `exact`).
+- A malformed request (no questions, a duplicate name, a choice without
+  choices, ...) throws an `"unpaid"` error before anything is sent.
+- New types: `DecisionsRequest`, `DecisionsResponse`, `DecisionQuestion`,
+  `DecisionAnswer`, `DecisionChoice`, `DecisionLevel`, `DecisionInputMessage`;
+  `DECISIONS_DEFAULT_MODEL`.
+
 ## [4.2.1] - 2026-11-15
 
 ### Docs

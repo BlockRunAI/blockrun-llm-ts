@@ -555,6 +555,88 @@ export interface SearchResult {
   model?: string;
 }
 
+// ── Decisions (typed judgments, OpenAI Decisions-compatible) ──────────────
+
+/** One value a `choice` question may answer with. */
+export interface DecisionChoice {
+  value: string;
+  description?: string;
+}
+
+/** One rung of a `score` rubric. Levels are listed lowest first. */
+export interface DecisionLevel {
+  label: string;
+  description?: string;
+}
+
+/**
+ * A question with a fixed answer space. `name` keys the answer; `instructions`
+ * is what the model judges. Extra fields are forwarded as given.
+ */
+export type DecisionQuestion =
+  | { type: "predicate"; name: string; instructions: string; [k: string]: unknown }
+  | { type: "choice"; name: string; instructions: string; choices: DecisionChoice[]; [k: string]: unknown }
+  | { type: "score"; name: string; instructions: string; levels: DecisionLevel[]; [k: string]: unknown };
+
+/** A message of {@link DecisionsRequest.input}: text parts and inline `data:image/*` images. */
+export interface DecisionInputMessage {
+  role: string;
+  content: unknown;
+}
+
+export interface DecisionsRequest {
+  /** `"gpt-6-luna"` (the default), `"openai/gpt-6-luna"` or `"openai/gpt-6-luna-decisions"`. */
+  model?: string;
+  /** The evidence: a string, or messages whose content holds text and inline base64 images (no hosted URLs). */
+  input: string | DecisionInputMessage[];
+  /** Up to 64 questions, one typed answer each. */
+  questions: DecisionQuestion[];
+  /** Forwarded to the provider and billed as input. */
+  metadata?: Record<string, string>;
+}
+
+/** The answer to one question, keyed by the question's `name`. */
+export type DecisionAnswer =
+  | { type: "predicate"; name: string; probability: number; [k: string]: unknown }
+  | {
+      type: "choice";
+      name: string;
+      /** One of the question's `choices[].value`, always: give the question a `none` value for inputs that fit nothing. */
+      choice: string;
+      /** One entry per choice, in the order given. */
+      probabilities: Array<{ value: string; probability: number }>;
+      confidence: number;
+      [k: string]: unknown;
+    }
+  | {
+      type: "score";
+      name: string;
+      /** Probability-weighted position on the rubric (0 = the first level). */
+      score: number;
+      /** One entry per level, lowest first; `value` is the level's index. */
+      probabilities: Array<{ value: number; label: string; probability: number }>;
+      confidence: number;
+      [k: string]: unknown;
+    };
+
+export interface DecisionsResponse {
+  /** BlockRun's id for the call (`decision_<hex>`), when the gateway returns one. */
+  id?: string;
+  model: string;
+  [k: string]: unknown;
+  /** One answer per question, in the order asked. */
+  answers: DecisionAnswer[];
+  /** Only input tokens are billed; `output_tokens` is 0. */
+  usage?: { input_tokens: number; output_tokens: number; total_tokens: number; [k: string]: unknown };
+  /**
+   * What this call added to `getSpending()`: the signed quote under `exact`,
+   * the metered charge under Solana batch settlement. Undefined with an API key.
+   */
+  costUsd?: number;
+  /** Settlement details, when a wallet payment was made. */
+  settlement?: Settlement;
+}
+
 // Image editing options
 export interface ImageEditOptions {
   /** Model ID (default: "openai/gpt-image-2") */

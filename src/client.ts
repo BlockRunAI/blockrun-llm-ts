@@ -1,5 +1,6 @@
 import { toWireSearchParameters, toWireTools } from "./search-wire";
 import { settlementSkipped, withCost } from "./receipt";
+import { buildDecisionsBody } from "./decisions";
 import { accountErrorDisposition, resolveApiKeyAuth, requireWallet, type ApiKeyAuth } from "./api-key.js";
 /**
  * BlockRun LLM Client - Main SDK entry point.
@@ -38,6 +39,8 @@ import {
   type RoutingProfile,
   type SearchResult,
   type SearchOptions,
+  type DecisionsRequest,
+  type DecisionsResponse,
   type ExaSearchOptions,
   type ExaSearchResponse,
   type ExaAnswerResponse,
@@ -1530,6 +1533,35 @@ export class LLMClient {
 
     const data = await this.requestWithPaymentRaw("/v1/search", body);
     return data as unknown as SearchResult;
+  }
+
+  /**
+   * Typed judgments (OpenAI Decisions-compatible, `gpt-6-luna`): send
+   * evidence and questions with a fixed answer space, get one typed answer
+   * per question instead of text.
+   *
+   * Priced on input tokens only. With a wallet the 402 quotes an upper-bound
+   * estimate of them plus the $0.001 transaction fee, and that quote settles;
+   * with an API key the account is billed on the tokens the provider reports.
+   * A request over the gateway's limits is refused with a 400 before payment.
+   *
+   * A `choice` always picks one of your values, so give it a `none` value for
+   * inputs that fit nothing.
+   *
+   * @example
+   * const { answers } = await client.decisions({
+   *   input: 'My card was charged twice for one order.',
+   *   questions: [
+   *     { type: 'predicate', name: 'urgent', instructions: 'Does this need a reply today?' },
+   *     { type: 'choice', name: 'team', instructions: 'Which team owns this?',
+   *       choices: [{ value: 'billing' }, { value: 'shipping' }, { value: 'none' }] },
+   *   ],
+   * });
+   */
+  async decisions(request: DecisionsRequest): Promise<DecisionsResponse> {
+    const body = buildDecisionsBody(request);
+    const response = await this.requestWithPayment("/v1/decisions", body);
+    return response as unknown as DecisionsResponse;
   }
 
   /**

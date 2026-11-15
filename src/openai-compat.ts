@@ -24,6 +24,8 @@ import { LLMClient, DEFAULT_TIMEOUT } from "./client";
 import type {
   ChatMessage,
   ChatResponse,
+  DecisionsRequest,
+  DecisionsResponse,
   ResponseFormat,
   RoutingDecision,
   Tool,
@@ -267,6 +269,18 @@ class Chat {
 }
 
 /**
+ * Decisions API namespace (OpenAI Decisions-compatible): typed judgments.
+ */
+class Decisions {
+  constructor(private client: LLMClient) {}
+
+  /** Same as {@link LLMClient.decisions}. */
+  async create(params: DecisionsRequest): Promise<DecisionsResponse> {
+    return this.client.decisions(params);
+  }
+}
+
+/**
  * OpenAI-compatible client for BlockRun.
  *
  * Drop-in replacement for the OpenAI SDK.
@@ -285,6 +299,7 @@ class Chat {
  */
 export class OpenAI {
   public chat: Chat;
+  public decisions: Decisions;
   get authMode(): "api-key" | "wallet" { return this.client.authMode; }
   private client: LLMClient;
 
@@ -308,6 +323,7 @@ export class OpenAI {
     });
 
     this.chat = new Chat(this.client, apiUrl, timeout);
+    this.decisions = new Decisions(this.client);
   }
 
   /**
