@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [4.2.1] - 2026-11-15
+
 ### Docs
 
 - README: batch settlement states the single-flight limit (one batch call per
