@@ -17,6 +17,8 @@ import {
   __resetBatchWalletsForTests,
   __setBatchSleepForTests,
   BatchChannelLockedError,
+  BatchChannelBusyError,
+  DEFAULT_BATCH_BUSY_WAIT_MS,
   BatchCloseDeferredError,
   DEFAULT_BATCH_LOCK_WAIT_MS,
   BatchPaymentUnresolvedError,
@@ -990,6 +992,128 @@ describe("SolanaLLMClient batch-settlement", () => {
       expect(() => client({ onLocked: "queue" as never })).toThrow(/batch.onLocked/);
       expect(() => client({ lockWaitMs: -1 })).toThrow(/batch.lockWaitMs/);
       expect(() => client({ lockWaitMs: Number.POSITIVE_INFINITY })).toThrow(/batch.lockWaitMs/);
+    });
+  });
+
+  describe("onBusy (#98)", () => {
+    let events: SolanaBatchEvent[];
+
+    beforeEach(() => {
+      events = [];
+    });
+
+    /**
+     * Call one opens the channel and is held mid-flight (the wallet is busy)
+     * until `release()`; returns its promise once the second call can start.
+     */
+    async function holdFirstCall(c: SolanaLLMClient) {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      let channelId = "";
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("deposit");
+          channelId = channelIdOf(payment);
+          await held;
+          return servedWithVoucher(operator, channelId, 1000n, 1000n);
+        },
+      );
+      const first = c.chat("openai/gpt-4o-mini", "one");
+      await vi.waitFor(() => expect(gatewayCalls).toHaveLength(2));
+      return { first, release, channelId: () => channelId };
+    }
+
+    it('"wait" pays with batch from a fresh challenge once the in-flight call is done', async () => {
+      const c = client({ onBusy: "wait", onEvent: (e) => events.push(e) });
+      const exact = stubExact(c);
+      const { first, release, channelId } = await holdFirstCall(c);
+      gateway.push(
+        // Call two's challenge: the wallet is busy, so it waits.
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        // After the wait: a fresh, unpaid challenge, then an authorization.
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        async (_url, init) => {
+          const payment = decodePayment(init);
+          expect(payment.payload.type).toBe("authorization");
+          expect(channelIdOf(payment)).toBe(channelId());
+          return servedWithVoucher(operator, channelId(), 1700n, 700n);
+        },
+      );
+
+      const second = c.chat("openai/gpt-4o-mini", "two");
+      await vi.waitFor(() => expect(gatewayCalls).toHaveLength(3));
+      expect(events).toEqual([
+        expect.objectContaining({ type: "backoff", reason: "channel_busy", retryAfterMs: DEFAULT_BATCH_BUSY_WAIT_MS }),
+      ]);
+      release();
+
+      await expect(Promise.all([first, second])).resolves.toEqual(["gm", "gm"]);
+      expect(exact).not.toHaveBeenCalled();
+      expect(gatewayCalls).toHaveLength(5);
+      // Metered: 1000 + 700 micro-USDC, not the exact ceiling for call two.
+      expect(c.getSpending().calls).toBe(2);
+      expect(c.getSpending().totalUsd).toBeCloseTo(0.0017, 10);
+      expect(c.getBatchStats().fallbacks).toBe(0);
+    });
+
+    it('"wait" raises BatchChannelBusyError when busyWaitMs runs out, and never pays exact', async () => {
+      const c = client({ onBusy: "wait", busyWaitMs: 300, onEvent: (e) => events.push(e) });
+      const exact = stubExact(c);
+      const { first, release } = await holdFirstCall(c);
+      gateway.push(() => quote402([exactAccept(), batchAccept(operator.address)]));
+
+      const err = await c.chat("openai/gpt-4o-mini", "two").catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(BatchChannelBusyError);
+      expect((err as BatchChannelBusyError).waitedMs).toBeGreaterThanOrEqual(300);
+      expect((err as BatchChannelBusyError).wallet).toBe(await c.getWalletAddress());
+      expect(retryDisposition(err)).toBe("unpaid");
+      expect(exact).not.toHaveBeenCalled();
+      // Only call two's unpaid challenge was sent for it.
+      expect(gatewayCalls).toHaveLength(3);
+      release();
+      await expect(first).resolves.toBe("gm");
+    });
+
+    it('"throw" raises BatchChannelBusyError at once', async () => {
+      const c = client({ onBusy: "throw", onEvent: (e) => events.push(e) });
+      const exact = stubExact(c);
+      const { first, release } = await holdFirstCall(c);
+      gateway.push(() => quote402([exactAccept(), batchAccept(operator.address)]));
+
+      const err = await c.chat("openai/gpt-4o-mini", "two").catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(BatchChannelBusyError);
+      expect((err as BatchChannelBusyError).waitedMs).toBe(0);
+      expect(retryDisposition(err)).toBe("unpaid");
+      expect(exact).not.toHaveBeenCalled();
+      expect(events).toEqual([]);
+      release();
+      await expect(first).resolves.toBe("gm");
+    });
+
+    it('"exact" (the default) keeps paying exact as channel_busy', async () => {
+      const c = client({ onEvent: (e) => events.push(e) });
+      const exact = stubExact(c);
+      const { first, release } = await holdFirstCall(c);
+      gateway.push(
+        () => quote402([exactAccept(), batchAccept(operator.address)]),
+        () => new Response(JSON.stringify(CHAT_OK), { status: 200 }),
+      );
+
+      await expect(c.chat("openai/gpt-4o-mini", "two")).resolves.toBe("gm");
+      expect(exact).toHaveBeenCalledTimes(1);
+      expect(events.map((e) => [e.type, e.reason])).toEqual([["fallback", "channel_busy"]]);
+      release();
+      await expect(first).resolves.toBe("gm");
+    });
+
+    it("rejects an unknown onBusy or a bad busyWaitMs", () => {
+      expect(() => client({ onBusy: "queue" as never })).toThrow(/batch.onBusy/);
+      expect(() => client({ busyWaitMs: -1 })).toThrow(/batch.busyWaitMs/);
+      expect(() => client({ busyWaitMs: Number.NaN })).toThrow(/batch.busyWaitMs/);
     });
   });
 

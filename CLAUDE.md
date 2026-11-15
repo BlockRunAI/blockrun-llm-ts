@@ -198,8 +198,11 @@ src/
 `batch.onLocked: "wait"` re-asks `wallet()` every 500 ms up to `lockWaitMs` (one `backoff` event), `"throw"` (or a
 wait run out, or a lost lock when not `"exact"`) → `{kind:"failed"}` with `BatchChannelLockedError` (`"unpaid"`,
 nothing signed). The lock is per process, not per call (issue #96 tracks sharing). `payWith()` re-checks the close fence right before taking `busy`. Match errors from the shared book by `name`, not `instanceof`. One
-  batch request in flight per wallet; concurrent calls pay `exact`, they do not queue (they only wait
-  out a 429 cooldown). `parseRetryAfter` drops a non-finite or > 1 day value (default backoff);
+  batch request in flight per wallet (upstream throws on a second pending server-signed authorization;
+  sol allows one live channel per payer, so no channel pool). Concurrent calls follow `batch.onBusy`:
+  `"exact"` (default) pays exact (`channel_busy`); `"wait"` polls `wallet.busy` every 100 ms up to
+  `busyWaitMs` (own budget, not `rateLimit`; not FIFO), then rechallenges before paying, or raises
+  `BatchChannelBusyError` (`"unpaid"`); `"throw"` raises at once. They also wait out a 429 cooldown. `parseRetryAfter` drops a non-finite or > 1 day value (default backoff);
   `coolDown()` caps `wallet.cooldownUntil` at now + `maxWaitMs`, while the call itself weighs the full
   delay (over its remaining budget → exact / raise at once). A deposit's 402 with a failed
   `NOT_BROADCAST_REFUSALS` receipt sets `wallet.refusedUntil` instead (`refusalCooldownMs`:

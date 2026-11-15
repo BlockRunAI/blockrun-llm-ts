@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added — `batch.onBusy`: wait for the wallet instead of paying exact (#98)
+
+- A wallet pays one batch call at a time. A concurrent call used to pay
+  `exact` (1.5-2.5x the metered price) as `channel_busy`, with no way to
+  wait. `batch.onBusy: "wait"` waits up to `batch.busyWaitMs` (default 60000)
+  for the in-flight call, then pays with batch from a fresh challenge;
+  `"throw"` raises `BatchChannelBusyError` at once. Both raise before anything
+  is signed (`"unpaid"`). The default stays `"exact"`.
+- A pool of channels per wallet is not possible: sol.blockrun.ai admits one
+  live channel per payer (PayAI's request). Documented in
+  `docs/solana-batch.md` → One call at a time.
 ### Added — `decisions()`: typed judgments
 
 - `LLMClient.decisions()`, `SolanaLLMClient.decisions()` and

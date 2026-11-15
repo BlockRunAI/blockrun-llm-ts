@@ -139,6 +139,26 @@ export interface SolanaBatchOptions {
   /** Most time, in ms, one call waits for the lock under `onLocked: "wait"`. Default 60000. */
   lockWaitMs?: number;
   /**
+   * What a call does when another batch call for this wallet is in flight in
+   * this process (`channel_busy`). A channel carries one pending
+   * authorization, and each voucher builds on the previous call's metered
+   * charge, so a wallet pays one batch call at a time: from payment until
+   * its answer is reconciled (for `stream()`, until its receipt is read).
+   * - `"exact"` (default): the call pays with `exact`, as before.
+   * - `"wait"`: the call waits up to {@link busyWaitMs} for the wallet, then
+   *   pays with batch from a fresh challenge, or raises
+   *   {@link BatchChannelBusyError} once the wait runs out. Waiting calls are
+   *   not served in arrival order, and a call whose payment is in doubt can
+   *   hold the wallet up to `inDoubt.maxWaitMs`.
+   * - `"throw"`: the call raises {@link BatchChannelBusyError} at once.
+   *
+   * The error is raised before anything is signed, so it is `"unpaid"`.
+   * While calls wait, `closeBatchChannel()` defers (`call_in_flight`).
+   */
+  onBusy?: "exact" | "wait" | "throw";
+  /** Most time, in ms, one call waits for the wallet under `onBusy: "wait"`. Default 60000. */
+  busyWaitMs?: number;
+  /**
    * How a call rides out an HTTP 429 (rate limited, or channel capacity
    * exhausted) on a batch payment before it pays with `exact`. The call waits
    * for `Retry-After` (seconds or an HTTP date), or 1s, 2s, 4s... with jitter
@@ -201,6 +221,12 @@ export const DEFAULT_BATCH_LOCK_WAIT_MS = 60_000;
 /** How often a call under `onLocked: "wait"` tries the lock again. */
 const LOCK_POLL_MS = 500;
 
+/** Default {@link SolanaBatchOptions.busyWaitMs}. */
+export const DEFAULT_BATCH_BUSY_WAIT_MS = 60_000;
+
+/** How often a call under `onBusy: "wait"` looks at the wallet again (an in-process flag). */
+const BUSY_POLL_MS = 100;
+
 /**
  * One observable batch-settlement event.
  *
@@ -218,7 +244,8 @@ const LOCK_POLL_MS = 500;
  *   after a 429), with the answer's `status` and the wait in `retryAfterMs`;
  *   or, once, when a call starts waiting up to `lockWaitMs` for another
  *   process's channel store lock (`reason: "channel_store_locked"`,
- *   `onLocked: "wait"`).
+ *   `onLocked: "wait"`), or for another batch call of the wallet in this
+ *   process to finish (`reason: "channel_busy"`, `onBusy: "wait"`).
  * - `recovered`: a call that backed off was then paid with batch (`reason:
  *   "in_doubt"` when the replay of a payment in doubt resolved it), or its
  *   fresh challenge after the wait was served without a payment (`reason:
@@ -437,6 +464,30 @@ export class BatchChannelLockedError extends BlockrunError {
     this.name = "BatchChannelLockedError";
     this.wallet = init.wallet;
     if (init.ownerPid !== undefined) this.ownerPid = init.ownerPid;
+    this.waitedMs = init.waitedMs;
+    withDisposition(this, "unpaid");
+  }
+}
+
+/**
+ * Batch is on, another batch call for this wallet is in flight in this
+ * process, and the client's `batch.onBusy` is `"wait"` (the wait ran out) or
+ * `"throw"`. Raised before anything is signed: nothing was paid for the call,
+ * and its {@link RetryDisposition} is `"unpaid"`.
+ */
+export class BatchChannelBusyError extends BlockrunError {
+  /** The paying wallet's address. */
+  readonly wallet: string;
+  /** How long this call waited for the wallet, in ms (0 unless `onBusy` is `"wait"`). */
+  readonly waitedMs: number;
+
+  constructor(init: { wallet: string; waitedMs: number }) {
+    super(
+      `batch-settlement busy for wallet ${init.wallet}: another batch call is in flight` +
+        (init.waitedMs > 0 ? ` (waited ${init.waitedMs} ms)` : ""),
+    );
+    this.name = "BatchChannelBusyError";
+    this.wallet = init.wallet;
     this.waitedMs = init.waitedMs;
     withDisposition(this, "unpaid");
   }
@@ -2619,6 +2670,8 @@ export class SolanaBatchPayer {
   private readonly inDoubtMaxWaitMs: number;
   private readonly onLocked: "exact" | "wait" | "throw";
   private readonly lockWaitMs: number;
+  private readonly onBusy: "exact" | "wait" | "throw";
+  private readonly busyWaitMs: number;
   private readonly counters: SolanaBatchStats = {
     fallbacks: 0,
     fallbacksByReason: {},
@@ -2661,6 +2714,14 @@ export class SolanaBatchPayer {
     this.lockWaitMs = init.options.lockWaitMs ?? DEFAULT_BATCH_LOCK_WAIT_MS;
     if (!Number.isFinite(this.lockWaitMs) || this.lockWaitMs < 0) {
       throw new Error("batch.lockWaitMs must be a finite number of ms >= 0");
+    }
+    this.onBusy = init.options.onBusy ?? "exact";
+    if (this.onBusy !== "exact" && this.onBusy !== "wait" && this.onBusy !== "throw") {
+      throw new Error('batch.onBusy must be "exact", "wait" or "throw"');
+    }
+    this.busyWaitMs = init.options.busyWaitMs ?? DEFAULT_BATCH_BUSY_WAIT_MS;
+    if (!Number.isFinite(this.busyWaitMs) || this.busyWaitMs < 0) {
+      throw new Error("batch.busyWaitMs must be a finite number of ms >= 0");
     }
   }
 
@@ -3205,6 +3266,24 @@ export class SolanaBatchPayer {
   }
 
   /**
+   * `onBusy: "wait"`: look at the wallet every {@link BUSY_POLL_MS} until no
+   * batch call holds it or `deadline` passes. True when it is free.
+   */
+  private async waitWhileBusy(wallet: WalletBatch, deadline: number): Promise<boolean> {
+    while (wallet.busy) {
+      const left = deadline - Date.now();
+      if (left <= 0) return false;
+      await sleep(Math.min(BUSY_POLL_MS, left));
+    }
+    return true;
+  }
+
+  /** `onBusy` other than `"exact"`: the call's `"unpaid"` error, nothing signed. */
+  private async busyOut(waitedMs: number): Promise<BatchAttempt> {
+    return { kind: "failed", error: new BatchChannelBusyError({ wallet: await this.init.address(), waitedMs }) };
+  }
+
+  /**
    * The close fence for a call about to send its first request: how many
    * closes this wallet has completed so far, to hand to {@link pay}.
    * `close()` refuses while a call is inside `pay()`, but a call still
@@ -3237,6 +3316,11 @@ export class SolanaBatchPayer {
     const budget = { attempt: 1, waited: 0 };
     let waitedUntil = 0;
     let backedOff: "rate_limited" | "cooldown" | undefined;
+    // onBusy "wait": when this call started waiting for the wallet (its own
+    // budget, apart from rateLimit), and whether a wait has to be followed by
+    // a fresh challenge before the next payment.
+    let busySince: number | undefined;
+    let rechallengeAfterBusy = false;
     let holding = false;
     // This call's payment once it is sent and until it is proven not
     // charged. While set, nothing else is paid for the call.
@@ -3285,7 +3369,8 @@ export class SolanaBatchPayer {
         // for the call so far (the 429 it waited out proved it), and once it
         // is sent the challenge this call held is stale, so no exact payment
         // is ever signed against it.
-        if (budget.attempt > 1 || budget.waited > 0) {
+        if (budget.attempt > 1 || budget.waited > 0 || rechallengeAfterBusy) {
+          rechallengeAfterBusy = false;
           let fresh: Rechallenge;
           try {
             fresh = await rechallenge();
@@ -3315,7 +3400,30 @@ export class SolanaBatchPayer {
             detail: "closeBatchChannel() closed this wallet's channel after this call started; it opens no channel",
           });
         }
-        if (wallet.busy) return fallback({ reason: "channel_busy", attempt: budget.attempt });
+        if (wallet.busy) {
+          if (this.onBusy === "exact") return fallback({ reason: "channel_busy", attempt: budget.attempt });
+          const waited = busySince === undefined ? 0 : Date.now() - busySince;
+          if (this.onBusy === "throw") return this.busyOut(waited);
+          if (busySince === undefined) {
+            busySince = Date.now();
+            if (this.busyWaitMs > 0) {
+              await this.report({
+                type: "backoff",
+                reason: "channel_busy",
+                retryAfterMs: this.busyWaitMs,
+                attempt: budget.attempt,
+                detail: "another batch call for this wallet is in flight; waiting for it (onBusy: \"wait\")",
+              });
+            }
+          }
+          if (!(await this.waitWhileBusy(wallet, busySince + this.busyWaitMs))) {
+            return this.busyOut(Date.now() - busySince);
+          }
+          // The wallet is free. Start over: refusal, cooldown and close fence
+          // are checked again, and the next payment is built on a fresh 402.
+          rechallengeAfterBusy = true;
+          continue;
+        }
         if (wallet.file && !holdsChannelFile(wallet.file)) {
           const detail = `this process no longer holds the lock on ${wallet.file}; another owner may be paying into its channels`;
           if (this.onLocked !== "exact") return this.lockedOut(detail, undefined, 0);
