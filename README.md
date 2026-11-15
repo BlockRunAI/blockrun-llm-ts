@@ -44,7 +44,7 @@ console.log(r.response);         // the proof
 ## Why This SDK
 
 - 🧠 **Smart routing that pays for itself.** The bundled [Router Core V3](https://github.com/BlockRunAI/router-core) engine (shared with [ClawRouter](https://github.com/BlockRunAI/ClawRouter)) classifies every request locally in <1ms across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions and routes to the cheapest capable model.
-- 🆓 **<!-- br:models.free -->9<!-- /br:models.free --> genuinely free models.** $0 in and out, including two 1M-context Nemotrons, two that accept images, and free coding models from Cohere and Poolside.
+- 🆓 **<!-- br:models.free -->9<!-- /br:models.free --> genuinely free models.** $0 in and out, including two 1M-context Nemotrons, two that accept images, a 1M-context MiniMax and a free Poolside coding model.
 - 🔐 **Two ways to connect.** A **BlockRun API key** billed against account credit ([sign up](https://user.blockrun.ai), [create a key](https://user.blockrun.ai/dashboard/keys), [add credit](https://user.blockrun.ai/dashboard/credits)), or a wallet signature with x402 micropayments and no account at all. Same code either way.
 - 💸 **Pay per request in USDC.** x402 micropayments on Solana, Base or Arc. Agents can fund and pay their own way.
 - 🛡️ **Automatic failover.** Transient errors (timeouts, 429, 5xx) before payment walk the router's ranked fallback chain instead of failing your request; a failure after a payment was sent never buys a second model.
@@ -111,6 +111,7 @@ The Anthropic SDK is a runtime dependency because the public compatibility wrapp
 | Try it for $0 | [Try It Free](#try-it-free-no-usdc-required) and [Free Tier](#free-tier) |
 | Understand wallet payments and settlement | [How Payment Works](#how-payment-works) |
 | Pay from a Solana wallet | [Solana Support](#solana-support) |
+| Pay with USDC on Circle's Arc | [Arc Support](#arc-support) |
 | Enable metered batch settlement | [Batch settlement](#batch-settlement-optional-metered-billing) and the [full reference](https://github.com/BlockRunAI/blockrun-llm-ts/blob/main/docs/solana-batch.md) |
 | Stream tokens, use tools | [Chat, Tools and Streaming](#chat-tools-and-streaming) |
 | Generate media or query data services | [Models and Service APIs](#models-and-service-apis) |
@@ -227,7 +228,7 @@ console.log(result.response);        // 'The capital of France is Paris.'
 console.log(result.routing.savings); // 1 (100%)
 ```
 
-The seven free models are listed under [Free Tier](#free-tier). `eco` lands on
+The free models to pin are listed under [Free Tier](#free-tier). `eco` lands on
 a free model when one can handle the request and moves to the cheapest paid
 model when none can; pin a free id when the call must cost $0.
 
@@ -404,7 +405,7 @@ anchors the portfolio's candidate pool):
 
 | Tier | Example Tasks | ECO | AUTO | PREMIUM |
 |------|---------------|-----|------|---------|
-| SIMPLE | "What is the capital of France?", definitions | nemotron-3.5-lightning (**FREE**) | gemini-2.5-flash | gemini-2.5-flash |
+| SIMPLE | "What is the capital of France?", definitions | nemotron-3.5-lightning (**FREE**) | gemini-2.5-flash | gemini-3.5-flash |
 | MEDIUM | Code snippets, explanations | glm-5.3-flash | gemini-3.5-flash | gpt-5.3-codex |
 | COMPLEX | Architecture, long documents | glm-5.3-flash | gemini-3.1-pro | claude-fable-5 |
 | REASONING | Proofs, multi-step reasoning | deepseek-reasoner | deepseek-reasoner | claude-sonnet-5 |
@@ -437,7 +438,7 @@ picked:
 | `costEstimate` / `baselineCost` | Estimated cost of the pick vs that baseline, in USD |
 | `confidence` | Sigmoid-calibrated classifier confidence, 0–1 |
 | `routerVersion` | `'v3-portfolio'` or `'v2-rules'` |
-| `profile` | Routing profile applied: `'auto'`, `'eco'`, `'premium'`, or `'agentic'` |
+| `profile` | Tier set the decision used: `'auto'`, `'eco'`, `'premium'`, or `'agentic'` (the router's own set for agentic requests; not a `routingProfile` you can pass) |
 | `reasoning` | Human-readable explanation of the decision |
 | `tierConfigs` | The tier → primary/fallback map the decision was made against |
 
@@ -639,6 +640,7 @@ own default applies, and some default to their highest effort (Reflection Beam
 defaults to `"max"`); reasoning tokens bill as output:
 
 ```typescript
+const messages = [{ role: 'user' as const, content: 'Summarize x402 in one line' }];
 const quick = await client.chatCompletion('reflection/beam-1.0-501b-a23b', messages, {
   reasoningEffort: 'low',   // none | minimal | low | medium | high | xhigh | max, per model
   maxTokens: 8192,          // reasoning counts toward max_tokens
@@ -648,9 +650,12 @@ const quick = await client.chatCompletion('reflection/beam-1.0-501b-a23b', messa
 `costUsd`, `settlement` and the per-call `timeout` work the same on `LLMClient`
 (Base / Arc). Both clients default to a 600 s request timeout
 (`BLOCKRUN_CHAT_TIMEOUT`, in seconds, overrides it; the `timeout` option, in
-ms, overrides both): a call aborted after its payment was sent may already be
-charged, so a batch payment ends unresolved rather than paid again. `costUsd` is what the call added to `getSpending()`: the signed
-price under `exact`, the metered `extra.chargedAmount` under batch settlement,
+ms, overrides both). A call aborted after its payment was sent may already
+have been charged; under Solana batch settlement such a call raises
+`BatchPaymentUnresolvedError` rather than being paid again (see
+[Batch settlement](#batch-settlement-optional-metered-billing)).
+
+`costUsd` is what the call added to `getSpending()`: the signed price under `exact`, the metered `extra.chargedAmount` under batch settlement,
 `0` for a free model; it is undefined in API-key mode (billed to the account).
 When the gateway answers a paid request from a free fallback model it skips
 settlement: `costUsd` is `0`, `settlement.skipped` is `"free-fallback"`, and
@@ -734,6 +739,7 @@ await client.closeBatchChannel();
 - **Never pays twice.** Anything that goes wrong before a batch payment is sent falls back to `exact`. Once one is sent, a call whose payment may have been charged throws `BatchPaymentUnresolvedError` and is never paid again (no new payment, no `exact`, no fallback model).
 - **Chat, buffered and streamed.** `chat`, `chatCompletion`, `smartChat`, `smartChatCompletion` and `stream()` use batch; media jobs pay `exact`. A stream's receipt arrives as a final SSE event the SDK reads and removes before your loop sees it (it never reaches your chunks), or, for a stream that is cut, from `POST /v1/batch/receipt` afterwards. Its charge is booked in `getSpending()` once that receipt is in, which can be a few seconds after your loop ends: the model may keep generating after a disconnect, and that is charged too.
 - **One channel per wallet.** All clients for a wallet share one channel, saved to `~/.blockrun/solana-batch/<wallet>.json` (mode `0600`) so a restart reuses it.
+- **One call at a time per wallet.** A channel carries one pending authorization, and each voucher builds on the previous call's metered charge, which is known only once that call's answer is in. So the wallet stays busy from payment until the answer is reconciled: the whole generation, and for `stream()` the whole stream (including a stream your loop stopped reading: the SDK keeps reading it to its receipt, because everything generated is charged). A concurrent chat call on the same wallet (`chat`, `chatCompletion`, `smartChat`, `smartChatCompletion`, `stream()`) falls back to `exact` meanwhile, reported as `channel_busy`; it does not queue. For parallel batch calls, give each worker its own wallet ([#98](https://github.com/BlockRunAI/blockrun-llm-ts/issues/98) tracks queueing and multi-channel options).
 - **One process per wallet.** The process that opens the channel holds its store's lock until it exits. Other processes on that wallet (worker pools, PM2/cluster workers, parallel runs) pay `exact`, reported as `channel_store_locked`. Give each worker its own wallet, or route calls through one process. `batch.onLocked: "wait"` waits up to `batch.lockWaitMs` (default 60 s) for the lock, and `"throw"` raises `BatchChannelLockedError` (unpaid, nothing signed) instead of paying `exact`.
 - **Observable.** Every fallback, backoff, recovery and re-read writes one stderr line; `batch.onEvent` and `client.getBatchStats()` expose the same events and counters.
 
@@ -760,7 +766,7 @@ The 402 from that host names `eip155:5042`, and the SDK signs the EIP-3009 autho
 
 **Setup:**
 1. Same wallet key as Base: `export BASE_CHAIN_WALLET_KEY="0x..."`
-2. Fund it with USDC on Arc (Arc's native token, shown as the ERC-20 at `0x3600…0000`)
+2. Fund it with USDC on Arc (Arc's native gas token; the SDK pays through its ERC-20 interface at `0x3600…0000`)
 3. `apiUrl: 'https://arc.blockrun.ai/api'` — payments are automatic via x402
 
 **Endpoint:** `https://arc.blockrun.ai/api` · **Payment:** USDC on Arc (chain 5042), settled by Circle
@@ -808,9 +814,10 @@ console.log(result.choices[0].message.content);
 ### Streaming
 
 Every client streams with automatic payment. On `LLMClient` in Base / Arc
-wallet mode, `chatCompletionStream()` also keeps a **pre-auth cache**: after the
-first call to a model it signs the payment up front and skips the 402 round-trip
-(about 200ms saved per request).
+wallet mode, `chatCompletionStream()` also keeps a **pre-auth cache**: once a
+first call has learned a model's price, later calls to that model sign the
+payment before sending and skip the 402 round-trip (about 200 ms saved per
+request).
 
 #### OpenAI-compatible (recommended)
 
@@ -871,8 +878,10 @@ while (true) {
 yields each `data:` frame already parsed as JSON and stops at `[DONE]`. The
 x402 handshake happens before the first frame — 402, sign an SPL
 TransferChecked authorization locally, replay with `PAYMENT-SIGNATURE` —
-including the fresh-blockhash re-sign on a verification-phase rejection. A free
-model, or an account key, is answered `200` with no handshake at all and
+including the fresh-blockhash re-sign on a verification-phase rejection. When
+the client is constructed with `batch`, the stream is paid with a channel
+voucher instead and charged the metered cost (see [Batch settlement](#batch-settlement-optional-metered-billing)).
+A free model, or an account key, is answered `200` with no handshake at all and
 settles nothing. Pass a concrete model id: `stream()` does not resolve the
 `blockrun/*` aliases.
 
@@ -928,16 +937,17 @@ prefix, or let `routingProfile: 'eco'` rank them first.
 | `nvidia/nemotron-3.5-lightning` | 1M | Thinking-mode reasoning at 1M context |
 | `nvidia/nemotron-3-ultra-550b` | 1M | Largest free model — 550B, 1M context |
 | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Multimodal reasoning — text + images |
+| `nvidia/minimax-m3.1-flash` | 1M | MiniMax M3.1 Flash — reasons, calls tools |
 | `nvidia/nemotron-3.5-bolt` | 128K | Free vision — verified on real image probes on Base and Solana |
 | `poolside/laguna-xs-2.1` | 128K | Coding model |
 
 A free model can be briefly marked unavailable in the live catalog while the
 gateway's health check holds it back; it stays on the free tier.
 
-`nvidia/llama-3.2-11b-vision`, `cohere/north-mini-code` and `nvidia/muse-glimmer-30b`
-still answer, but
-since 2026-11 the gateway serves them with a different model. Don't pin them;
-use `nemotron-3.5-bolt` for free image input.
+`nvidia/llama-3.2-11b-vision`, `nvidia/nemotron-3-super-120b`,
+`cohere/north-mini-code` and `nvidia/muse-glimmer-30b` still answer, but since
+2026-11 the gateway serves them with a different model. Don't pin them; use
+`nemotron-3.5-bolt` for free image input.
 
 <details>
 <summary><strong>Paid chat models</strong> — OpenAI, Anthropic, Google, DeepSeek, xAI, Moonshot, MiniMax, Z.ai, Qwen, Mistral, Tencent, Poolside, Xiaomi</summary>
@@ -976,7 +986,6 @@ token price.
 | `openai/gpt-5-mini` | 200K |  |
 | `openai/gpt-4.1` | 128K |  |
 | `openai/gpt-4.1-mini` | 128K |  |
-| `openai/gpt-4.1-nano` | 128K |  |
 | `openai/gpt-4o` | 128K |  |
 | `openai/gpt-4o-mini` | 128K |  |
 | `openai/o1` | 200K | Reasoning |
@@ -988,7 +997,8 @@ token price.
 
 | Model | Context | Notes |
 |---|---|---|
-| `anthropic/claude-fable-5.1` | 1M | Most capable — successor to Fable 5 at the same tier and price |
+| `anthropic/claude-fable-5.2` | 1M | Most capable — successor to Fable 5.1 at a lower price, 128K output |
+| `anthropic/claude-fable-5.1` | 1M | Successor to Fable 5 at the same tier and price |
 | `anthropic/claude-fable-5` | 1M | Mythos-class flagship above Opus — always-on thinking, 128K output |
 | `anthropic/claude-opus-5.5` | 1M | Newest Opus — Opus-class reasoning at a lower price than Opus 5 |
 | `anthropic/claude-opus-5` | 1M | Flagship — the baseline the routing savings claim is measured against |
@@ -1005,6 +1015,7 @@ token price.
 
 | Model | Context |
 |---|---|
+| `google/gemini-4-carbon` | 1M |
 | `google/gemini-4-argon` | 1M |
 | `google/gemini-3.1-pro` | 1M |
 | `google/gemini-3.8-flash` | 1M |
@@ -1026,6 +1037,7 @@ paid SKU; the vision SKU is an experimental preview.
 | Model | Context | Notes |
 |---|---|---|
 | `deepseek/deepseek-v4-pro` | 1M | V4 flagship — strongest open-weight reasoner |
+| `deepseek/deepseek-v4.1-flash` | 1M | V4.1 Flash non-thinking |
 | `deepseek/deepseek-v4-flash-vision-exp` | 1M | Experimental vision preview |
 | `deepseek/deepseek-chat` | 1M | V4 Flash non-thinking |
 | `deepseek/deepseek-reasoner` | 1M | V4 Flash thinking (same upstream, thinking on by default) |
@@ -1048,7 +1060,7 @@ callable — the gateway redirects them to a healthy model.
 
 | Model | Context | Notes |
 |---|---|---|
-| `moonshot/kimi-k3` | 1M | Replaces the retired `kimi-k2.5` / `k2.6` SKUs |
+| `moonshot/kimi-k3.1-pro` | 1M | Flagship, image + text input; `kimi-k3` stays callable but is unlisted |
 | `minimax/minimax-m3` | 1M |  |
 | `minimax/minimax-m2.7` | 200K |  |
 | `zai/glm-5.3` | 1M |  |
@@ -1196,7 +1208,8 @@ console.log(fused.data[0].url);
 | `bytedance/seedance-2.0-mini` | 5s | 15s | 480p/720p, lowest-cost Seedance 2.0. RealFace supported |
 | `bytedance/seedance-2.0` | 5s | 15s | Premium, up to 4K, synced audio. RealFace supported |
 | `bytedance/seedance-2.5` | 5s | 30s | Long-form — up to 30s, 480p/720p, multilingual, up to 30 reference images |
-| `azure/sora-2` | 4s | 12s | Sora 2 via Azure AI Foundry — 720p with synced audio; 4, 8 or 12s |
+
+Sora 2 (`azure/sora-2`, `openai/sora-2`) was retired by its providers on 2026-11-02 and is no longer served.
 
 ```typescript
 import { VideoClient } from '@blockrun/llm';
@@ -1417,7 +1430,7 @@ Supported `StockMarket` values: `us, hk, jp, kr, gb, de, fr, nl, ie, lu, cn, ca`
 Prediction-market data from Polymarket, Kalshi, Limitless, Opinion,
 Predict.Fun, Binance Futures, UMA oracle resolutions and sports markets via
 [Predexon](https://predexon.com). Every endpoint costs the same flat price per
-call ($0.0085 at the time of writing). Use an account API key or x402 wallet
+call. Use an account API key or x402 wallet
 payments; no separate Predexon key is needed. `pm()` works on both `LLMClient`
 and `SolanaLLMClient`; query parameters are strings.
 
@@ -1593,8 +1606,9 @@ const gptResponse = await client.messages.create({
 
 This wrapper proxies straight to the gateway's `/v1/messages` and does not
 resolve `blockrun/*` aliases; pass a concrete model id. Anthropic's own dashed
-ids resolve, including the Mythos-class `claude-fable-5` and
-`claude-fable-5-1` / `claude-fable-5.1` (1M context, always-on thinking).
+ids resolve, including the Mythos-class `claude-fable-5`,
+`claude-fable-5-1` / `claude-fable-5.1` and `claude-fable-5-2` /
+`claude-fable-5.2` (1M context, always-on thinking).
 
 ## Wallets
 
@@ -1835,10 +1849,10 @@ A TypeScript SDK that cuts LLM costs by <!-- br:savings.autoVsBaselinePct -->84<
 Router Core V3, bundled into the SDK: the same deterministic engine that powers ClawRouter. It analyzes each request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions locally, in under 1ms, and picks the cheapest capable model. Use `smartChat()`, `smartChatCompletion()`, or the `blockrun/auto` model alias. See [Smart Routing](#smart-routing-router-core-v3).
 
 ### Does it support streaming?
-Yes: `LLMClient.chatCompletionStream()`, `stream: true` in the OpenAI-compatible client, and `SolanaLLMClient.stream()`. Payment happens before the first token, and with an API key the stream is billed to your account.
+Yes: `LLMClient.chatCompletionStream()`, `stream: true` in the OpenAI-compatible client, `SolanaLLMClient.stream()`, and `BlockrunClient.stream()`. The payment is signed before the first token (under Solana batch settlement the metered charge is booked once the stream's receipt arrives), and with an API key the stream is billed to your account.
 
 ### How much does it cost?
-Pay only for what you use: no minimums, subscriptions, or monthly fees, and seven models are free. Live per-model rates are at [blockrun.ai/models](https://blockrun.ai/models).
+Pay only for what you use: no minimums, subscriptions, or monthly fees, and the [free tier](#free-tier) costs $0. Live per-model rates are at [blockrun.ai/models](https://blockrun.ai/models).
 
 ### Do I need a crypto wallet?
 No. An account API key from [user.blockrun.ai](https://user.blockrun.ai) works without any wallet or chain. Wallets are for x402 pay-per-request on Solana (`SolanaLLMClient`, recommended), Base or Arc (`LLMClient`).
