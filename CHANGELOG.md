@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Docs
+
+- README: batch settlement states the single-flight limit (one batch call per
+  wallet at a time; a concurrent call pays `exact` as `channel_busy`, #98).
+- README: model tables re-synced with the live catalog (Fable 5.2, Gemini 4
+  Carbon, Kimi K3.1 Pro, DeepSeek V4.1 Flash, free MiniMax M3.1 Flash added;
+  retired Sora 2 and GPT-4.1 nano removed), premium SIMPLE tier corrected to
+  `gemini-3.5-flash`, free-tier counts made consistent.
+
 ## [4.2.0] - 2026-11-14
 
 ### Added — `stream()` pays with batch settlement
