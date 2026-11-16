@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [4.3.0] - 2026-11-16
+
 ### Added — `batch.onBusy`: wait for the wallet instead of paying exact (#98)
 
 - A wallet pays one batch call at a time. A concurrent call used to pay
@@ -13,6 +15,7 @@
 - A pool of channels per wallet is not possible: sol.blockrun.ai admits one
   live channel per payer (PayAI's request). Documented in
   `docs/solana-batch.md` → One call at a time.
+
 ### Added — `decisions()`: typed judgments
 
 - `LLMClient.decisions()`, `SolanaLLMClient.decisions()` and
@@ -28,6 +31,7 @@
 - New types: `DecisionsRequest`, `DecisionsResponse`, `DecisionQuestion`,
   `DecisionAnswer`, `DecisionChoice`, `DecisionLevel`, `DecisionInputMessage`;
   `DECISIONS_DEFAULT_MODEL`.
+
 ### Fixed — market data
 
 - `PriceClient.price()` keeps the gateway's `realtime` flag and `note` (it
