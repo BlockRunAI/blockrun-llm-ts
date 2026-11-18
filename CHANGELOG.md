@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [4.3.1] - 2026-11-18
+
+### Fixed — `decisions()` on `gemini-decision-1` needs a description on every choice and level
+
+- Gemini Decision 1 refuses a choice or score level without a `description`
+  string (empty is fine): the gateway answered 400 before payment, so nothing
+  was charged, but the call failed. `buildDecisionsBody` now throws an
+  `"unpaid"` error before sending, naming the item. `gpt-6-luna` is unchanged.
+- The README and JSDoc examples give every choice and level a description, so
+  they work on both models.
+- Docs: a `score` answer can be fractional. It is the probability-weighted
+  position on the rubric (the type already said so); Gemini Decision 1 spreads
+  probability across levels (1.43 on the README example) where luna answered 1.
+
 ## [4.3.0] - 2026-11-16
 
 ### Added — `batch.onBusy`: wait for the wallet instead of paying exact (#98)

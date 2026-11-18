@@ -21,6 +21,17 @@ export const DECISIONS_DEFAULT_MODEL = "gpt-6-luna";
 
 const QUESTION_TYPES = new Set(["predicate", "choice", "score"]);
 
+/**
+ * Google's Decisions model. It needs a `description` string (empty is fine) on
+ * every choice and every score level; the gateway refuses it with a 400 before
+ * payment otherwise (probed on sol.blockrun.ai 2026-11-18).
+ */
+export const GEMINI_DECISIONS_MODEL = "gemini-decision-1";
+
+function isGemini(model: string | undefined): boolean {
+  return typeof model === "string" && model.trim().replace(/^google\//, "") === GEMINI_DECISIONS_MODEL;
+}
+
 function invalid(message: string): never {
   // Nothing was sent: safe to fix and resend.
   throw withDisposition(new Error(`decisions: ${message}`), "unpaid");
@@ -52,6 +63,15 @@ export function buildDecisionsBody(request: DecisionsRequest): Record<string, un
     }
     if (q.type === "score" && (!Array.isArray(q.levels) || q.levels.length === 0)) {
       invalid(`questions[${i}] (score) needs a non-empty levels array, lowest first`);
+    }
+    if (isGemini(request.model) && (q.type === "choice" || q.type === "score")) {
+      const key = q.type === "choice" ? "choices" : "levels";
+      const items: unknown[] = (q.type === "choice" ? q.choices : q.levels) ?? [];
+      items.forEach((item, j) => {
+        if (!item || typeof item !== "object" || typeof (item as { description?: unknown }).description !== "string") {
+          invalid(`questions[${i}].${key}[${j}].description must be a string for ${GEMINI_DECISIONS_MODEL} (it may be empty: "")`);
+        }
+      });
     }
   });
   return { ...request, model: request.model ?? DECISIONS_DEFAULT_MODEL };

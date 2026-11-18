@@ -234,3 +234,42 @@ describe("OpenAI.decisions.create", () => {
     expect(res.answers).toEqual(ANSWER.answers);
   });
 });
+
+// gemini-decision-1 needs a `description` string (empty is fine) on every
+// choice and every score level; the gateway refuses it with a 400 before
+// payment otherwise (probed on sol.blockrun.ai 2026-11-18). luna takes
+// descriptions too, so the SDK only REQUIRES them for Gemini.
+describe("gemini-decision-1 descriptions", () => {
+  const choice = { type: "choice" as const, name: "team", instructions: "Which team?", choices: [{ value: "billing", description: "payments" }, { value: "none" }] };
+  const score = { type: "score" as const, name: "anger", instructions: "How upset?", levels: [{ label: "calm", description: "" }, { label: "furious" }] };
+
+  it.each(["gemini-decision-1", "google/gemini-decision-1"])("%s: a choice without a description is refused before sending", (model) => {
+    expect(() => buildDecisionsBody({ model, input: "x", questions: [choice] })).toThrow(/questions\[0\]\.choices\[1\]\.description/);
+  });
+
+  it.each(["gemini-decision-1", "google/gemini-decision-1"])("%s: a level without a description is refused before sending", (model) => {
+    expect(() => buildDecisionsBody({ model, input: "x", questions: [score] })).toThrow(/questions\[0\]\.levels\[1\]\.description/);
+  });
+
+  it("the refusal is an unpaid error (nothing was sent)", () => {
+    try {
+      buildDecisionsBody({ model: "gemini-decision-1", input: "x", questions: [choice] });
+      throw new Error("did not throw");
+    } catch (e) {
+      expect(retryDisposition(e)).toBe("unpaid");
+    }
+  });
+
+  it("every item described (empty is fine) passes on Gemini", () => {
+    const body = buildDecisionsBody({
+      model: "gemini-decision-1", input: "x",
+      questions: [{ ...choice, choices: [{ value: "billing", description: "payments" }, { value: "none", description: "" }] },
+        { ...score, levels: [{ label: "calm", description: "" }, { label: "furious", description: "x" }] }],
+    });
+    expect(body.model).toBe("gemini-decision-1");
+  });
+
+  it.each([undefined, "gpt-6-luna", "openai/gpt-6-luna"])("luna (%s) does not require descriptions", (model) => {
+    expect(() => buildDecisionsBody({ model, input: "x", questions: [choice, score] })).not.toThrow();
+  });
+});

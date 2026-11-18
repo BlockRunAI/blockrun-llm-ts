@@ -1405,11 +1405,15 @@ const { answers, costUsd } = await client.decisions({
     { type: 'predicate', name: 'urgent', instructions: 'Does this need a reply today?' },
     {
       type: 'choice', name: 'team', instructions: 'Which team owns this?',
-      choices: [{ value: 'billing' }, { value: 'shipping' }, { value: 'none', description: 'fits no team' }],
+      choices: [
+        { value: 'billing', description: 'payments and refunds' },
+        { value: 'shipping', description: 'delivery' },
+        { value: 'none', description: 'fits no team' },
+      ],
     },
     {
       type: 'score', name: 'anger', instructions: 'How upset is the writer?',
-      levels: [{ label: 'calm' }, { label: 'annoyed' }, { label: 'furious' }], // lowest first
+      levels: [{ label: 'calm', description: '' }, { label: 'annoyed', description: '' }, { label: 'furious', description: '' }], // lowest first
     },
   ],
 });
@@ -1417,6 +1421,12 @@ const { answers, costUsd } = await client.decisions({
 //  { type: 'choice', name: 'team', choice: 'billing', probabilities: [...], confidence: 1 },
 //  { type: 'score', name: 'anger', score: 1, probabilities: [...], confidence: 1 }]
 ```
+
+A `score` answer is the probability-weighted position on the rubric (0 = the
+first level), so it can be fractional: Gemini answered this example with 1.43
+(2% calm, 53% annoyed, 45% furious) where luna, all on "annoyed", gave 1. For a
+single level, take the entry in `probabilities` with the highest probability,
+or round.
 
 Only input tokens are billed. A wallet call pays the 402's quote: an
 upper-bound estimate of the input tokens plus the $0.001 transaction fee. Under
@@ -1431,6 +1441,12 @@ billed on reported tokens.
 refuses an over-limit request with a 400 before any payment. A `choice` always
 picks one of your values, so give it a `none` value for inputs that fit
 nothing.
+
+Pass `model: 'gemini-decision-1'` to use Google's Gemini Decision 1 (same price,
+up to 1,000 questions). It needs a `description` string on every choice and every
+score level; an empty string is fine. The SDK throws before sending when one is
+missing. `gpt-6-luna` accepts descriptions too, so the example above works on
+both models.
 
 ### Standalone Search
 
