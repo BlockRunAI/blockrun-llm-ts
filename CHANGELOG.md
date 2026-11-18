@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [4.3.1] - 2026-11-18
+
 ### Fixed — `decisions()` on `gemini-decision-1` needs a description on every choice and level
 
 - Gemini Decision 1 refuses a choice or score level without a `description`
