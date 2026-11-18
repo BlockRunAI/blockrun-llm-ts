@@ -10,6 +10,9 @@
   `"unpaid"` error before sending, naming the item. `gpt-6-luna` is unchanged.
 - The README and JSDoc examples give every choice and level a description, so
   they work on both models.
+- Docs: a `score` answer can be fractional. It is the probability-weighted
+  position on the rubric (the type already said so); Gemini Decision 1 spreads
+  probability across levels (1.43 on the README example) where luna answered 1.
 
 ## [4.3.0] - 2026-11-16
 

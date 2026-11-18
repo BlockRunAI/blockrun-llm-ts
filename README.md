@@ -1422,6 +1422,12 @@ const { answers, costUsd } = await client.decisions({
 //  { type: 'score', name: 'anger', score: 1, probabilities: [...], confidence: 1 }]
 ```
 
+A `score` answer is the probability-weighted position on the rubric (0 = the
+first level), so it can be fractional: Gemini answered this example with 1.43
+(2% calm, 53% annoyed, 45% furious) where luna, all on "annoyed", gave 1. For a
+single level, take the entry in `probabilities` with the highest probability,
+or round.
+
 Only input tokens are billed. A wallet call pays the 402's quote: an
 upper-bound estimate of the input tokens plus the $0.001 transaction fee. Under
 Solana [batch settlement](#batch-settlement-optional-metered-billing) it pays
