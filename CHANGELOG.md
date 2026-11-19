@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Fixed — route cost estimates include the gateway's platform fee
+
+- `costEstimate` on a routing decision now multiplies a paid chat model's
+  per-token list cost by `1 + platform_fee_percent / 100`, read from each
+  `/v1/models` row (`pricing.platform_fee_percent`, else the row's top-level
+  field; 0 when absent, as on older gateways and enterprise). Spec:
+  BlockRunAI/blockrun `specs/2026-11-16-chat-platform-fee.md` PF-8.
+- It used router-core's fixed internal margin instead, which also applied to
+  flat rows. Flat rows are now their flat price, free rows stay $0, and media
+  rows are untouched.
+- New: `Model.platformFeePercent`, and the exported helpers
+  `platformFeePercentOf()` and `estimateChatCostUsd()`.
+
 ## [4.3.1] - 2026-11-18
 
 ### Fixed — `decisions()` on `gemini-decision-1` needs a description on every choice and level

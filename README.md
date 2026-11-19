@@ -436,7 +436,7 @@ picked:
 | `candidateScores` | Per-candidate score breakdown (`quality` / `cost` / `speed` / `reliability`), ordered with `candidates` |
 | `fallbacks` | The chain `chat()` walks on transient errors before payment (timeout / network / 429 / 5xx) — `candidates` minus the primary, with ClawRouter's proxy-namespace `free/*` ids mapped to their `nvidia/*` gateway ids (SDK-computed) |
 | `savings` | 0–1 fraction saved vs the baseline model (`anthropic/claude-opus-4.7`, priced like Opus 5) |
-| `costEstimate` / `baselineCost` | Estimated cost of the pick vs that baseline, in USD |
+| `costEstimate` / `baselineCost` | Estimated cost of the pick vs that baseline, in USD. `costEstimate` is the catalog's per-token list cost times `1 + platform_fee_percent / 100` (the fee each paid chat row of `/v1/models` publishes; 0 when the gateway omits it), a flat price as-is, $0 for free models, floored at the per-request minimum. The 402 quote is the real charge |
 | `confidence` | Sigmoid-calibrated classifier confidence, 0–1 |
 | `routerVersion` | `'v3-portfolio'` or `'v2-rules'` |
 | `profile` | Tier set the decision used: `'auto'`, `'eco'`, `'premium'`, or `'agentic'` (the router's own set for agentic requests; not a `routingProfile` you can pass) |

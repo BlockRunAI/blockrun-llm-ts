@@ -49,6 +49,7 @@ export {
   type RpcNetwork,
 } from "./rpc";
 export { BlockrunClient } from "./blockrun";
+export { platformFeePercentOf, estimateChatCostUsd, type PlatformFeeRow } from "./router-adapter";
 export {
   type ChatMessage,
   type ChatChoice,

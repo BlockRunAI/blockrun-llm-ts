@@ -42,6 +42,7 @@ import {
   SOLANA_MINIMUM_PAYMENT_USD,
   errSummary,
   isTransientError,
+  platformFeePercentOf,
   registerSearchModels,
   routeWithCatalog,
   routingProfileForModel,
@@ -515,7 +516,8 @@ export class SolanaLLMClient {
           output_price?: number;
           flat_price?: number;
           billing_mode?: string;
-          pricing?: { input?: number; output?: number; flat?: number };
+          pricing?: { input?: number; output?: number; flat?: number; platform_fee_percent?: number };
+          platform_fee_percent?: number;
         };
         // Skip catalog rows marked unavailable, and guard against malformed
         // values: Number("abc") is NaN, which survives `?? 0` and would
@@ -528,12 +530,14 @@ export class SolanaLLMClient {
         const inputPrice = num(model.inputPrice ?? raw.input_price ?? raw.pricing?.input);
         const outputPrice = num(model.outputPrice ?? raw.output_price ?? raw.pricing?.output);
         const flatPrice = num(model.flatPrice ?? raw.flat_price ?? raw.pricing?.flat);
+        const isFlat = (model.billingMode ?? raw.billing_mode) === "flat" && flatPrice > 0;
+        // A flat price is final: the flat branch never carries the fee.
+        const platformFeePercent = isFlat ? 0 : platformFeePercentOf(raw);
         pricing.set(model.id, {
           inputPrice,
           outputPrice,
-          ...((model.billingMode ?? raw.billing_mode) === "flat" && flatPrice > 0
-            ? { flatPrice }
-            : {}),
+          ...(isFlat ? { flatPrice } : {}),
+          ...(platformFeePercent > 0 ? { platformFeePercent } : {}),
         });
       }
       registerSearchModels(pricing, models);

@@ -198,6 +198,12 @@ export interface Model {
   billingMode?: "paid" | "flat" | "free";
   /** Flat per-request price when billingMode === "flat". */
   flatPrice?: number;
+  /**
+   * Platform fee (percent) an x402 call pays on top of the per-token
+   * `inputPrice` / `outputPrice`: cost = token cost x (1 + this / 100).
+   * 0 for free, flat and media rows, and when the gateway does not publish it.
+   */
+  platformFeePercent?: number;
   /** True for deprecated/superseded models that remain routable. */
   hidden?: boolean;
 }

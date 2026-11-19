@@ -5,7 +5,7 @@ import {
   filterCandidatesByCapacity,
   getFallbackChain,
   route as routeRequest,
-  type ModelPricing,
+  type ModelPricing as RouterCoreModelPricing,
 } from "@blockrun/router-core";
 import type {
   ChatCompletionOptions,
@@ -29,7 +29,64 @@ const AUTO_ROUTING_PROFILES: Readonly<Record<string, RoutingProfile>> = {
 export const BASE_MINIMUM_PAYMENT_USD = 0.002;
 export const SOLANA_MINIMUM_PAYMENT_USD = 0.001;
 
-export type { ModelPricing };
+/**
+ * A catalog pricing entry: the bundled router's pricing shape plus the
+ * gateway's platform fee. `platformFeePercent` is set only on per-token paid
+ * chat rows (see {@link platformFeePercentOf}); the router ignores it, and
+ * {@link estimateChatCostUsd} applies it.
+ */
+export type ModelPricing = RouterCoreModelPricing & { platformFeePercent?: number };
+
+/** A `/v1/models` row as either gateway emits it, or as the SDK maps it. */
+export interface PlatformFeeRow {
+  billing_mode?: string;
+  billingMode?: string;
+  platform_fee_percent?: unknown;
+  platformFeePercent?: unknown;
+  pricing?: { platform_fee_percent?: unknown; flat?: unknown } | null;
+}
+
+/**
+ * The platform fee, in percent, that an x402 call to this `/v1/models` row
+ * pays on top of its per-token `pricing.input` / `pricing.output` (which stay
+ * at the vendor's list price). Spec: BlockRunAI/blockrun
+ * specs/2026-11-16-chat-platform-fee.md PF-8.
+ *
+ * Read from `pricing.platform_fee_percent` (sol.blockrun.ai and blockrun.ai),
+ * then the row's top-level `platform_fee_percent` (blockrun.ai), then the
+ * SDK-mapped `platformFeePercent`. The first finite, non-negative number wins.
+ *
+ * 0 when the field is absent (older gateways and enterprise, PF-9, do not
+ * send it), and always 0 for a row that is not per-token paid chat: free,
+ * flat (a flat price is final) and media rows never pay it.
+ */
+export function platformFeePercentOf(row: PlatformFeeRow | null | undefined): number {
+  if (!row) return 0;
+  const mode = row.billingMode ?? row.billing_mode;
+  if (mode !== undefined && mode !== "paid") return 0;
+  if (row.pricing?.flat !== undefined && row.pricing.flat !== null) return 0;
+  for (const value of [row.pricing?.platform_fee_percent, row.platform_fee_percent, row.platformFeePercent]) {
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
+  }
+  return 0;
+}
+
+/**
+ * Estimated USD cost of one chat call against a catalog pricing entry, before
+ * any payment floor: a flat price as-is, otherwise the per-token list cost
+ * times `(1 + platformFeePercent / 100)`. The real charge is always the
+ * gateway's 402 quote; this is metadata for routing and budgeting.
+ */
+export function estimateChatCostUsd(
+  pricing: ModelPricing,
+  inputTokens: number,
+  outputTokens: number,
+): number {
+  if (pricing.flatPrice !== undefined) return pricing.flatPrice;
+  const fee = pricing.platformFeePercent;
+  const factor = typeof fee === "number" && Number.isFinite(fee) && fee >= 0 ? 1 + fee / 100 : 1;
+  return ((inputTokens / 1e6) * pricing.inputPrice + (outputTokens / 1e6) * pricing.outputPrice) * factor;
+}
 
 /**
  * Whether an error is the kind of transient failure that warrants trying the
@@ -306,7 +363,18 @@ export function routeWithCatalog(
   const entry = modelPricing.get(model);
   const isFree =
     entry !== undefined && entry.inputPrice === 0 && entry.outputPrice === 0 && !entry.flatPrice;
-  const costEstimate = isFree ? 0 : Math.max(costs.costEstimate, minimumPaymentUsd);
+  // A catalog-priced model is costed here, from the catalog: router-core's
+  // calculateModelCost multiplies every model (flat ones included) by a fixed
+  // internal margin, while the gateway publishes the real fee per row
+  // (platform_fee_percent, PF-8) and charges none on flat rows. An id the
+  // catalog does not list keeps router-core's figure.
+  const usable =
+    entry !== undefined &&
+    [entry.inputPrice, entry.outputPrice, entry.flatPrice ?? 0].every((v) => Number.isFinite(v) && v >= 0);
+  const modelCost = usable
+    ? estimateChatCostUsd(entry, estimatedInputTokens, maxOutputTokens)
+    : costs.costEstimate;
+  const costEstimate = isFree ? 0 : Math.max(modelCost, minimumPaymentUsd);
   const savings =
     options.routingProfile === "premium" || costs.baselineCost <= 0
       ? 0
