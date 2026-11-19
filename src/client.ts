@@ -56,6 +56,7 @@ import {
   BASE_MINIMUM_PAYMENT_USD,
   errSummary,
   isTransientError,
+  platformFeePercentOf,
   registerSearchModels,
   routeWithCatalog,
   routingProfileForModel,
@@ -86,6 +87,7 @@ function mapRawToModel(m: any): Model {
     available: true,
     billingMode: m.billingMode ?? m.billing_mode,
     flatPrice: m.flatPrice ?? m.flat_price ?? m.pricing?.flat,
+    platformFeePercent: platformFeePercentOf(m),
     hidden: m.hidden,
   };
 }
@@ -451,7 +453,12 @@ export class LLMClient {
       if (model.billingMode === "flat" && Number.isFinite(model.flatPrice) && model.flatPrice! > 0) {
         pricing.set(model.id, { inputPrice, outputPrice, flatPrice: model.flatPrice });
       } else {
-        pricing.set(model.id, { inputPrice, outputPrice });
+        const platformFeePercent = platformFeePercentOf(model);
+        pricing.set(model.id, {
+          inputPrice,
+          outputPrice,
+          ...(platformFeePercent > 0 ? { platformFeePercent } : {}),
+        });
       }
     }
 
