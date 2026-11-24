@@ -159,6 +159,7 @@ export {
   type BarResolution,
   type MarketSession,
   type PricePoint,
+  type OnchainStockQuote,
   type PriceBar,
   type PriceHistoryResponse,
   type SymbolListResponse,

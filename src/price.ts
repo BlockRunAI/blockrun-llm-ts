@@ -95,6 +95,9 @@ export class PriceClient {
     if (options?.session) query.session = options.session;
     const data = (await this.getWithPayment(path, query)) as Record<string, unknown>;
     return {
+      // Everything the gateway sent, then the typed fields: the on-chain stock
+      // price carries chain, pools, multiplier, usMarket and asset this way.
+      ...data,
       symbol: (data.symbol as string) ?? symbol.toUpperCase(),
       price: data.price as number,
       publishTime: data.publishTime as number | undefined,

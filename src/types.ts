@@ -1157,6 +1157,54 @@ export interface PricePoint {
   realtime?: boolean;
   /** The gateway's note on the data, e.g. "Daily close, not realtime. ..." */
   note?: string;
+  /**
+   * Every other field the gateway returned, kept as-is. The on-chain US stock
+   * price (chain, pools, multiplier, usMarket, asset, ...) arrives this way.
+   */
+  [key: string]: unknown;
+}
+
+/**
+ * On-chain US stock price: GET /v1/stocks/us/price/{symbol}. blockrun.ai prices
+ * Coinbase Tokenized Stocks on Base, sol.blockrun.ai prices xStocks on Solana;
+ * each answers only for its own chain, and a ticker with no on-chain market
+ * there is a 404 before any payment.
+ */
+export interface OnchainStockQuote {
+  symbol: string;
+  market: "us";
+  chain: "base" | "solana";
+  /** USD per share: liquidity-weighted mid of the on-chain pools, multiplier applied. */
+  price: number;
+  kind: "onchain_dex_mid";
+  note: string;
+  token: { symbol: string; issuer: string; address: string; standard: string; decimals: number };
+  multiplier: { value: number; next: { value: number; effectiveAt: string } | null };
+  paused: boolean | null;
+  pools: Array<{
+    address: string;
+    dex: string;
+    quote: "USDC" | "SOL";
+    price: number | null;
+    quoteSideUsd: number;
+    tvlUsd: number;
+    weight: number;
+    included: boolean;
+    excludedReason: string | null;
+    lastTxAt: string | null;
+    ageSeconds: number | null;
+  }>;
+  quoteSideUsd: number;
+  tvlUsd: number;
+  poolSpreadBps: number;
+  staleWarning?: string[];
+  staleWarningText?: string;
+  chainTime: string;
+  readAt: string;
+  usMarket: { session: "pre" | "regular" | "post" | "closed" | "unknown"; nextOpen: string | null };
+  asset: Record<string, unknown>;
+  otherChains: Array<{ chain: "base" | "solana"; covered: boolean; endpoint: string }>;
+  [key: string]: unknown;
 }
 
 export interface PriceBar {
