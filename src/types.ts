@@ -1157,12 +1157,15 @@ export interface PricePoint {
   realtime?: boolean;
   /** The gateway's note on the data, e.g. "Daily close, not realtime. ..." */
   note?: string;
-  /**
-   * Every other field the gateway returned, kept as-is. The on-chain US stock
-   * price (chain, pools, multiplier, usMarket, asset, ...) arrives this way.
-   */
-  [key: string]: unknown;
 }
+
+/**
+ * What PriceClient.price returns: the typed fields plus every other field the
+ * gateway sent, kept as-is (the on-chain US stock price carries chain, pools,
+ * multiplier, usMarket, asset this way). The index signature lives here, not on
+ * PricePoint, so PricePoint itself stays strict for everyone else.
+ */
+export type PricePointWithExtras = PricePoint & Record<string, unknown>;
 
 /**
  * On-chain US stock price: GET /v1/stocks/us/price/{symbol}. blockrun.ai prices

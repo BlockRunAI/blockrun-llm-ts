@@ -160,6 +160,7 @@ export {
   type MarketSession,
   type PricePoint,
   type OnchainStockQuote,
+  type PricePointWithExtras,
   type PriceBar,
   type PriceHistoryResponse,
   type SymbolListResponse,

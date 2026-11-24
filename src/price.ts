@@ -26,6 +26,7 @@ import {
   type PriceClientOptions,
   type PriceCategory,
   type PricePoint,
+  type PricePointWithExtras,
   type PriceHistoryResponse,
   type SymbolListResponse,
   type PriceOptions,
@@ -88,7 +89,7 @@ export class PriceClient {
     category: PriceCategory,
     symbol: string,
     options?: PriceOptions
-  ): Promise<PricePoint> {
+  ): Promise<PricePointWithExtras> {
     if (!symbol) throw new Error("symbol is required");
     const path = categoryPath(category, options?.market, "price", symbol);
     const query: Record<string, string> = {};
