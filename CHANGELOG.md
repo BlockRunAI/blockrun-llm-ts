@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [4.4.0] - 2026-11-24
+
+### Added — on-chain US stock prices
+
+- `LLMClient.stockPrice(symbol)` and `SolanaLLMClient.stockPrice(symbol)`:
+  `GET /v1/stocks/us/price/{symbol}`, $0.005, paid on the client's own chain.
+  blockrun.ai prices Coinbase Tokenized Stocks on Base; sol.blockrun.ai prices
+  xStocks on Solana. Returns the whole response (`OnchainStockQuote`): price,
+  every pool, the dividend multiplier, the US session, SEC company facts and
+  `otherChains`. A ticker with no on-chain market on that chain throws a 404
+  `APIError` before anything is signed.
+- `PriceClient.price` now keeps every field the gateway returns (typed fields
+  win), returned as `PricePointWithExtras`; `PricePoint` itself is unchanged.
+- Spec: BlockRunAI/blockrun `specs/2026-11-23-onchain-stock-prices.md`.
+
 ### Fixed — route cost estimates include the gateway's platform fee
 
 - `costEstimate` on a routing decision now multiplies a paid chat model's

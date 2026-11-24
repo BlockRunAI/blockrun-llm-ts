@@ -25,7 +25,6 @@ import type { Account } from "viem/accounts";
 import {
   type PriceClientOptions,
   type PriceCategory,
-  type PricePoint,
   type PricePointWithExtras,
   type PriceHistoryResponse,
   type SymbolListResponse,
