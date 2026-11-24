@@ -37,6 +37,7 @@ import type {
   VideoResponse,
   MusicResponse,
 } from "./types";
+import type { OnchainStockQuote } from "./types";
 import { APIError, PaymentError, withDisposition } from "./types";
 import {
   SOLANA_MINIMUM_PAYMENT_USD,
@@ -1092,6 +1093,19 @@ export class SolanaLLMClient {
    */
   async defi(path: string, params?: Record<string, string>): Promise<Record<string, unknown>> {
     return this.getWithPaymentRaw(`/v1/defillama/${path}`, params);
+  }
+
+  /**
+   * On-chain US stock price from tokenized-stock DEX pools, paid per call.
+   * This client's chain decides the market: Base (blockrun.ai, Coinbase
+   * Tokenized Stocks) or Solana (sol.blockrun.ai, xStocks). Returns the full
+   * response: price, every pool, the dividend multiplier, the US session and
+   * SEC company facts. A ticker with no market on this chain throws a 404
+   * APIError before anything is signed.
+   */
+  async stockPrice(symbol: string): Promise<OnchainStockQuote> {
+    if (!symbol) throw new Error("symbol is required");
+    return (await this.getWithPaymentRaw(`/v1/stocks/us/price/${encodeURIComponent(symbol)}`)) as unknown as OnchainStockQuote;
   }
 
   /** All DeFi protocols with TVL. */

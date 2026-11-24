@@ -26,6 +26,7 @@ import {
   type PriceClientOptions,
   type PriceCategory,
   type PricePoint,
+  type PricePointWithExtras,
   type PriceHistoryResponse,
   type SymbolListResponse,
   type PriceOptions,
@@ -88,13 +89,16 @@ export class PriceClient {
     category: PriceCategory,
     symbol: string,
     options?: PriceOptions
-  ): Promise<PricePoint> {
+  ): Promise<PricePointWithExtras> {
     if (!symbol) throw new Error("symbol is required");
     const path = categoryPath(category, options?.market, "price", symbol);
     const query: Record<string, string> = {};
     if (options?.session) query.session = options.session;
     const data = (await this.getWithPayment(path, query)) as Record<string, unknown>;
     return {
+      // Everything the gateway sent, then the typed fields: the on-chain stock
+      // price carries chain, pools, multiplier, usMarket and asset this way.
+      ...data,
       symbol: (data.symbol as string) ?? symbol.toUpperCase(),
       price: data.price as number,
       publishTime: data.publishTime as number | undefined,

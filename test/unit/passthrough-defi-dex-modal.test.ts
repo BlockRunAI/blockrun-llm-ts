@@ -47,6 +47,21 @@ describe("DefiLlama / 0x DEX / Modal passthrough methods", () => {
     expect(lastCall().url).toContain("/v1/defillama/chains");
   });
 
+  it("stockPrice GETs /v1/stocks/us/price/{symbol} and returns the whole body", async () => {
+    fetchSpy.mockResolvedValue(okResponse({ symbol: "NVDA", chain: "base", price: 165.01, pools: [{ dex: "aerodrome_slipstream" }] }) as unknown as Response);
+    const q = await client.stockPrice("NVDA");
+    expect(lastCall().url).toContain("/v1/stocks/us/price/NVDA");
+    expect(q.chain).toBe("base");
+    expect(q.pools).toHaveLength(1);
+  });
+
+  it("stockPrice encodes the symbol", async () => {
+    await client.stockPrice("BRK.B");
+    expect(lastCall().url).toContain("/v1/stocks/us/price/BRK.B");
+    await client.stockPrice("A/B");
+    expect(lastCall().url).toContain("/v1/stocks/us/price/A%2FB");
+  });
+
   it("defiPrices joins coin lists", async () => {
     await client.defiPrices(["coingecko:bitcoin", "base:0xabc"]);
     expect(lastCall().url).toContain(
