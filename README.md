@@ -200,7 +200,7 @@ const result = await client.smartChat('Hello!');
 console.log(result.model, result.response);
 
 // Or pin a model yourself
-const reply = await client.chat('openai/gpt-5.4', 'Hello!');
+const reply = await client.chat('openai/gpt-6.2-sol', 'Hello!');
 ```
 
 That's it. The SDK handles the x402 payment, and `smartChat()` keeps the bill
@@ -269,7 +269,7 @@ const tools: Tool[] = [{
 
 // 1. smartChat(): one-line routed chat
 const result = await client.smartChat('What is the capital of France?');
-console.log(result.model); // 'google/gemini-2.5-flash'
+console.log(result.model); // 'google/gemini-3.5-flash-lite'
 console.log(`Saved ${(result.routing.savings * 100).toFixed(0)}%`); // 'Saved 90%': this request vs the baseline
 
 // 2. smartChatCompletion(): full agent / tool conversations, routed
@@ -280,11 +280,11 @@ const reply = await client.chatCompletion('blockrun/auto', messages);
 
 // Inspect a decision without paying for anything
 const decision = await client.route('Prove the Riemann hypothesis step by step');
-console.log(decision.model);       // 'deepseek/deepseek-v4-pro'
+console.log(decision.model);       // 'google/gemini-3.6-flash'
 console.log(decision.method);      // 'portfolio'
 console.log(decision.taskType);    // 'reasoning'
 console.log(decision.candidates);  // ranked, capability-eligible models
-console.log(decision.fallbacks);   // ['google/gemini-3.5-flash', 'deepseek/deepseek-reasoner', 'xai/grok-4.3', ...]
+console.log(decision.fallbacks);   // ['deepseek/deepseek-v4-pro', 'deepseek/deepseek-reasoner', 'xai/grok-4.3', ...]
 ```
 
 The aliases are resolved locally by `chat()` and `chatCompletion()` on both
@@ -406,9 +406,9 @@ anchors the portfolio's candidate pool):
 
 | Tier | Example Tasks | ECO | AUTO | PREMIUM |
 |------|---------------|-----|------|---------|
-| SIMPLE | "What is the capital of France?", definitions | nemotron-3.5-lightning (**FREE**) | gemini-2.5-flash | gemini-3.5-flash |
-| MEDIUM | Code snippets, explanations | glm-5.3-flash | gemini-3.5-flash | gpt-5.3-codex |
-| COMPLEX | Architecture, long documents | glm-5.3-flash | gemini-3.1-pro | claude-fable-5 |
+| SIMPLE | "What is the capital of France?", definitions | nemotron-3.5-lightning (**FREE**) | gemini-3.5-flash-lite | gemini-3.6-flash |
+| MEDIUM | Code snippets, explanations | glm-5.3-flash | gemini-3.6-flash | gpt-5.3-codex |
+| COMPLEX | Architecture, long documents | glm-5.3-flash | gemini-3.1-pro | claude-opus-5.5 |
 | REASONING | Proofs, multi-step reasoning | deepseek-reasoner | deepseek-reasoner | claude-sonnet-5 |
 
 This table mirrors the pinned router-core `DEFAULT_ROUTING_CONFIG`;
@@ -640,7 +640,7 @@ console.log(routed.model, routed.response);
 const response = await client.chat('deepseek/deepseek-chat', 'gm Solana');
 
 // Live Search with Grok
-const trending = await client.chat('xai/grok-4.5', 'What is trending on X?', { search: true });
+const trending = await client.chat('xai/grok-4.7', 'What is trending on X?', { search: true });
 
 // xAI x_search on chosen accounts, structured output, real cost per call
 const res = await client.chatCompletion('xai/grok-4.3', [
@@ -736,7 +736,7 @@ const client = new SolanaLLMClient({
 await client.smartChat('gm');
 
 // Later calls are metered: you pay for the tokens the call actually used.
-const reply = await client.chat('anthropic/claude-sonnet-4.6', 'Summarize x402 in one line', {
+const reply = await client.chat('anthropic/claude-sonnet-5.5', 'Summarize x402 in one line', {
   maxTokens: 2048, // a ceiling, not a price
 });
 
@@ -769,7 +769,7 @@ import { LLMClient } from '@blockrun/llm';
 const client = new LLMClient({ apiUrl: 'https://arc.blockrun.ai/api' });
 
 const routed = await client.smartChat('gm Arc');
-const response = await client.chat('openai/gpt-5.4', 'gm Arc');
+const response = await client.chat('openai/gpt-6.1-sol', 'gm Arc');
 ```
 
 The 402 from that host names `eip155:5042`, and the SDK signs the EIP-3009 authorization against Arc's USDC (`0x3600…0000`, EIP-712 domain `USDC` v2), never Base's. Circle's facilitator verifies and settles it on Arc; you pay no gas. Which networks the SDK can sign for is the exported `EVM_NETWORKS` table (Base, Arc, Base Sepolia); a 402 naming any other network, or a non-USDC asset, is refused before anything is signed.
@@ -861,7 +861,7 @@ const messages: ChatMessage[] = [
   { role: 'user', content: 'Explain quantum computing in simple terms' },
 ];
 
-const response = await client.chatCompletionStream('google/gemini-2.5-flash', messages);
+const response = await client.chatCompletionStream('google/gemini-3.5-flash-lite', messages);
 
 const reader = response.body!.getReader();
 const decoder = new TextDecoder();
@@ -966,12 +966,15 @@ gateway's health check holds it back; it stays on the free tier.
 
 GPT-6: Astra is the flagship for long-horizon agentic work and computer use,
 Sol the cost-efficient tier for complex coding, Luna the fast low-cost tier.
+GPT-6.2 refreshes Astra and Sol at the same tiers.
 GPT-5.6: three tiers on one base (Sol deepest reasoning, Terra balanced, Luna
 cheap and fast), each with a `-pro` sibling that thinks longer at the same
 token price.
 
 | Model | Context | Notes |
 |---|---|---|
+| `openai/gpt-6.2-astra` | 1.05M | GPT-6.2 flagship for the hardest long-horizon work |
+| `openai/gpt-6.2-sol` | 1.05M | Everyday GPT-6.2 for coding and agents at scale |
 | `openai/gpt-6.1-sol` | 1.05M |  |
 | `openai/gpt-6-astra` | 1.05M | GPT-6 flagship |
 | `openai/gpt-6-sol` | 1.05M |  |
@@ -993,15 +996,15 @@ token price.
 | `openai/gpt-5.2` | 400K |  |
 | `openai/gpt-5.2-pro` | 400K |  |
 | `openai/gpt-5.1` | 400K | Configurable reasoning effort |
-| `openai/gpt-5-mini` | 200K |  |
+| `openai/gpt-5-mini` | 200K | Retires 2026-12-11; the gateway will redirect it to `openai/gpt-5.6-luna` |
 | `openai/gpt-4.1` | 128K |  |
 | `openai/gpt-4.1-mini` | 128K |  |
 | `openai/gpt-4o` | 128K |  |
 | `openai/gpt-4o-mini` | 128K |  |
-| `openai/o1` | 200K | Reasoning |
-| `openai/o3` | 200K | Reasoning |
-| `openai/o3-mini` | 128K | Reasoning |
-| `openai/o4-mini` | 128K | Reasoning |
+| `openai/o3` | 200K | Reasoning. Retires 2026-12-11; the gateway will redirect it to `openai/gpt-5.4-mini` |
+
+`openai/o1`, `o1-mini`, `o3-mini` and `o4-mini` have left the catalog. They
+stay callable: the gateway redirects them to `openai/gpt-5.4-mini`.
 
 ### Anthropic Claude
 
@@ -1023,20 +1026,25 @@ token price.
 
 ### Google Gemini
 
-| Model | Context |
-|---|---|
-| `google/gemini-4-carbon` | 1M |
-| `google/gemini-4-argon` | 1M |
-| `google/gemini-3.1-pro` | 1M |
-| `google/gemini-3.8-flash` | 1M |
-| `google/gemini-3.6-flash` | 1M |
-| `google/gemini-3.5-flash` | 1M |
-| `google/gemini-3-flash-preview` | 1M |
-| `google/gemini-3.5-flash-lite` | 1M |
-| `google/gemini-3.1-flash-lite` | 1M |
-| `google/gemini-2.5-pro` | 1M |
-| `google/gemini-2.5-flash` | 1M |
-| `google/gemini-2.5-flash-lite` | 1M |
+| Model | Context | Notes |
+|---|---|---|
+| `google/gemini-4-neon` | 1M | Newest Gemini 4 — agentic coding and knowledge work |
+| `google/gemini-4-carbon` | 1M |  |
+| `google/gemini-4-argon` | 1M |  |
+| `google/gemini-4-hydrogen` | 1M | Fast, efficient Gemini 4 for everyday coding and agents |
+| `google/gemini-3.1-pro` | 1M |  |
+| `google/gemini-3.8-flash` | 1M |  |
+| `google/gemini-3.6-flash` | 1M |  |
+| `google/gemini-3-flash-preview` | 1M |  |
+| `google/gemini-3.5-flash-lite` | 1M |  |
+| `google/gemini-3.1-flash-lite` | 1M |  |
+| `google/gemini-2.5-pro` | 1M | Retires 2026-12-01; the gateway will redirect it to `google/gemini-3.8-flash` |
+| `google/gemini-2.5-flash` | 1M | Retires 2026-12-01; the gateway will redirect it to `google/gemini-3.5-flash-lite` |
+| `google/gemini-2.5-flash-lite` | 1M |  |
+
+`google/gemini-3.5-flash` has left the catalog. It stays callable: Google now
+serves Gemini 3.6 Flash under that name, so the gateway redirects it to
+`google/gemini-3.6-flash`.
 
 ### DeepSeek
 
@@ -1659,7 +1667,7 @@ import { AnthropicClient } from '@blockrun/llm';
 const client = new AnthropicClient();
 
 const response = await client.messages.create({
-  model: 'claude-sonnet-4-6',
+  model: 'claude-sonnet-5-5',
   max_tokens: 1024,
   messages: [{ role: 'user', content: 'Hello!' }],
 });
@@ -1667,7 +1675,7 @@ console.log(response.content[0]);
 
 // Any model works in Anthropic format
 const gptResponse = await client.messages.create({
-  model: 'openai/gpt-5.4',
+  model: 'openai/gpt-6.2-sol',
   max_tokens: 1024,
   messages: [{ role: 'user', content: 'Hello from GPT!' }],
 });

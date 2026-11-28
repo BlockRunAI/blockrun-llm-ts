@@ -241,7 +241,7 @@ export class LLMClient {
   /**
    * Simple 1-line chat interface.
    *
-   * @param model - Model ID (e.g., 'openai/gpt-5.2', 'anthropic/claude-sonnet-4.6')
+   * @param model - Model ID (e.g., 'openai/gpt-5.2', 'anthropic/claude-sonnet-5.5')
    * @param prompt - User message
    * @param options - Optional chat parameters
    * @returns Assistant's response text
@@ -333,9 +333,9 @@ export class LLMClient {
    * ```ts
    * const result = await client.smartChat('What is 2+2?');
    * console.log(result.response); // '4'
-   * console.log(result.model); // 'google/gemini-3.5-flash'
+   * console.log(result.model); // 'google/gemini-3.6-flash'
    * console.log(result.routing.method); // 'portfolio'
-   * console.log(result.routing.savings); // 0.78 (78% savings)
+   * console.log(result.routing.savings); // 0.84 (84% savings)
    * ```
    *
    * @example With routing profile

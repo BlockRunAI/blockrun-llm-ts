@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Docs
+
+- README routing table regenerated from the pinned router-core 53fe783
+  `DEFAULT_ROUTING_CONFIG`. Four cells were wrong: auto SIMPLE is
+  `gemini-3.5-flash-lite`, auto MEDIUM and premium SIMPLE are
+  `gemini-3.6-flash`, and premium COMPLEX is `claude-opus-5.5`.
+- README, `docs/solana-batch.md` and TSDoc examples use current models:
+  Claude Sonnet 5.5, Grok 4.7 and GPT-6.2 Sol in place of Sonnet 4.6, Grok 4.5
+  and GPT-5.4, and Gemini 3.5 Flash-Lite in place of the retiring Gemini 2.5
+  Flash. The Arc example uses GPT-6.1 Sol, because Arc does not serve GPT-6.2
+  Sol. The `smartChat()` and `route()` example outputs are taken from real runs.
+- README model list: added GPT-6.2 Astra, GPT-6.2 Sol, Gemini 4 Neon and
+  Gemini 4 Hydrogen. Dropped o1, o3-mini, o4-mini and Gemini 3.5 Flash, which
+  the gateway already redirects, with a note naming each successor. Marked
+  o3, GPT-5 Mini, Gemini 2.5 Pro and Gemini 2.5 Flash with their retirement
+  dates and successors.
+
 ## [4.5.0] - 2026-11-27
 
 ### Changed — router-core 53fe783: newer models in the routing chains
