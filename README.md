@@ -960,7 +960,7 @@ gateway's health check holds it back; it stays on the free tier.
 `nemotron-3.5-bolt` for free image input.
 
 <details>
-<summary><strong>Paid chat models</strong> — OpenAI, Anthropic, Google, DeepSeek, xAI, Moonshot, MiniMax, Z.ai, Qwen, Mistral, Tencent, Poolside, Xiaomi</summary>
+<summary><strong>Paid chat models</strong> — OpenAI, Anthropic, Google, DeepSeek, xAI, Moonshot, MiniMax, Z.ai, Qwen, Mistral, Tencent, Poolside, Xiaomi, Meta, Reflection</summary>
 
 ### OpenAI
 
@@ -976,6 +976,7 @@ token price.
 | `openai/gpt-6.2-astra` | 1.05M | GPT-6.2 flagship for the hardest long-horizon work |
 | `openai/gpt-6.2-sol` | 1.05M | Everyday GPT-6.2 for coding and agents at scale |
 | `openai/gpt-6.1-sol` | 1.05M |  |
+| `openai/gpt-6.1-terra` | 1.05M | Cost-efficient GPT-6.1 for coding and agents, at half 6.1 Sol's rate |
 | `openai/gpt-6-astra` | 1.05M | GPT-6 flagship |
 | `openai/gpt-6-sol` | 1.05M |  |
 | `openai/gpt-6-luna` | 1.05M |  |
@@ -1099,7 +1100,7 @@ callable — the gateway redirects them to a healthy model.
 |---|---|---|
 | `mistral/mistral-large-4` | 512K | Reasoning + vision, 256K output |
 | `tencent/hy4-preview` | 1M | Preview |
-| `poolside/laguna-s-2.1` | 1M | Paid coding model (sibling of the free XS) |
+| `poolside/laguna-s-2.1` | 1M | Paid coding model (sibling of the free XS). Not for tool calls: the 2026-11-28 tool probe got a 500 after payment, so smart routing never sends it a tool-calling turn. Plain chat works |
 
 ### Xiaomi
 
@@ -1107,6 +1108,18 @@ callable — the gateway redirects them to a healthy model.
 |---|---|
 | `xiaomi/mimo-v2.5` | 1M |
 | `xiaomi/mimo-v2.5-pro` | 1M |
+
+### Listed on Solana only
+
+These are in the Solana catalog
+([sol.blockrun.ai](https://sol.blockrun.ai/api/v1/models)) but not the Base
+one; call them with `SolanaLLMClient`.
+
+| Model | Context | Notes |
+|---|---|---|
+| `meta/muse-wonder-1.0` | 1M | Meta's frontier model (preview), image + text input, always reasons |
+| `meta/muse-spark-1.3` | 1M | Meta's current general model, image + text input, always reasons |
+| `reflection/beam-1.0-501b-a23b` | 1M | Open-weight 501B MoE reasoning model for coding and long-horizon agents |
 
 ### Testnet Models (Base Sepolia)
 
