@@ -74,7 +74,7 @@ const client = new SolanaLLMClient({
 await client.chat('openai/gpt-4o-mini', 'gm');
 
 // Every later call is metered: you pay for the tokens the call actually used.
-const reply = await client.chat('anthropic/claude-sonnet-4.6', 'Summarize x402 in one line', {
+const reply = await client.chat('anthropic/claude-sonnet-5.5', 'Summarize x402 in one line', {
   maxTokens: 2048, // a ceiling, not a price: a short answer is not billed for 2,048 tokens
 });
 

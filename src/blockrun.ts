@@ -40,7 +40,7 @@ import { readSseFrames } from "./sse";
  *
  *   // Streaming chat
  *   for await (const chunk of br.stream("/v1/chat/completions", {
- *     model: "anthropic/claude-sonnet-4-6",
+ *     model: "anthropic/claude-sonnet-5.5",
  *     messages: [{ role: "user", content: "Hi" }],
  *     stream: true,
  *   })) {
@@ -302,7 +302,7 @@ export class BlockrunClient {
    *
    * Example — streaming chat:
    *   for await (const chunk of br.stream<ChatChunk>("/v1/chat/completions", {
-   *     model: "anthropic/claude-sonnet-4-6",
+   *     model: "anthropic/claude-sonnet-5.5",
    *     messages: [{ role: "user", content: "Hi" }],
    *     stream: true,
    *   })) {
