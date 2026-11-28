@@ -86,7 +86,9 @@ describe("routeWithCatalog cost metadata", () => {
     const rows: Array<[string, number, number]> = [
       ["openai/gpt-5.3-codex", 1.75, 14],
       ["anthropic/claude-sonnet-5", 3, 15],
-      ["openai/gpt-5-mini", 0.25, 2],
+      // The agentic MEDIUM primary this prompt routes to (router-core 6c0216f
+      // moved the rung from gpt-5-mini, retiring 2026-12-11).
+      ["openai/gpt-5.6-luna", 0.2, 1.2],
       ["google/gemini-3.5-flash", 0.5, 3],
       ["moonshot/kimi-k3", 3, 15],
       ["moonshot/kimi-k2.7", 0.5, 2],
