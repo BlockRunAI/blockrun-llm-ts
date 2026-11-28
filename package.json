@@ -1,6 +1,6 @@
 {
   "name": "@blockrun/llm",
-  "version": "4.5.0",
+  "version": "4.5.1",
   "type": "module",
   "description": "TypeScript SDK for BlockRun - every frontier model behind one OpenAI-compatible client. Pay with a BlockRun API key or per-call in USDC. Smart routing picks the cheapest capable model. No rate limits.",
   "main": "dist/index.cjs",
@@ -58,7 +58,7 @@
   },
   "devDependencies": {
     "@blockrun/core": "^0.1.0",
-    "@blockrun/router-core": "https://codeload.github.com/BlockRunAI/router-core/tar.gz/53fe78353e1b356aae2186cf33d6f13ae2fa7749",
+    "@blockrun/router-core": "https://codeload.github.com/BlockRunAI/router-core/tar.gz/92f77ecf38f2608365a71c1ec3e6e4f28777031a",
     "@eslint/js": "^10.0.1",
     "@solana/kit": "^8.4.0",
     "@types/node": "^26.4.1",

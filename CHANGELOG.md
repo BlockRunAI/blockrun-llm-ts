@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [4.5.1] - 2026-11-27
+
+### Changed — router-core 92f77ec: five more models can serve tool calls
+
+- Bump @blockrun/router-core from 53fe783 to 92f77ec, a funded re-probe of
+  the models that had no tool-call evidence. No routing decision moves and
+  there are no SDK API changes.
+- Mistral Large 4, Qwen 3.8 Max, Qwen 3.8 Flash, Hunyuan 4 Preview and the
+  newly listed GPT-6.1 Terra returned a well-formed tool call, so the
+  built-in capability snapshot now marks them tool-capable. None of them is in
+  a routing chain or the verified tool fallbacks; they serve a tool-calling
+  request only when you name them or a host's evidence pool reaches them.
+- Laguna S 2.1 answered 500 after payment on both probe runs, so it stays out
+  of tool-required routes. Plain chat to it is unchanged.
+- The built-in snapshot now covers 93 text models (2026-11-28 catalog).
+
 ### Docs
 
 - README routing table regenerated from the pinned router-core 53fe783
