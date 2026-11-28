@@ -20,6 +20,10 @@
 
 ### Docs
 
+- README model list matches the 2026-11-28 catalog: adds GPT-6.1 Terra, marks
+  Laguna S 2.1 as not for tool calls (plain chat works), and adds the models
+  listed only in the Solana catalog (Meta Muse Wonder 1.0 and Muse Spark 1.3,
+  Reflection Beam 1.0).
 - README routing table regenerated from the pinned router-core 53fe783
   `DEFAULT_ROUTING_CONFIG`. Four cells were wrong: auto SIMPLE is
   `gemini-3.5-flash-lite`, auto MEDIUM and premium SIMPLE are
