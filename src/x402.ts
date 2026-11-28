@@ -22,7 +22,7 @@ export const USDC_ARC = "0x3600000000000000000000000000000000000000" as const;
  * USDC and its EIP-712 domain.
  *
  * Until 3.16.0 there was one domain — Base's — signed whatever the 402 said,
- * so against arc.blockrun.ai (eip155:5042) or testnet.blockrun.ai every
+ * so against arc.blockrun.ai (eip155:5042) or the since-retired testnet.blockrun.ai every
  * payment was a signature over the wrong domain: the facilitator recovered a
  * different signer and answered 401 after the SDK had reported a payment.
  *
@@ -31,6 +31,10 @@ export const USDC_ARC = "0x3600000000000000000000000000000000000000" as const;
  * cannot steer a signature onto another contract — while letting the same
  * SDK pay on every host. Arc's USDC is the chain's native token exposed as an
  * ERC-20 at 0x3600…0000, and its domain name is "USDC", not Base's "USD Coin".
+ *
+ * Base Sepolia (eip155:84532) has no BlockRun gateway: testnet.blockrun.ai was
+ * retired on 2026-10-02. The entry stays so the signer can still pay a 402 from
+ * any other server that names it.
  */
 export interface EvmNetwork {
   name: string;
@@ -52,6 +56,7 @@ export const EVM_NETWORKS: Readonly<Record<string, EvmNetwork>> = {
     usdc: USDC_ARC,
     domain: { name: "USDC", version: "2", chainId: ARC_CHAIN_ID, verifyingContract: USDC_ARC },
   },
+  // No BlockRun gateway since testnet.blockrun.ai was retired on 2026-10-02.
   "eip155:84532": {
     name: "Base Sepolia",
     chainId: 84532,

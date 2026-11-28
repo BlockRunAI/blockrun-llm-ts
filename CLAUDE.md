@@ -288,7 +288,8 @@ Only relevant in wallet mode; account API keys are chain-independent.
 
 - Solana Mainnet — USDC SPL (recommended for new wallets)
 - Base Mainnet — USDC
-- Base Sepolia (testnet) — Testnet USDC
+
+BlockRun's Base Sepolia testnet (testnet.blockrun.ai) was retired on 2026-10-02; Base Sepolia stays in `EVM_NETWORKS` only so the signer can pay other servers' 402s.
 
 ## Conventions
 

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Docs
+
+- BlockRun's testnet (`testnet.blockrun.ai`, Base Sepolia) was retired on
+  2026-10-02. The README no longer lists Base Sepolia as a supported chain or
+  the testnet models; it points at the free models for development without
+  spending USDC. Base Sepolia stays in `EVM_NETWORKS`, so the signer can still
+  pay a 402 from any other server that names it. Comments and a test comment
+  updated to match. No API change, so no release.
+
 ## [4.5.1] - 2026-11-27
 
 ### Changed — router-core 92f77ec: five more models can serve tool calls

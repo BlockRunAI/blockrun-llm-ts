@@ -86,7 +86,7 @@ without them throws an error naming the exact install command.
 </details>
 
 <details>
-<summary><strong>Supported chains</strong> — Solana (recommended), Base, Arc, Base Sepolia</summary>
+<summary><strong>Supported chains</strong> — Solana (recommended), Base, Arc</summary>
 
 Only relevant in wallet mode; an account API key is chain-independent.
 
@@ -95,9 +95,8 @@ Only relevant in wallet mode; an account API key is chain-independent.
 | **Solana** | Solana Mainnet | USDC (SPL) | Recommended for new wallets; `SolanaLLMClient` |
 | **Base** | Base Mainnet (`eip155:8453`) | USDC | `LLMClient`; settled by the Coinbase CDP facilitator |
 | **Arc** | Circle Arc (`eip155:5042`) | USDC | `LLMClient` with `apiUrl: 'https://arc.blockrun.ai/api'`; settled by Circle's facilitator |
-| **Base Sepolia** | Base Sepolia (`eip155:84532`) | Testnet USDC | Development |
 
-**Protocol:** x402 v2.
+**Protocol:** x402 v2. BlockRun's testnet (`testnet.blockrun.ai`, Base Sepolia) was retired on 2026-10-02; to develop without spending USDC, use the [free models](#try-it-free-no-usdc-required).
 
 </details>
 
@@ -772,7 +771,7 @@ const routed = await client.smartChat('gm Arc');
 const response = await client.chat('openai/gpt-6.1-sol', 'gm Arc');
 ```
 
-The 402 from that host names `eip155:5042`, and the SDK signs the EIP-3009 authorization against Arc's USDC (`0x3600…0000`, EIP-712 domain `USDC` v2), never Base's. Circle's facilitator verifies and settles it on Arc; you pay no gas. Which networks the SDK can sign for is the exported `EVM_NETWORKS` table (Base, Arc, Base Sepolia); a 402 naming any other network, or a non-USDC asset, is refused before anything is signed.
+The 402 from that host names `eip155:5042`, and the SDK signs the EIP-3009 authorization against Arc's USDC (`0x3600…0000`, EIP-712 domain `USDC` v2), never Base's. Circle's facilitator verifies and settles it on Arc; you pay no gas. Which networks the SDK can sign for is the exported `EVM_NETWORKS` table (Base, Arc, and Base Sepolia for non-BlockRun servers, since BlockRun's testnet was retired on 2026-10-02); a 402 naming any other network, or a non-USDC asset, is refused before anything is signed.
 
 **Setup:**
 1. Same wallet key as Base: `export BASE_CHAIN_WALLET_KEY="0x..."`
@@ -1120,15 +1119,6 @@ one; call them with `SolanaLLMClient`.
 | `meta/muse-wonder-1.0` | 1M | Meta's frontier model (preview), image + text input, always reasons |
 | `meta/muse-spark-1.3` | 1M | Meta's current general model, image + text input, always reasons |
 | `reflection/beam-1.0-501b-a23b` | 1M | Open-weight 501B MoE reasoning model for coding and long-horizon agents |
-
-### Testnet Models (Base Sepolia)
-
-| Model |
-|-------|
-| `openai/gpt-oss-20b` |
-| `openai/gpt-oss-120b` |
-
-*Testnet models use flat pricing (no token counting) for simplicity.*
 
 </details>
 

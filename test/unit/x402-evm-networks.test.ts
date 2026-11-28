@@ -11,7 +11,8 @@ import { TEST_PRIVATE_KEY, TEST_ACCOUNT, TEST_RECIPIENT } from "../helpers/testH
  * always Base's USDC. Against arc.blockrun.ai (eip155:5042, USDC at 0x3600…,
  * domain name "USDC") every payment was a signature over the wrong domain:
  * the facilitator recovers a different signer and answers 401, after the SDK
- * has told the caller it paid. Same for testnet.blockrun.ai (Base Sepolia).
+ * has told the caller it paid. Same for Base Sepolia, the network of the
+ * since-retired testnet.blockrun.ai (retired 2026-10-02).
  *
  * The 402 still may not supply the domain: `extra` from a server is never
  * trusted (a hostile 402 could otherwise steer a signature onto another
