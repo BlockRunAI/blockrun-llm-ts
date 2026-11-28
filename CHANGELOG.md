@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+## [4.5.0] - 2026-11-27
+
+### Changed — router-core 53fe783: newer models in the routing chains
+
+- Bump @blockrun/router-core from 273c2af to 53fe783. Smart routing
+  (`smartChat()`, `smartChatCompletion()`, `blockrun/auto` · `eco` ·
+  `premium`) now picks from the current model generation. No SDK API changes.
+- Newer models replace older ones in the chains, at the same or a lower
+  price: Claude Opus 5.5 (in place of Opus 4.8 and 4.7), Claude Sonnet 5.5
+  (Sonnet 4.6), Grok 4.7 (Grok 4.5), GPT-6.2 Sol (GPT-5.5 and GPT-5.4) and
+  GPT-6 Luna (GPT-5.4 Nano).
+- The premium profile's COMPLEX tier is now led by Claude Opus 5.5 instead
+  of Claude Fable 5.
+- Models that are retiring or already redirected by the gateway leave the
+  chains, each replaced by its successor:
+  - Gemini 2.5 Flash → Gemini 3.5 Flash-Lite (now the auto SIMPLE primary),
+    Gemini 2.5 Pro → Gemini 3.8 Flash.
+  - Gemini 3.5 Flash → Gemini 3.6 Flash (now the auto MEDIUM and premium
+    SIMPLE primary).
+  - o3 and o4-mini → GPT-5.4 Mini; GPT-5 Mini → GPT-5.6 Luna (now the
+    agentic MEDIUM primary). GPT-5 Nano was never in a chain and stays out.
+- The Kimi slot now routes to Kimi K3.1 Pro (the gateway no longer lists
+  Kimi K3).
+- New tool-verified fallbacks for tool-calling requests: Gemini 4 Carbon,
+  Argon, Hydrogen and Neon, GPT-6.2 Astra and Sol, and GPT-5.6 Luna Pro.
+- A model you name explicitly in `chat()` is unaffected; this only changes
+  which model smart routing picks.
+
 ## [4.4.0] - 2026-11-24
 
 ### Added — on-chain US stock prices
