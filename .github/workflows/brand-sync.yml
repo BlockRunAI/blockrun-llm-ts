@@ -24,7 +24,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Refresh brand numbers from the canonical artifact
         run: node scripts/sync-brand-numbers.mjs --refresh
       - name: Land the rewrite
